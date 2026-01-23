@@ -1,0 +1,149 @@
+#include "executor/executor_manager.hpp"
+#include "thread_pool_executor.hpp"
+#include <mutex>
+#include <algorithm>
+
+namespace executor {
+
+// 静态成员变量定义
+ExecutorManager* ExecutorManager::instance_ = nullptr;
+std::once_flag ExecutorManager::once_flag_;
+
+// 单例模式：获取单例实例
+ExecutorManager& ExecutorManager::instance() {
+    std::call_once(once_flag_, []() {
+        instance_ = new ExecutorManager();
+    });
+    return *instance_;
+}
+
+// 构造函数（实例化模式）
+ExecutorManager::ExecutorManager()
+    : default_async_executor_(nullptr) {
+}
+
+// 析构函数（RAII）
+ExecutorManager::~ExecutorManager() {
+    shutdown(true);  // 等待所有任务完成
+}
+
+// 初始化默认异步执行器（线程池）
+bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
+    // 检查是否已经初始化
+    if (default_async_executor_ != nullptr) {
+        return false;  // 已经初始化过
+    }
+
+    // 将 ExecutorConfig 转换为 ThreadPoolConfig
+    ThreadPoolConfig pool_config;
+    pool_config.min_threads = config.min_threads;
+    pool_config.max_threads = config.max_threads;
+    pool_config.queue_capacity = config.queue_capacity;
+    pool_config.thread_priority = config.thread_priority;
+    pool_config.cpu_affinity = config.cpu_affinity;
+    pool_config.task_timeout_ms = config.task_timeout_ms;
+    pool_config.enable_work_stealing = config.enable_work_stealing;
+
+    // 创建 ThreadPoolExecutor
+    auto executor = std::make_unique<ThreadPoolExecutor>("default", pool_config);
+    
+    // 启动执行器
+    if (!executor->start()) {
+        return false;  // 启动失败
+    }
+
+    // 保存执行器
+    default_async_executor_ = std::move(executor);
+    return true;
+}
+
+// 获取默认异步执行器（线程池）
+IAsyncExecutor* ExecutorManager::get_default_async_executor() {
+    return default_async_executor_.get();
+}
+
+// 注册实时执行器
+bool ExecutorManager::register_realtime_executor(const std::string& name,
+                                                 std::unique_ptr<IRealtimeExecutor> executor) {
+    if (name.empty() || executor == nullptr) {
+        return false;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    
+    // 检查名称是否已存在
+    if (realtime_executors_.find(name) != realtime_executors_.end()) {
+        return false;  // 名称已存在
+    }
+
+    // 注册执行器
+    realtime_executors_[name] = std::move(executor);
+    return true;
+}
+
+// 获取已注册的实时执行器
+IRealtimeExecutor* ExecutorManager::get_realtime_executor(const std::string& name) {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    
+    auto it = realtime_executors_.find(name);
+    if (it == realtime_executors_.end()) {
+        return nullptr;  // 不存在
+    }
+    
+    return it->second.get();
+}
+
+// 创建实时执行器（便捷方法）
+// 注意：阶段7才会实现 RealtimeThreadExecutor，此方法暂时返回 nullptr
+std::unique_ptr<IRealtimeExecutor> ExecutorManager::create_realtime_executor(
+    const std::string& name,
+    const RealtimeThreadConfig& config) {
+    // TODO: 阶段7实现 RealtimeThreadExecutor 后，在此创建实例
+    // 目前返回 nullptr
+    (void)name;   // 避免未使用参数警告
+    (void)config; // 避免未使用参数警告
+    return nullptr;
+}
+
+// 获取所有实时执行器名称
+std::vector<std::string> ExecutorManager::get_realtime_executor_names() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    
+    std::vector<std::string> names;
+    names.reserve(realtime_executors_.size());
+    
+    for (const auto& pair : realtime_executors_) {
+        names.push_back(pair.first);
+    }
+    
+    return names;
+}
+
+// 关闭所有执行器
+void ExecutorManager::shutdown(bool wait_for_tasks) {
+    // 停止所有实时执行器
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        for (auto& pair : realtime_executors_) {
+            if (pair.second) {
+                pair.second->stop();
+                if (wait_for_tasks) {
+                    // 注意：IRealtimeExecutor 没有 wait_for_completion 方法
+                    // 实时执行器的任务在周期回调中执行，stop() 已经会等待线程结束
+                }
+            }
+        }
+        realtime_executors_.clear();
+    }
+    
+    // 停止异步执行器
+    if (default_async_executor_) {
+        default_async_executor_->stop();
+        if (wait_for_tasks) {
+            default_async_executor_->wait_for_completion();
+        }
+        default_async_executor_.reset();
+    }
+}
+
+} // namespace executor

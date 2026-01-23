@@ -60,13 +60,13 @@
 
 ## 阶段 6：执行器管理器
 
-- [ ] 实现 `src/executor/executor_manager.cpp`（单例模式 + 实例化模式）
-- [ ] 实现 `initialize_async_executor` 和 `get_default_async_executor`
-- [ ] 实现 `register_realtime_executor` 和 `get_realtime_executor`
-- [ ] 实现 `create_realtime_executor`（便捷方法）
-- [ ] 实现 `get_realtime_executor_names` 和 `shutdown`
-- [ ] 实现 RAII 生命周期管理（析构时自动释放所有执行器）
-- [ ] 编写 ExecutorManager 集成测试
+- [x] 实现 `src/executor/executor_manager.cpp`（单例模式 + 实例化模式）
+- [x] 实现 `initialize_async_executor` 和 `get_default_async_executor`
+- [x] 实现 `register_realtime_executor` 和 `get_realtime_executor`
+- [x] 实现 `create_realtime_executor`（便捷方法）
+- [x] 实现 `get_realtime_executor_names` 和 `shutdown`
+- [x] 实现 RAII 生命周期管理（析构时自动释放所有执行器）
+- [x] 编写 ExecutorManager 集成测试
 
 ---
 
