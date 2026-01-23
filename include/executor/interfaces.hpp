@@ -68,12 +68,46 @@ public:
      */
     virtual void wait_for_completion() = 0;
 
+    /**
+     * @brief 提交优先级任务（返回Future）
+     * 
+     * @tparam F 可调用对象类型
+     * @tparam Args 参数类型
+     * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
+     * @param f 可调用对象
+     * @param args 参数
+     * @return std::future 任务执行结果的future
+     */
+    template<typename F, typename... Args>
+    auto submit_priority(int priority, F&& f, Args&&... args)
+        -> std::future<typename std::invoke_result<F, Args...>::type> {
+        using return_type = typename std::invoke_result<F, Args...>::type;
+        
+        auto task = std::make_shared<std::packaged_task<return_type()>>(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+        );
+        
+        std::future<return_type> result = task->get_future();
+        submit_priority_impl(priority, [task]() { (*task)(); });
+        return result;
+    }
+
 protected:
     /**
      * @brief 提交任务实现（内部方法）
      * @param task 任务函数
      */
     virtual void submit_impl(std::function<void()> task) = 0;
+
+    /**
+     * @brief 提交优先级任务实现（内部方法）
+     * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
+     * @param task 任务函数
+     */
+    virtual void submit_priority_impl(int /*priority*/, std::function<void()> task) {
+        // 默认实现：忽略优先级，使用普通提交
+        submit_impl(std::move(task));
+    }
 };
 
 /**

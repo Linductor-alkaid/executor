@@ -24,6 +24,15 @@ using namespace executor;
         } \
     } while(0)
 
+// 测试函数前向声明
+bool test_thread_pool_executor_basic();
+bool test_thread_pool_executor_multiple_tasks();
+bool test_thread_pool_executor_concurrent_submit();
+bool test_thread_pool_executor_exception_handling();
+bool test_thread_pool_executor_status();
+bool test_thread_pool_executor_wait_for_completion();
+bool test_thread_pool_executor_stop_behavior();
+
 // ========== ThreadPoolExecutor 基本功能测试 ==========
 
 bool test_thread_pool_executor_basic() {
@@ -50,7 +59,7 @@ bool test_thread_pool_executor_basic() {
     TEST_ASSERT(status.is_running == true, "Executor should be running");
     
     // 测试提交任务
-    auto future = executor.submit([]() {
+    auto future = executor.submit([]() noexcept {
         return 42;
     });
     
@@ -84,16 +93,16 @@ bool test_thread_pool_executor_multiple_tasks() {
     std::vector<std::future<int>> futures;
     
     for (int i = 0; i < num_tasks; ++i) {
-        auto future = executor.submit([i]() {
+        auto future = executor.submit([i]() noexcept {
             return i * 2;
         });
         futures.push_back(std::move(future));
     }
     
     // 等待所有任务完成并验证结果
-    for (int i = 0; i < num_tasks; ++i) {
+    for (size_t i = 0; i < futures.size(); ++i) {
         int result = futures[i].get();
-        TEST_ASSERT(result == i * 2, "Task result should match");
+        TEST_ASSERT(result == static_cast<int>(i) * 2, "Task result should match");
     }
     
     // 检查状态
@@ -126,7 +135,7 @@ bool test_thread_pool_executor_concurrent_submit() {
     for (int t = 0; t < num_threads; ++t) {
         threads.emplace_back([&executor, &completed_count, tasks_per_thread, t]() {
             for (int i = 0; i < tasks_per_thread; ++i) {
-                auto future = executor.submit([&completed_count]() {
+                auto future = executor.submit([&completed_count]() noexcept {
                     completed_count.fetch_add(1, std::memory_order_relaxed);
                     return 1;
                 });

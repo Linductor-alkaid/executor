@@ -54,4 +54,9 @@ void ThreadPoolExecutor::submit_impl(std::function<void()> task) {
     thread_pool_.submit(std::move(task));
 }
 
+void ThreadPoolExecutor::submit_priority_impl(int priority, std::function<void()> task) {
+    // 将任务提交到线程池（使用指定优先级）
+    thread_pool_.submit_priority(priority, std::move(task));
+}
+
 } // namespace executor

@@ -83,6 +83,16 @@ protected:
      */
     void submit_impl(std::function<void()> task) override;
 
+    /**
+     * @brief 提交优先级任务实现（内部方法）
+     * 
+     * 将任务提交到线程池执行，使用指定优先级。
+     * 
+     * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
+     * @param task 任务函数
+     */
+    void submit_priority_impl(int priority, std::function<void()> task) override;
+
 private:
     std::string name_;              // 执行器名称
     ThreadPoolConfig config_;       // 线程池配置

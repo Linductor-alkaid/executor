@@ -80,13 +80,13 @@
 
 ## 阶段 8：Executor Facade
 
-- [ ] 实现 `include/executor/executor.hpp`（Facade 模式）
-- [ ] 实现 `src/executor/executor.cpp`（单例模式 + 实例化模式）
-- [ ] 实现 `submit`、`submit_priority`、`submit_delayed` 等任务提交 API
-- [ ] 实现 `register_realtime_task`、`start_realtime_task`、`stop_realtime_task` 等实时任务 API
-- [ ] 实现监控查询 API（`get_async_executor_status`、`get_realtime_executor_status` 等）
-- [ ] 编写 Executor Facade 集成测试
-- [ ] 编写示例 `examples/basic_submit.cpp`
+- [x] 实现 `include/executor/executor.hpp`（Facade 模式）
+- [x] 实现 `src/executor/executor.cpp`（单例模式 + 实例化模式）
+- [x] 实现 `submit`、`submit_priority`、`submit_delayed` 等任务提交 API
+- [x] 实现 `register_realtime_task`、`start_realtime_task`、`stop_realtime_task` 等实时任务 API
+- [x] 实现监控查询 API（`get_async_executor_status`、`get_realtime_executor_status` 等）
+- [x] 编写 Executor Facade 集成测试
+- [x] 编写示例 `examples/basic_submit.cpp`
 
 ---
 
