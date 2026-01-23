@@ -28,10 +28,10 @@
 
 ## 阶段 2：工具模块（util）
 
-- [ ] 实现 `src/executor/util/lockfree_queue.hpp`（无锁队列）
-- [ ] 实现 `src/executor/util/exception_handler.cpp`
-- [ ] 实现 `src/executor/util/thread_utils.cpp`（线程优先级、CPU 亲和性，支持 Linux/Windows）
-- [ ] 编写 util 模块单元测试
+- [x] 实现 `src/executor/util/lockfree_queue.hpp`（无锁队列）
+- [x] 实现 `src/executor/util/exception_handler.cpp`
+- [x] 实现 `src/executor/util/thread_utils.cpp`（线程优先级、CPU 亲和性，支持 Linux/Windows）
+- [x] 编写 util 模块单元测试
 
 ---
 

@@ -49,16 +49,23 @@ target_include_directories(executor
 
 # 平台特定的链接库
 if(UNIX AND NOT APPLE)
-    # Linux: 链接 pthread
+    # Linux: 链接 pthread（用于thread_utils中的pthread函数）
     find_package(Threads REQUIRED)
     target_link_libraries(executor PUBLIC Threads::Threads)
+    # 链接rt库（用于某些Linux系统上的实时调度函数）
+    target_link_libraries(executor PRIVATE rt)
 elseif(WIN32)
     # Windows: 可能需要额外的库
     # 目前仅使用标准库，无需额外链接
 endif()
 
 # 设置 C++ 标准（确保与根 CMakeLists.txt 一致）
-target_compile_features(executor PUBLIC cxx_std_17)
+target_compile_features(executor PUBLIC cxx_std_20)
+
+# MSVC: 设置源文件编码为UTF-8，避免C4819警告
+if(MSVC)
+    target_compile_options(executor PRIVATE /utf-8)
+endif()
 
 # 设置输出名称
 set_target_properties(executor PROPERTIES

@@ -22,6 +22,16 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     # 链接 executor 库
     target_link_libraries(${TEST_NAME} PRIVATE executor)
     
+    # 添加src目录到包含路径，以便测试可以访问内部头文件
+    target_include_directories(${TEST_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    )
+    
+    # MSVC: 设置源文件编码为UTF-8，避免C4819警告
+    if(MSVC)
+        target_compile_options(${TEST_NAME} PRIVATE /utf-8)
+    endif()
+    
     # 添加测试
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
 endforeach()
