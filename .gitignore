@@ -24,6 +24,11 @@ cmake_install.cmake
 Makefile
 *.cmake
 
+!cmake/
+!cmake/CompilerWarnings.cmake
+!cmake/Sanitizers.cmake
+!cmake/ExecutorConfig.cmake
+
 # IDE配置文件
 .vscode/
 .idea/
