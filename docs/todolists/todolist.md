@@ -37,9 +37,9 @@
 
 ## 阶段 3：任务模块（task）
 
-- [ ] 实现 `src/executor/task/task.cpp`
-- [ ] 实现 `src/executor/task/task_dependency_manager.cpp`
-- [ ] 编写 task 模块单元测试
+- [x] 实现 `src/executor/task/task.cpp`
+- [x] 实现 `src/executor/task/task_dependency_manager.cpp`
+- [x] 编写 task 模块单元测试
 
 ---
 
