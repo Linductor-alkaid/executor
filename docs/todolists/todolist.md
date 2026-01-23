@@ -72,9 +72,9 @@
 
 ## 阶段 7：实时线程执行器
 
-- [ ] 实现 `src/executor/realtime_thread_executor.cpp`（实现 IRealtimeExecutor 接口）
-- [ ] 实现内置 `simple_cycle_loop`（使用 `std::this_thread::sleep_until`）
-- [ ] 编写 RealtimeThreadExecutor 集成测试
+- [x] 实现 `src/executor/realtime_thread_executor.cpp`（实现 IRealtimeExecutor 接口）
+- [x] 实现内置 `simple_cycle_loop`（使用 `std::this_thread::sleep_until`）
+- [x] 编写 RealtimeThreadExecutor 集成测试
 
 ---
 

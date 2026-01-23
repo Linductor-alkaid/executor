@@ -1,5 +1,6 @@
 #include "executor/executor_manager.hpp"
 #include "thread_pool_executor.hpp"
+#include "realtime_thread_executor.hpp"
 #include <mutex>
 #include <algorithm>
 
@@ -94,15 +95,21 @@ IRealtimeExecutor* ExecutorManager::get_realtime_executor(const std::string& nam
 }
 
 // 创建实时执行器（便捷方法）
-// 注意：阶段7才会实现 RealtimeThreadExecutor，此方法暂时返回 nullptr
 std::unique_ptr<IRealtimeExecutor> ExecutorManager::create_realtime_executor(
     const std::string& name,
     const RealtimeThreadConfig& config) {
-    // TODO: 阶段7实现 RealtimeThreadExecutor 后，在此创建实例
-    // 目前返回 nullptr
-    (void)name;   // 避免未使用参数警告
-    (void)config; // 避免未使用参数警告
-    return nullptr;
+    if (name.empty()) {
+        return nullptr;
+    }
+
+    try {
+        // 创建 RealtimeThreadExecutor 实例
+        auto executor = std::make_unique<RealtimeThreadExecutor>(name, config);
+        return executor;
+    } catch (const std::exception&) {
+        // 创建失败（如配置无效），返回 nullptr
+        return nullptr;
+    }
 }
 
 // 获取所有实时执行器名称

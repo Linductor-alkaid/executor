@@ -339,10 +339,20 @@ bool test_create_realtime_executor() {
     RealtimeThreadConfig config;
     config.thread_name = "test_thread";
     config.cycle_period_ns = 2000000;  // 2ms
+    config.cycle_callback = []() {};
     
-    // 注意：阶段7才会实现 RealtimeThreadExecutor，目前应该返回 nullptr
+    // 阶段7之后，此方法应该返回有效的执行器
     auto executor = manager.create_realtime_executor("test", config);
-    TEST_ASSERT(executor == nullptr, "create_realtime_executor should return nullptr (not implemented yet)");
+    TEST_ASSERT(executor != nullptr, "create_realtime_executor should return valid executor");
+    TEST_ASSERT(executor->get_name() == "test", "Executor name should match");
+    
+    // 测试无效配置（空名称）
+    RealtimeThreadConfig invalid_config;
+    invalid_config.thread_name = "test_thread";
+    invalid_config.cycle_period_ns = 0;  // 无效周期
+    invalid_config.cycle_callback = []() {};
+    auto invalid_executor = manager.create_realtime_executor("", invalid_config);
+    TEST_ASSERT(invalid_executor == nullptr, "create_realtime_executor should return nullptr for invalid config");
     
     std::cout << "  Create realtime executor: PASSED" << std::endl;
     return true;
