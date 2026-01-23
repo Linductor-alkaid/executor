@@ -1,5 +1,6 @@
 #include "task_dependency_manager.hpp"
 #include <algorithm>
+#include <mutex>
 
 namespace executor {
 
