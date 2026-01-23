@@ -1,0 +1,72 @@
+# RenderEngine .gitignore
+
+# 构建目录
+build/
+cmake-build-*/
+output/
+
+# 编译输出
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+
+# CMake生成文件
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cmake
+
+# IDE配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# 临时文件和日志
+logs/
+*.log
+*.tmp
+*.temp
+*.bak
+*.cache
+*.wav
+
+# 调试文件
+*.pdb
+*.ilk
+
+# claude
+.claude/
+
+# 用户配置
+ai_service_config.json
+
+# 不忽略第三方库
+!third_party/
+
+third_party/opencv/
+
+# 不忽略资源文件
+!assets/
+
