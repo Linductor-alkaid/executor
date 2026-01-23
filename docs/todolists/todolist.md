@@ -45,9 +45,9 @@
 
 ## 阶段 4：线程池模块（thread_pool）
 
-- [ ] 实现 `src/executor/thread_pool/priority_scheduler.cpp`
-- [ ] 实现 `src/executor/thread_pool/thread_pool.cpp`（基础版本，暂不实现动态扩缩容）
-- [ ] 编写 thread_pool 模块单元测试
+- [x] 实现 `src/executor/thread_pool/priority_scheduler.cpp`
+- [x] 实现 `src/executor/thread_pool/thread_pool.cpp`（基础版本，暂不实现动态扩缩容）
+- [x] 编写 thread_pool 模块单元测试
 
 ---
 
