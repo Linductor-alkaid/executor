@@ -53,8 +53,8 @@
 
 ## 阶段 5：线程池执行器
 
-- [ ] 实现 `src/executor/thread_pool_executor.cpp`（实现 IAsyncExecutor 接口）
-- [ ] 编写 ThreadPoolExecutor 集成测试
+- [x] 实现 `src/executor/thread_pool_executor.cpp`（实现 IAsyncExecutor 接口）
+- [x] 编写 ThreadPoolExecutor 集成测试
 
 ---
 
