@@ -2,8 +2,11 @@
 #include "../task/task.hpp"
 #include <stdexcept>
 #include <algorithm>
+#include <random>
 
 namespace executor {
+
+// thread_local 变量会在首次使用时自动初始化
 
 ThreadPool::ThreadPool() : stop_(false), initialized_(false) {
 }
@@ -26,69 +29,144 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
     
     config_ = config;
     
+    // 初始化负载均衡器
+    load_balancer_ = std::make_unique<LoadBalancer>(config_.min_threads);
+    
+    // 设置负载均衡策略
+    if (config_.enable_work_stealing) {
+        load_balancer_->set_strategy(LoadBalancer::Strategy::LEAST_TASKS);
+    } else {
+        load_balancer_->set_strategy(LoadBalancer::Strategy::ROUND_ROBIN);
+    }
+    
+    // 初始化工作线程本地队列
+    // 注意：WorkerLocalQueue 包含不可移动的 mutex，不能使用 reserve/emplace_back/resize
+    // 使用 vector 的构造函数直接构造新 vector，然后使用 placement new 重新构造每个元素
+    // 先销毁现有元素（如果有）
+    for (auto& queue : local_queues_) {
+        queue.~WorkerLocalQueue();
+    }
+    
+    // 使用 vector 的构造函数直接分配内存（默认构造所有元素）
+    // 使用 swap 避免赋值操作可能触发的移动
+    std::vector<WorkerLocalQueue> new_queues(config_.min_threads);
+    local_queues_.swap(new_queues);
+    
+    // 使用 placement new 重新构造每个元素，设置正确的 capacity
+    for (size_t i = 0; i < config_.min_threads; ++i) {
+        local_queues_[i].~WorkerLocalQueue();
+        new (&local_queues_[i]) WorkerLocalQueue(config_.queue_capacity);
+    }
+    
+    // 初始化任务分发器
+    dispatcher_ = std::make_unique<TaskDispatcher>(
+        *load_balancer_, scheduler_, local_queues_
+    );
+    
+    // 初始化动态扩缩容控制器
+    resizer_ = std::make_unique<ThreadPoolResizer>(*this, config_);
+    
     // 创建工作线程
     workers_.reserve(config_.min_threads);
+    worker_ids_.reserve(config_.min_threads);
     for (size_t i = 0; i < config_.min_threads; ++i) {
-        workers_.emplace_back(&ThreadPool::worker_thread, this);
-        
-        // 设置线程优先级
-        if (config_.thread_priority != 0) {
-            util::set_thread_priority(workers_.back().native_handle(), 
-                                     config_.thread_priority);
-        }
-        
-        // 设置CPU亲和性
-        if (!config_.cpu_affinity.empty()) {
-            // 如果指定了多个CPU，循环分配
-            int cpu_id = config_.cpu_affinity[i % config_.cpu_affinity.size()];
-            util::set_cpu_affinity(workers_.back().native_handle(), {cpu_id});
-        }
+        worker_ids_.push_back(i);
+        create_worker_thread(i);
+    }
+    
+    // 启动监控线程（用于动态扩缩容）
+    if (config_.max_threads > config_.min_threads) {
+        resize_monitor_stop_.store(false);
+        resize_monitor_thread_ = std::thread(&ThreadPool::resize_monitor_thread, this);
     }
     
     initialized_.store(true);
     return true;
 }
 
-void ThreadPool::worker_thread() {
-    int task_count = 0;
+void ThreadPool::worker_thread(size_t worker_id) {
     while (true) {
         Task task;
         bool has_task = false;
         
-        {
+        // 1. 优先从本地队列获取任务
+        if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
+            has_task = true;
+        }
+        // 2. 如果本地队列为空，尝试工作窃取
+        else if (config_.enable_work_stealing) {
+            has_task = try_steal_task(worker_id, task);
+        }
+        
+        // 3. 如果工作窃取失败，从全局调度器获取
+        if (!has_task) {
             std::unique_lock<std::mutex> lock(mutex_);
             
-            // 等待任务或停止信号
-            // 注意：即使stop_为true，也要尝试获取队列中的任务
-            condition_.wait(lock, [this, &has_task, &task]() {
-                // 先尝试获取任务（即使stop_为true，也要处理队列中的剩余任务）
-                has_task = scheduler_.dequeue(task);
-                if (has_task) {
-                    return true;  // 有任务，退出等待
+            // 再次尝试本地队列和工作窃取（避免错过新任务）
+            if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
+                has_task = true;
+                lock.unlock();
+            } else if (config_.enable_work_stealing) {
+                lock.unlock();
+                has_task = try_steal_task(worker_id, task);
+                if (!has_task) {
+                    lock.lock();
                 }
-                // 没有任务，如果已停止则退出等待
-                return stop_.load();
-            });
+            }
             
-            // 如果没有任务且已停止，退出循环
-            if (!has_task && stop_.load()) {
-                break;
+            if (!has_task) {
+                // 等待任务或停止信号
+                condition_.wait(lock, [this, &has_task, &task, worker_id]() {
+                    // 再次尝试本地队列和工作窃取
+                    if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
+                        has_task = true;
+                        return true;
+                    }
+                    if (config_.enable_work_stealing) {
+                        has_task = try_steal_task(worker_id, task);
+                        if (has_task) return true;
+                    }
+                    // 从全局调度器获取
+                    has_task = scheduler_.dequeue(task);
+                    if (has_task) {
+                        return true;
+                    }
+                    // 检查是否需要退出（缩容时）
+                    if (should_exit(worker_id)) {
+                        return true;
+                    }
+                    return stop_.load();
+                });
             }
         }
         
-        // 如果有任务，执行任务（即使stop_为true，也要执行队列中的任务）
-        if (has_task) {
-            ++task_count;
+        // 执行任务
+        if (has_task && !stop_.load()) {
             // 检查任务是否已取消
             if (!is_task_cancelled(task)) {
                 active_threads_.fetch_add(1, std::memory_order_relaxed);
                 execute_task(task);
                 active_threads_.fetch_sub(1, std::memory_order_relaxed);
             } else {
-                // 任务被取消，也需要更新统计信息，否则wait_for_completion会卡住
-                // 被取消的任务不计入失败，只计入完成（因为没有被执行）
+                // 任务被取消，也需要更新统计信息
                 completed_tasks_.fetch_add(1, std::memory_order_relaxed);
             }
+            
+            // 更新负载信息
+            if (worker_id < local_queues_.size() && load_balancer_) {
+                size_t queue_size = local_queues_[worker_id].size();
+                load_balancer_->update_load(worker_id, queue_size, 0);
+            }
+        }
+        
+        // 检查是否需要退出（缩容时）
+        if (should_exit(worker_id) || (stop_.load() && !has_task)) {
+            break;
+        }
+        
+        // 触发任务分发（从全局调度器分发到本地队列）
+        if (dispatcher_ && !stop_.load()) {
+            dispatcher_->dispatch_batch(5);  // 批量分发，减少锁竞争
         }
     }
 }
@@ -143,7 +221,14 @@ ThreadPoolStatus ThreadPool::get_status() const {
     status.total_threads = workers_.size();
     status.active_threads = active_threads_.load(std::memory_order_relaxed);
     status.idle_threads = status.total_threads - status.active_threads;
-    status.queue_size = scheduler_.size();
+    
+    // 队列大小 = 全局调度器 + 所有本地队列
+    size_t local_queue_size = 0;
+    for (const auto& queue : local_queues_) {
+        local_queue_size += queue.size();
+    }
+    status.queue_size = scheduler_.size() + local_queue_size;
+    
     status.total_tasks = total_tasks_.load(std::memory_order_relaxed);
     status.completed_tasks = completed_tasks_.load(std::memory_order_relaxed);
     status.failed_tasks = failed_tasks_.load(std::memory_order_relaxed);
@@ -152,7 +237,7 @@ ThreadPoolStatus ThreadPool::get_status() const {
     size_t completed = completed_tasks_.load(std::memory_order_relaxed);
     if (completed > 0) {
         int64_t total_time = total_execution_time_ns_.load(std::memory_order_relaxed);
-        status.avg_task_time_ms = (total_time / static_cast<double>(completed)) / 1e6;
+        status.avg_task_time_ms = (static_cast<double>(total_time) / static_cast<double>(completed)) / 1e6;
     } else {
         status.avg_task_time_ms = 0.0;
     }
@@ -174,6 +259,12 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
         stop_.store(true);
     }
     
+    // 停止监控线程
+    resize_monitor_stop_.store(true);
+    if (resize_monitor_thread_.joinable()) {
+        resize_monitor_thread_.join();
+    }
+    
     // 唤醒所有等待的线程
     condition_.notify_all();
     
@@ -190,6 +281,8 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
     }
     
     workers_.clear();
+    worker_ids_.clear();
+    local_queues_.clear();
 }
 
 void ThreadPool::wait_for_completion() {
@@ -244,6 +337,95 @@ void ThreadPool::wait_for_completion() {
 
 bool ThreadPool::is_stopped() const {
     return stop_.load(std::memory_order_relaxed);
+}
+
+bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
+    if (local_queues_.size() <= 1) {
+        return false;  // 只有一个线程，无法窃取
+    }
+    
+    // 随机选择起始位置，避免热点
+    // 使用 thread_local 随机数生成器（首次使用时会自动初始化）
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<size_t> dist(0, local_queues_.size() - 1);
+    size_t start_index = dist(rng);
+    
+    // 尝试从其他线程窃取任务
+    for (size_t i = 0; i < local_queues_.size(); ++i) {
+        size_t target_id = (start_index + i) % local_queues_.size();
+        
+        // 跳过自己
+        if (target_id == worker_id) {
+            continue;
+        }
+        
+        // 尝试窃取
+        if (local_queues_[target_id].steal(task)) {
+            // 更新目标线程的负载信息
+            if (load_balancer_) {
+                size_t queue_size = local_queues_[target_id].size();
+                load_balancer_->update_load(target_id, queue_size, 0);
+            }
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+bool ThreadPool::should_exit(size_t worker_id) const {
+    std::lock_guard<std::mutex> lock(exit_threads_mutex_);
+    return std::find(exit_threads_.begin(), exit_threads_.end(), worker_id) 
+           != exit_threads_.end();
+}
+
+void ThreadPool::resize_monitor_thread() {
+    while (!resize_monitor_stop_.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        
+        if (resize_monitor_stop_.load()) {
+            break;
+        }
+        
+        // 更新线程池状态信息
+        ThreadPoolStatus status = get_status();
+        
+        // 计算平均等待时间（简化实现，使用队列大小估算）
+        double avg_wait_time_ms = 0.0;
+        if (status.queue_size > 0 && status.total_threads > 0) {
+            // 假设每个任务平均执行时间，估算等待时间
+            avg_wait_time_ms = (static_cast<double>(status.queue_size) * status.avg_task_time_ms) 
+                               / static_cast<double>(status.total_threads);
+        }
+        
+        if (resizer_) {
+            resizer_->update_status(
+                status.queue_size,
+                status.active_threads,
+                status.total_threads,
+                avg_wait_time_ms
+            );
+            
+            // 检查并执行扩缩容
+            resizer_->check_and_resize();
+        }
+    }
+}
+
+void ThreadPool::create_worker_thread(size_t worker_id) {
+    workers_.emplace_back(&ThreadPool::worker_thread, this, worker_id);
+    
+    // 设置线程优先级
+    if (config_.thread_priority != 0) {
+        util::set_thread_priority(workers_.back().native_handle(), 
+                                 config_.thread_priority);
+    }
+    
+    // 设置CPU亲和性
+    if (!config_.cpu_affinity.empty()) {
+        int cpu_id = config_.cpu_affinity[worker_id % config_.cpu_affinity.size()];
+        util::set_cpu_affinity(workers_.back().native_handle(), {cpu_id});
+    }
 }
 
 } // namespace executor

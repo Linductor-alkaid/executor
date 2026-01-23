@@ -3,6 +3,10 @@
 #include "executor/config.hpp"
 #include "executor/types.hpp"
 #include "priority_scheduler.hpp"
+#include "load_balancer.hpp"
+#include "task_dispatcher.hpp"
+#include "worker_local_queue.hpp"
+#include "thread_pool_resizer.hpp"
 #include "../util/exception_handler.hpp"
 #include "../util/thread_utils.hpp"
 #include "../task/task.hpp"
@@ -15,6 +19,7 @@
 #include <chrono>
 #include <functional>
 #include <type_traits>
+#include <random>
 
 namespace executor {
 
@@ -23,8 +28,7 @@ namespace executor {
  * 
  * 管理工作线程的生命周期，从PriorityScheduler获取任务并分发给工作线程执行。
  * 支持任务提交、优先级调度、状态监控和优雅关闭。
- * 
- * 注意：阶段4只实现固定线程数的线程池，暂不实现动态扩缩容。
+ * 支持工作窃取、负载均衡和动态扩缩容。
  */
 class ThreadPool {
 public:
@@ -119,9 +123,11 @@ private:
     /**
      * @brief 工作线程函数
      * 
-     * 循环从PriorityScheduler获取任务并执行。
+     * 循环从本地队列、工作窃取或全局调度器获取任务并执行。
+     * 
+     * @param worker_id 工作线程ID
      */
-    void worker_thread();
+    void worker_thread(size_t worker_id);
 
     /**
      * @brief 执行任务
@@ -140,14 +146,60 @@ private:
      */
     void update_statistics(int64_t execution_time_ns, bool success);
 
+    /**
+     * @brief 尝试工作窃取
+     * 
+     * 当本地队列为空时，从其他线程的本地队列窃取任务。
+     * 
+     * @param worker_id 当前工作线程ID
+     * @param task 用于接收窃取的任务
+     * @return 成功窃取返回 true
+     */
+    bool try_steal_task(size_t worker_id, Task& task);
+
+    /**
+     * @brief 检查线程是否需要退出（用于缩容）
+     * 
+     * @param worker_id 工作线程ID
+     * @return 需要退出返回 true
+     */
+    bool should_exit(size_t worker_id) const;
+
+    /**
+     * @brief 监控线程函数（用于动态扩缩容）
+     */
+    void resize_monitor_thread();
+
+    /**
+     * @brief 创建新的工作线程
+     * 
+     * @param worker_id 工作线程ID
+     */
+    void create_worker_thread(size_t worker_id);
+
     // 配置信息
     ThreadPoolConfig config_;
 
     // 优先级调度器
     PriorityScheduler scheduler_;
 
+    // 负载均衡器
+    std::unique_ptr<LoadBalancer> load_balancer_;
+
+    // 工作线程本地队列
+    std::vector<WorkerLocalQueue> local_queues_;
+
+    // 任务分发器
+    std::unique_ptr<TaskDispatcher> dispatcher_;
+
+    // 动态扩缩容控制器
+    std::unique_ptr<ThreadPoolResizer> resizer_;
+
     // 工作线程
     std::vector<std::thread> workers_;
+
+    // 工作线程ID映射（用于跟踪线程）
+    std::vector<size_t> worker_ids_;
 
     // 停止标志
     std::atomic<bool> stop_{false};
@@ -171,6 +223,14 @@ private:
 
     // 初始化标志
     std::atomic<bool> initialized_{false};
+
+    // 待退出的线程ID集合（用于缩容）
+    mutable std::mutex exit_threads_mutex_;
+    std::vector<size_t> exit_threads_;
+
+    // 监控线程（用于动态扩缩容）
+    std::thread resize_monitor_thread_;
+    std::atomic<bool> resize_monitor_stop_{false};
 };
 
 // 模板方法实现
@@ -211,6 +271,11 @@ auto ThreadPool::submit(F&& f, Args&&... args)
         
         scheduler_.enqueue(executor_task);
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
+    }
+    
+    // 使用 TaskDispatcher 分发任务
+    if (dispatcher_) {
+        dispatcher_->dispatch();
     }
     
     // 唤醒一个工作线程
@@ -268,6 +333,11 @@ auto ThreadPool::submit_priority(int priority, F&& f, Args&&... args)
         
         scheduler_.enqueue(executor_task);
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
+    }
+    
+    // 使用 TaskDispatcher 分发任务
+    if (dispatcher_) {
+        dispatcher_->dispatch();
     }
     
     // 唤醒一个工作线程

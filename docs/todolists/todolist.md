@@ -92,11 +92,11 @@
 
 ## 阶段 9：可选功能 - 线程池增强
 
-- [ ] 实现 `src/executor/thread_pool/task_dispatcher.cpp`
-- [ ] 实现 `src/executor/thread_pool/load_balancer.cpp`
-- [ ] 在 `thread_pool.cpp` 中实现动态扩缩容功能
-- [ ] 实现工作窃取（Work Stealing）机制
-- [ ] 编写 LoadBalancer 和动态扩缩容单元测试
+- [x] 实现 `src/executor/thread_pool/task_dispatcher.cpp`
+- [x] 实现 `src/executor/thread_pool/load_balancer.cpp`
+- [x] 在 `thread_pool.cpp` 中实现动态扩缩容功能
+- [x] 实现工作窃取（Work Stealing）机制
+- [x] 编写 LoadBalancer 和动态扩缩容单元测试
 
 ---
 
