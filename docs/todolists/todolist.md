@@ -6,14 +6,14 @@
 
 ## 阶段 0：项目初始化
 
-- [ ] 创建项目目录结构
-- [ ] 创建根 `CMakeLists.txt`
-- [ ] 创建 `cmake/CompilerWarnings.cmake`
-- [ ] 创建 `cmake/Sanitizers.cmake`（可选）
-- [ ] 创建 `cmake/ExecutorConfig.cmake`（可选，用于 find_package 支持）
-- [ ] 创建 `src/CMakeLists.txt`
-- [ ] 创建 `tests/CMakeLists.txt`
-- [ ] 创建 `examples/CMakeLists.txt`
+- [x] 创建项目目录结构
+- [x] 创建根 `CMakeLists.txt`
+- [x] 创建 `cmake/CompilerWarnings.cmake`
+- [x] 创建 `cmake/Sanitizers.cmake`（可选）
+- [x] 创建 `cmake/ExecutorConfig.cmake`（可选，用于 find_package 支持）
+- [x] 创建 `src/CMakeLists.txt`
+- [x] 创建 `tests/CMakeLists.txt`
+- [x] 创建 `examples/CMakeLists.txt`
 
 ---
 
