@@ -9,7 +9,7 @@
 | 项目属性 | 说明 |
 |----------|------|
 | **项目名称** | executor |
-| **语言标准** | C++17（最低） |
+| **语言标准** | C++20 |
 | **构建系统** | CMake 3.16+ |
 | **产出物** | 静态库 `libexecutor.a`、动态库 `libexecutor.so`（可选）、头文件 |
 | **依赖** | C++ 标准库（`std::thread`、`std::atomic`、`std::shared_mutex` 等），无第三方必需依赖 |
@@ -164,7 +164,7 @@ flowchart TD
 cmake_minimum_required(VERSION 3.16)
 project(executor LANGUAGES CXX VERSION 0.1.0)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 选项：构建类型、测试、示例、安装

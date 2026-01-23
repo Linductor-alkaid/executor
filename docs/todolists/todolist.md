@@ -19,10 +19,10 @@
 
 ## 阶段 1：接口与类型定义
 
-- [ ] 实现 `include/executor/config.hpp`（ExecutorConfig, ThreadPoolConfig, RealtimeThreadConfig）
-- [ ] 实现 `include/executor/types.hpp`（AsyncExecutorStatus, RealtimeExecutorStatus, Task, TaskPriority）
-- [ ] 实现 `include/executor/interfaces.hpp`（IAsyncExecutor, IRealtimeExecutor, ICycleManager）
-- [ ] 实现 `include/executor/executor_manager.hpp`（ExecutorManager 类声明）
+- [x] 实现 `include/executor/config.hpp`（ExecutorConfig, ThreadPoolConfig, RealtimeThreadConfig）
+- [x] 实现 `include/executor/types.hpp`（AsyncExecutorStatus, RealtimeExecutorStatus, Task, TaskPriority）
+- [x] 实现 `include/executor/interfaces.hpp`（IAsyncExecutor, IRealtimeExecutor, ICycleManager）
+- [x] 实现 `include/executor/executor_manager.hpp`（ExecutorManager 类声明）
 
 ---
 
