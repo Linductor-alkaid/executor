@@ -32,8 +32,47 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         target_compile_options(${TEST_NAME} PRIVATE /utf-8)
     endif()
     
+    # 应用覆盖率选项（如果启用）
+    if(EXECUTOR_ENABLE_COVERAGE)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            target_compile_options(${TEST_NAME} PRIVATE
+                --coverage
+                -fprofile-arcs
+                -ftest-coverage
+            )
+            target_link_options(${TEST_NAME} PRIVATE --coverage)
+        endif()
+    endif()
+    
     # 添加测试
     add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    
+    # 根据测试类型设置 LABELS 和 TIMEOUT
+    # 单元测试
+    if(TEST_NAME MATCHES "^test_(util|task|thread_pool|statistics_collector|task_monitor)$")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit"
+            TIMEOUT 30
+        )
+    # 集成/端到端测试
+    elseif(TEST_NAME MATCHES "^test_(executor_facade|executor_manager|e2e_workflow|thread_pool_integration|monitor_integration|cycle_manager_integration|realtime_thread_executor|thread_pool_executor)$")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "integration"
+            TIMEOUT 60
+        )
+    # 性能/压力测试
+    elseif(TEST_NAME MATCHES "^test_(performance|stress|benchmark)$")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "benchmark;stress"
+            TIMEOUT 120
+        )
+    # 默认：单元测试
+    else()
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit"
+            TIMEOUT 30
+        )
+    endif()
 endforeach()
 
 # 如果使用 Google Test 或其他测试框架，可以在这里配置

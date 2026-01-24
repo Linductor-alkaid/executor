@@ -32,6 +32,8 @@ bool test_submit_periodic();
 bool test_realtime_task_management();
 bool test_monitor_queries();
 bool test_concurrent_submit();
+bool test_enable_monitoring();
+bool test_wait_for_completion();
 
 // ========== 单例模式测试 ==========
 
@@ -386,6 +388,121 @@ bool test_concurrent_submit() {
     return true;
 }
 
+// ========== enable_monitoring 测试 ==========
+
+bool test_enable_monitoring() {
+    std::cout << "Testing Executor::enable_monitoring()..." << std::endl;
+    
+    Executor executor;
+    ExecutorConfig config;
+    config.min_threads = 2;
+    config.max_threads = 4;
+    config.enable_monitoring = false;  // 初始禁用
+    executor.initialize(config);
+    
+    // 提交一些任务（监控禁用时）
+    for (int i = 0; i < 5; ++i) {
+        executor.submit([i]() noexcept {
+            return i;
+        });
+    }
+    executor.wait_for_completion();
+    
+    // 查询统计（应该为空或很少）
+    auto stats_before = executor.get_task_statistics("default");
+    int64_t count_before = stats_before.total_count;
+    
+    // 启用监控
+    executor.enable_monitoring(true);
+    
+    // 提交更多任务
+    for (int i = 0; i < 10; ++i) {
+        executor.submit([i]() noexcept {
+            return i;
+        });
+    }
+    executor.wait_for_completion();
+    
+    // 查询统计（应该有新的计数）
+    auto stats_after = executor.get_task_statistics("default");
+    TEST_ASSERT(stats_after.total_count > count_before, 
+                "Task count should increase after enabling monitoring");
+    
+    // 禁用监控
+    executor.enable_monitoring(false);
+    int64_t count_after_disable = stats_after.total_count;
+    
+    // 提交更多任务（监控禁用时）
+    for (int i = 0; i < 5; ++i) {
+        executor.submit([i]() noexcept {
+            return i;
+        });
+    }
+    executor.wait_for_completion();
+    
+    // 统计应该不变
+    auto stats_final = executor.get_task_statistics("default");
+    TEST_ASSERT(stats_final.total_count == count_after_disable,
+                "Task count should not increase when monitoring is disabled");
+    
+    executor.shutdown();
+    
+    std::cout << "  Enable monitoring: PASSED" << std::endl;
+    return true;
+}
+
+// ========== wait_for_completion 测试 ==========
+
+bool test_wait_for_completion() {
+    std::cout << "Testing Executor::wait_for_completion()..." << std::endl;
+    
+    Executor executor;
+    ExecutorConfig config;
+    config.min_threads = 2;
+    config.max_threads = 4;
+    executor.initialize(config);
+    
+    std::atomic<int> completed_count{0};
+    const int num_tasks = 20;
+    
+    // 提交多个任务
+    std::vector<std::future<void>> futures;
+    for (int i = 0; i < num_tasks; ++i) {
+        auto future = executor.submit([i, &completed_count]() noexcept {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            completed_count.fetch_add(1);
+        });
+        futures.push_back(std::move(future));
+    }
+    
+    // 调用 wait_for_completion
+    executor.wait_for_completion();
+    
+    // 验证所有任务已完成
+    TEST_ASSERT(completed_count.load() == num_tasks,
+                "All tasks should be completed after wait_for_completion");
+    
+    // 验证所有 future 可以立即获取结果
+    for (auto& future : futures) {
+        future.get();  // 应该立即返回，不阻塞
+    }
+    
+    // 再次调用 wait_for_completion（应该立即返回，因为没有待处理任务）
+    auto start = std::chrono::steady_clock::now();
+    executor.wait_for_completion();
+    auto end = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        end - start).count();
+    
+    TEST_ASSERT(elapsed < 100, 
+                "wait_for_completion should return immediately when no pending tasks");
+    
+    executor.shutdown();
+    
+    std::cout << "  Wait for completion: PASSED" << std::endl;
+    return true;
+}
+
 // ========== 主函数 ==========
 
 int main() {
@@ -407,6 +524,8 @@ int main() {
     all_passed &= test_realtime_task_management();
     all_passed &= test_monitor_queries();
     all_passed &= test_concurrent_submit();
+    all_passed &= test_enable_monitoring();
+    all_passed &= test_wait_for_completion();
     
     std::cout << std::endl;
     std::cout << "========================================" << std::endl;

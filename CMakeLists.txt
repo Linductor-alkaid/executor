@@ -20,11 +20,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     include(Sanitizers OPTIONAL)
 endif()
 
+# 可选：包含 Coverage（代码覆盖率）
+include(Coverage OPTIONAL)
+
 # 添加子目录
 add_subdirectory(src)
 
 if(EXECUTOR_BUILD_TESTS)
     enable_testing()
+    include(CTest)
     add_subdirectory(tests)
 endif()
 

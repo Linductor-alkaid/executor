@@ -182,9 +182,70 @@ int main() {
     std::cout << "Executor shut down" << std::endl;
 
     std::cout << std::endl;
+    
+    // ========== 多通道演示（可选） ==========
+    std::cout << "========================================" << std::endl;
+    std::cout << "Multi-Channel Demo (Optional)" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << std::endl;
+    
+    // 创建多个 CAN 通道的实时任务
+    const int num_channels = 4;
+    std::vector<std::atomic<int>> channel_cycles(num_channels);
+    for (auto& cycles : channel_cycles) {
+        cycles.store(0);
+    }
+    
+    SimpleCycleManager multi_cycle_manager;
+    
+    std::cout << "Registering " << num_channels << " CAN channels..." << std::endl;
+    
+    for (int i = 0; i < num_channels; ++i) {
+        RealtimeThreadConfig channel_config;
+        channel_config.thread_name = "can_channel_" + std::to_string(i);
+        channel_config.cycle_period_ns = 2000000 + i * 500000;  // 不同周期：2ms, 2.5ms, 3ms, 3.5ms
+        channel_config.thread_priority = 0;
+        channel_config.cycle_manager = &multi_cycle_manager;
+        channel_config.cycle_callback = [i, &channel_cycles]() {
+            channel_cycles[i].fetch_add(1, std::memory_order_relaxed);
+        };
+        
+        if (exec.register_realtime_task("can_channel_" + std::to_string(i), channel_config)) {
+            std::cout << "  Registered channel " << i << " (period: " 
+                      << (channel_config.cycle_period_ns / 1000000.0) << " ms)" << std::endl;
+        }
+    }
+    
+    std::cout << "Starting all channels..." << std::endl;
+    for (int i = 0; i < num_channels; ++i) {
+        exec.start_realtime_task("can_channel_" + std::to_string(i));
+    }
+    
+    // 运行一段时间
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // 查询所有通道的状态
+    std::cout << std::endl;
+    std::cout << "Channel status after 500ms:" << std::endl;
+    for (int i = 0; i < num_channels; ++i) {
+        auto ch_status = exec.get_realtime_executor_status("can_channel_" + std::to_string(i));
+        std::cout << "  Channel " << i << ": cycles=" << channel_cycles[i].load()
+                  << ", running=" << (ch_status.is_running ? "yes" : "no") << std::endl;
+    }
+    
+    // 停止所有通道
+    std::cout << std::endl;
+    std::cout << "Stopping all channels..." << std::endl;
+    for (int i = 0; i < num_channels; ++i) {
+        exec.stop_realtime_task("can_channel_" + std::to_string(i));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    
+    std::cout << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Realtime CAN example completed." << std::endl;
     std::cout << "========================================" << std::endl;
 
+    exec.shutdown();
     return 0;
 }
