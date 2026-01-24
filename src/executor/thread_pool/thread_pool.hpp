@@ -257,29 +257,23 @@ auto ThreadPool::submit(F&& f, Args&&... args)
     ).count();
     executor_task.timeout_ms = config_.task_timeout_ms;
     
-    // 提交到调度器
+    // 提交到调度器；持锁期间分发并 notify，避免错过唤醒
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (stop_.load()) {
-            // 线程池已停止，返回一个已完成的future（抛出异常）
             std::promise<return_type> promise;
             promise.set_exception(std::make_exception_ptr(
                 std::runtime_error("ThreadPool is stopped")
             ));
             return promise.get_future();
         }
-        
         scheduler_.enqueue(executor_task);
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
+        if (dispatcher_) {
+            dispatcher_->dispatch_batch(1);
+        }
+        condition_.notify_all();
     }
-    
-    // 使用 TaskDispatcher 分发任务
-    if (dispatcher_) {
-        dispatcher_->dispatch();
-    }
-    
-    // 唤醒一个工作线程
-    condition_.notify_one();
     
     return result;
 }
@@ -319,29 +313,23 @@ auto ThreadPool::submit_priority(int priority, F&& f, Args&&... args)
     ).count();
     executor_task.timeout_ms = config_.task_timeout_ms;
     
-    // 提交到调度器
+    // 提交到调度器；持锁期间分发并 notify，避免错过唤醒
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (stop_.load()) {
-            // 线程池已停止，返回一个已完成的future（抛出异常）
             std::promise<return_type> promise;
             promise.set_exception(std::make_exception_ptr(
                 std::runtime_error("ThreadPool is stopped")
             ));
             return promise.get_future();
         }
-        
         scheduler_.enqueue(executor_task);
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
+        if (dispatcher_) {
+            dispatcher_->dispatch_batch(1);
+        }
+        condition_.notify_all();
     }
-    
-    // 使用 TaskDispatcher 分发任务
-    if (dispatcher_) {
-        dispatcher_->dispatch();
-    }
-    
-    // 唤醒一个工作线程
-    condition_.notify_one();
     
     return result;
 }

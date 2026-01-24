@@ -98,50 +98,32 @@ void ThreadPool::worker_thread(size_t worker_id) {
             has_task = try_steal_task(worker_id, task);
         }
         
-        // 3. 如果工作窃取失败，从全局调度器获取
+        // 3. 若无任务，加锁后等待；谓词内再次检查本地队列、窃取、全局队列、退出条件
         if (!has_task) {
             std::unique_lock<std::mutex> lock(mutex_);
-            
-            // 再次尝试本地队列和工作窃取（避免错过新任务）
-            if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
-                has_task = true;
-                lock.unlock();
-            } else if (config_.enable_work_stealing) {
-                lock.unlock();
-                has_task = try_steal_task(worker_id, task);
-                if (!has_task) {
-                    lock.lock();
+            condition_.wait(lock, [this, &has_task, &task, worker_id]() {
+                if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
+                    has_task = true;
+                    return true;
                 }
-            }
-            
-            if (!has_task) {
-                // 等待任务或停止信号
-                condition_.wait(lock, [this, &has_task, &task, worker_id]() {
-                    // 再次尝试本地队列和工作窃取
-                    if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
-                        has_task = true;
-                        return true;
-                    }
-                    if (config_.enable_work_stealing) {
-                        has_task = try_steal_task(worker_id, task);
-                        if (has_task) return true;
-                    }
-                    // 从全局调度器获取
-                    has_task = scheduler_.dequeue(task);
-                    if (has_task) {
-                        return true;
-                    }
-                    // 检查是否需要退出（缩容时）
-                    if (should_exit(worker_id)) {
-                        return true;
-                    }
-                    return stop_.load();
-                });
+                if (config_.enable_work_stealing) {
+                    has_task = try_steal_task(worker_id, task);
+                    if (has_task) return true;
+                }
+                has_task = scheduler_.dequeue(task);
+                if (has_task) return true;
+                if (should_exit(worker_id) || stop_.load()) return true;
+                return false;
+            });
+            // 被 notify 唤醒但谓词未取到任务时，再试一次本地队列（可能刚被分发）
+            // 即使 stop_ 为 true，也要检查本地队列以排空任务
+            if (!has_task && worker_id < local_queues_.size()) {
+                has_task = local_queues_[worker_id].pop(task);
             }
         }
         
-        // 执行任务
-        if (has_task && !stop_.load()) {
+        // 执行任务（即使 stop_ 为 true，也要执行已获取的任务以排空队列）
+        if (has_task) {
             // 检查任务是否已取消
             if (!is_task_cancelled(task)) {
                 active_threads_.fetch_add(1, std::memory_order_relaxed);
@@ -166,7 +148,12 @@ void ThreadPool::worker_thread(size_t worker_id) {
         
         // 触发任务分发（从全局调度器分发到本地队列）
         if (dispatcher_ && !stop_.load()) {
-            dispatcher_->dispatch_batch(5);  // 批量分发，减少锁竞争
+            size_t dispatched = dispatcher_->dispatch_batch(5);  // 批量分发，减少锁竞争
+            // 如果成功分发了任务，唤醒等待的线程
+            if (dispatched > 0) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                condition_.notify_all();
+            }
         }
     }
 }
@@ -287,8 +274,8 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
 
 void ThreadPool::wait_for_completion() {
     // 等待所有任务完成
-    // 需要同时满足三个条件：
-    // 1. 队列为空（没有待执行的任务）
+    // 需要同时满足：
+    // 1. 全局调度器 + 所有本地队列为空（没有待执行的任务）
     // 2. 没有活跃线程（没有正在执行的任务）
     // 3. 所有已提交的任务都已完成（total == completed + failed）
     
@@ -302,28 +289,41 @@ void ThreadPool::wait_for_completion() {
         size_t failed = failed_tasks_.load(std::memory_order_relaxed);
         size_t active = active_threads_.load(std::memory_order_relaxed);
         
-        // 如果任务计数不匹配，需要检查队列
+        // 如果任务计数不匹配或仍有活跃线程，需要检查队列
         if (total != completed + failed || active > 0) {
-            // 需要检查队列，必须加锁
             std::unique_lock<std::mutex> lock(mutex_);
-            bool queue_empty = scheduler_.empty();
+            bool scheduler_empty = scheduler_.empty();
+            
+            // 检查所有本地队列是否为空
+            size_t local_queue_total = 0;
+            for (const auto& queue : local_queues_) {
+                local_queue_total += queue.size();
+            }
+            bool all_queues_empty = scheduler_empty && (local_queue_total == 0);
+            
             // 重新读取（因为可能已经变化）
             total = total_tasks_.load(std::memory_order_relaxed);
             completed = completed_tasks_.load(std::memory_order_relaxed);
             failed = failed_tasks_.load(std::memory_order_relaxed);
             active = active_threads_.load(std::memory_order_relaxed);
             
-            // 所有条件必须同时满足
-            if (queue_empty && active == 0 && total == completed + failed) {
+            if (all_queues_empty && active == 0 && total == completed + failed) {
                 break;
             }
             lock.unlock();
         } else {
             // 任务计数匹配且没有活跃线程，再检查一次队列（需要加锁）
             std::unique_lock<std::mutex> lock(mutex_);
-            bool queue_empty = scheduler_.empty();
+            bool scheduler_empty = scheduler_.empty();
             
-            if (queue_empty && active == 0 && total == completed + failed) {
+            // 检查所有本地队列是否为空
+            size_t local_queue_total = 0;
+            for (const auto& queue : local_queues_) {
+                local_queue_total += queue.size();
+            }
+            bool all_queues_empty = scheduler_empty && (local_queue_total == 0);
+            
+            if (all_queues_empty && active == 0 && total == completed + failed) {
                 break;
             }
             lock.unlock();
