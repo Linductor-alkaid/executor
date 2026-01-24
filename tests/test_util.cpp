@@ -152,6 +152,8 @@ bool test_exception_handler_callback() {
     std::atomic<bool> timeout_called{false};
     std::string caught_executor_name;
     std::string caught_task_id;
+    std::string caught_exception_message;
+    bool exception_message_valid = false;
     
     // 设置异常回调
     handler.set_exception_callback([&](const std::string& name, std::exception_ptr ex) {
@@ -160,9 +162,9 @@ bool test_exception_handler_callback() {
         try {
             std::rethrow_exception(ex);
         } catch (const std::exception& e) {
-            // 验证异常消息
-            TEST_ASSERT(std::string(e.what()) == "Test exception", 
-                       "Exception message should match");
+            // 记录异常消息，在回调外部验证（不能在void lambda中使用TEST_ASSERT）
+            caught_exception_message = e.what();
+            exception_message_valid = (std::string(e.what()) == "Test exception");
         }
     });
     
@@ -182,6 +184,8 @@ bool test_exception_handler_callback() {
     
     TEST_ASSERT(exception_called.load(), "Exception callback should be called");
     TEST_ASSERT(caught_executor_name == "test_executor", "Executor name should match");
+    TEST_ASSERT(exception_message_valid, "Exception message should match");
+    TEST_ASSERT(caught_exception_message == "Test exception", "Exception message should be 'Test exception'");
     
     // 触发超时
     handler.handle_task_timeout("test_executor", "task_1");

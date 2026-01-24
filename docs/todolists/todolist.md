@@ -132,13 +132,13 @@
 
 ## 阶段 13：文档与发布准备
 
-- [ ] 编写 API 使用文档（README.md 或 API.md）
-- [ ] 编写构建说明文档
-- [ ] 编写迁移指南（如有）
-- [ ] 创建 `executorConfig.cmake` 以支持 `find_package(executor)`
-- [ ] 配置安装规则（头文件、库文件）
-- [ ] 添加版本号管理
-- [ ] 编写 CHANGELOG.md
+- [x] 编写 API 使用文档（README.md 和 API.md）
+- [x] 编写构建说明文档
+- [x] 编写迁移指南（如有）
+- [x] 创建 `executorConfig.cmake` 以支持 `find_package(executor)`
+- [x] 配置安装规则（头文件、库文件）
+- [x] 添加版本号管理
+- [x] 编写 CHANGELOG.md
 - [ ] 代码审查和重构优化
 - [ ] 性能测试和优化
-- [ ] 准备发布包
+- [x] 准备发布包

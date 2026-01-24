@@ -23,6 +23,9 @@ endif()
 # 可选：包含 Coverage（代码覆盖率）
 include(Coverage OPTIONAL)
 
+# 安装目录（须在 add_subdirectory(src) 之前，src 中 install(EXPORT) 使用 CMAKE_INSTALL_LIBDIR）
+include(GNUInstallDirs)
+
 # 添加子目录
 add_subdirectory(src)
 
@@ -36,20 +39,19 @@ if(EXECUTOR_BUILD_EXAMPLES)
     add_subdirectory(examples)
 endif()
 
-# 安装配置
-include(GNUInstallDirs)
-
-install(TARGETS executor
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
-
+# 安装配置（executor 目标已由 src/CMakeLists 安装并导出）
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-# 安装 ExecutorConfig.cmake（如果存在）
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ExecutorConfig.cmake")
-    install(FILES cmake/ExecutorConfig.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/executor
-    )
-endif()
+# find_package(executor) 支持：生成并安装 executorConfig.cmake、executorConfigVersion.cmake
+include(CMakePackageConfigHelpers)
+set(EXECUTOR_CMAKE_CONFIG_DIR "${CMAKE_INSTALL_LIBDIR}/cmake/executor")
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/executorConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    cmake/executorConfig.cmake
+    "${CMAKE_CURRENT_BINARY_DIR}/executorConfigVersion.cmake"
+    DESTINATION ${EXECUTOR_CMAKE_CONFIG_DIR}
+)

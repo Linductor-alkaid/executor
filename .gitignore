@@ -27,7 +27,8 @@ Makefile
 !cmake/
 !cmake/CompilerWarnings.cmake
 !cmake/Sanitizers.cmake
-!cmake/ExecutorConfig.cmake
+!cmake/executorConfig.cmake
+!cmake/Coverage.cmake
 
 # IDE配置文件
 .vscode/
