@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <mutex>
 #include <unordered_map>
+#ifdef _WIN32
+#include <windows.h>
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
+#endif
 
 namespace executor {
 
@@ -33,6 +38,16 @@ bool RealtimeThreadExecutor::start() {
 
     // 创建实时线程
     thread_ = std::thread([this]() {
+#ifdef _WIN32
+        // 在Windows上提高定时器精度（对于短周期很重要）
+        // 将定时器精度设置为1ms（默认是15.6ms）
+        // 注意：这会增加系统功耗，但提高定时精度
+        if (config_.cycle_period_ns < 20000000) {  // 如果周期小于20ms
+            timer_period_ms_ = 1;
+            timeBeginPeriod(1);
+        }
+#endif
+        
         // 设置线程优先级
         if (config_.thread_priority != 0) {
             util::set_thread_priority(thread_.native_handle(), config_.thread_priority);
@@ -83,6 +98,14 @@ void RealtimeThreadExecutor::stop() {
         if (thread_.joinable()) {
             thread_.join();
         }
+        
+#ifdef _WIN32
+        // 恢复Windows定时器精度
+        if (timer_period_ms_ > 0) {
+            timeEndPeriod(timer_period_ms_);
+            timer_period_ms_ = 0;
+        }
+#endif
     }
 }
 

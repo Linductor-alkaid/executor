@@ -147,6 +147,10 @@ private:
     std::atomic<int64_t> cycle_timeout_count_{0};   // 周期超时计数
     std::atomic<double> avg_cycle_time_ns_{0.0};    // 平均周期执行时间（纳秒）
     std::atomic<double> max_cycle_time_ns_{0.0};   // 最大周期执行时间（纳秒）
+    
+#ifdef _WIN32
+    unsigned int timer_period_ms_{0};  // Windows定时器精度设置（毫秒），用于timeBeginPeriod/timeEndPeriod
+#endif
 };
 
 } // namespace executor

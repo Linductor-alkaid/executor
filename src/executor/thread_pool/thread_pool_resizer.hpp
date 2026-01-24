@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <mutex>
 #include <vector>
 
 namespace executor {
