@@ -2,14 +2,17 @@
 
 #include "interfaces.hpp"
 #include "config.hpp"
+#include "types.hpp"
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <map>
 #include <shared_mutex>
 #include <mutex>
 
 namespace executor {
+namespace monitor { class StatisticsCollector; }
 
 /**
  * @brief 执行器管理器
@@ -110,6 +113,21 @@ public:
      */
     void shutdown(bool wait_for_tasks = true);
 
+    /**
+     * @brief 启用或禁用任务监控
+     */
+    void enable_monitoring(bool enable);
+
+    /**
+     * @brief 按 task_type 获取任务统计
+     */
+    TaskStatistics get_task_statistics(const std::string& task_type) const;
+
+    /**
+     * @brief 获取全部 task_type 的任务统计
+     */
+    std::map<std::string, TaskStatistics> get_all_task_statistics() const;
+
 private:
     // 默认异步执行器（线程池）
     std::unique_ptr<IAsyncExecutor> default_async_executor_;
@@ -119,6 +137,9 @@ private:
 
     // 读写锁（保护实时执行器注册表）
     mutable std::shared_mutex mutex_;
+
+    // 统计收集器（任务监控）
+    std::unique_ptr<monitor::StatisticsCollector> statistics_collector_;
 
     // 单例实例（线程安全初始化）
     static ExecutorManager* instance_;

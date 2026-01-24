@@ -50,6 +50,7 @@ struct ExecutorConfig {
     std::vector<int> cpu_affinity;       // CPU亲和性
     int64_t task_timeout_ms = 0;         // 任务超时时间（毫秒）
     bool enable_work_stealing = false;   // 启用工作窃取
+    bool enable_monitoring = true;       // 启用任务监控（默认开启）
 };
 
 /**

@@ -173,6 +173,23 @@ RealtimeExecutorStatus Executor::get_realtime_executor_status(const std::string&
     return executor->get_status();
 }
 
+void Executor::enable_monitoring(bool enable) {
+    manager_->enable_monitoring(enable);
+}
+
+TaskStatistics Executor::get_task_statistics(const std::string& task_type) const {
+    return manager_->get_task_statistics(task_type);
+}
+
+std::map<std::string, TaskStatistics> Executor::get_all_task_statistics() const {
+    return manager_->get_all_task_statistics();
+}
+
+void Executor::wait_for_completion() {
+    auto* ex = manager_->get_default_async_executor();
+    if (ex) ex->wait_for_completion();
+}
+
 // 启动定时器线程
 void Executor::start_timer_thread() {
     if (timer_running_.exchange(true)) {

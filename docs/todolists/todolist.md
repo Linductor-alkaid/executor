@@ -102,10 +102,10 @@
 
 ## 阶段 10：监控模块（可选）
 
-- [ ] 实现 `src/executor/monitor/task_monitor.cpp`
-- [ ] 实现 `src/executor/monitor/statistics_collector.cpp`
-- [ ] 在 `Executor` 中实现 `enable_monitoring`、`get_task_statistics` 等 API
-- [ ] 编写监控模块单元测试
+- [x] 实现 `src/executor/monitor/task_monitor.cpp`
+- [x] 实现 `src/executor/monitor/statistics_collector.cpp`
+- [x] 在 `Executor` 中实现 `enable_monitoring`、`get_task_statistics` 等 API
+- [x] 编写监控模块单元测试
 
 ---
 

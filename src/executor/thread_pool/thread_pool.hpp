@@ -10,6 +10,7 @@
 #include "../util/exception_handler.hpp"
 #include "../util/thread_utils.hpp"
 #include "../task/task.hpp"
+#include "../monitor/task_monitor.hpp"
 #include <thread>
 #include <vector>
 #include <atomic>
@@ -119,6 +120,14 @@ public:
      */
     bool is_stopped() const;
 
+    /**
+     * @brief 设置任务监控器（可选）
+     * 
+     * 设置后，execute_task 前后将调用 record_task_start / record_task_complete。
+     * @param m 监控器指针，可为 nullptr 表示禁用
+     */
+    void set_task_monitor(monitor::TaskMonitor* m);
+
 private:
     /**
      * @brief 工作线程函数
@@ -220,6 +229,9 @@ private:
 
     // 异常处理器
     util::ExceptionHandler exception_handler_;
+
+    // 可选任务监控器（不拥有）
+    monitor::TaskMonitor* monitor_{nullptr};
 
     // 初始化标志
     std::atomic<bool> initialized_{false};

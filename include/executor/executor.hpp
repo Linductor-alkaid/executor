@@ -14,6 +14,7 @@
 #include <thread>
 #include <chrono>
 #include <type_traits>
+#include <map>
 
 namespace executor {
 
@@ -197,6 +198,26 @@ public:
      * @return 实时执行器状态
      */
     RealtimeExecutorStatus get_realtime_executor_status(const std::string& name) const;
+
+    /**
+     * @brief 启用或禁用任务监控
+     */
+    void enable_monitoring(bool enable);
+
+    /**
+     * @brief 按 task_type 获取任务统计
+     */
+    TaskStatistics get_task_statistics(const std::string& task_type) const;
+
+    /**
+     * @brief 获取全部 task_type 的任务统计
+     */
+    std::map<std::string, TaskStatistics> get_all_task_statistics() const;
+
+    /**
+     * @brief 等待所有已提交的异步任务完成
+     */
+    void wait_for_completion();
 
 private:
     /**

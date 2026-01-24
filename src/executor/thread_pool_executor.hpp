@@ -4,6 +4,7 @@
 #include "executor/config.hpp"
 #include "executor/types.hpp"
 #include "thread_pool/thread_pool.hpp"
+#include "executor/monitor/task_monitor.hpp"
 #include <string>
 #include <memory>
 
@@ -72,6 +73,11 @@ public:
      * 阻塞直到所有已提交的任务执行完成。
      */
     void wait_for_completion() override;
+
+    /**
+     * @brief 设置任务监控器（可选）
+     */
+    void set_task_monitor(monitor::TaskMonitor* m);
 
 protected:
     /**

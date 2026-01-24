@@ -49,6 +49,10 @@ void ThreadPoolExecutor::wait_for_completion() {
     thread_pool_.wait_for_completion();
 }
 
+void ThreadPoolExecutor::set_task_monitor(monitor::TaskMonitor* m) {
+    thread_pool_.set_task_monitor(m);
+}
+
 void ThreadPoolExecutor::submit_impl(std::function<void()> task) {
     // 将任务提交到线程池（使用NORMAL优先级）
     thread_pool_.submit(std::move(task));

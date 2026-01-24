@@ -1,6 +1,7 @@
 #include "executor/executor_manager.hpp"
 #include "thread_pool_executor.hpp"
 #include "realtime_thread_executor.hpp"
+#include "executor/monitor/statistics_collector.hpp"
 #include <mutex>
 #include <algorithm>
 
@@ -20,7 +21,8 @@ ExecutorManager& ExecutorManager::instance() {
 
 // 构造函数（实例化模式）
 ExecutorManager::ExecutorManager()
-    : default_async_executor_(nullptr) {
+    : default_async_executor_(nullptr)
+    , statistics_collector_(std::make_unique<monitor::StatisticsCollector>()) {
 }
 
 // 析构函数（RAII）
@@ -47,7 +49,9 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
 
     // 创建 ThreadPoolExecutor
     auto executor = std::make_unique<ThreadPoolExecutor>("default", pool_config);
-    
+    executor->set_task_monitor(&statistics_collector_->get_task_monitor());
+    statistics_collector_->get_task_monitor().set_enabled(config.enable_monitoring);
+
     // 启动执行器
     if (!executor->start()) {
         return false;  // 启动失败
@@ -124,6 +128,26 @@ std::vector<std::string> ExecutorManager::get_realtime_executor_names() const {
     }
     
     return names;
+}
+
+void ExecutorManager::enable_monitoring(bool enable) {
+    if (statistics_collector_) {
+        statistics_collector_->get_task_monitor().set_enabled(enable);
+    }
+}
+
+TaskStatistics ExecutorManager::get_task_statistics(
+    const std::string& task_type) const {
+    return statistics_collector_
+           ? statistics_collector_->get_task_statistics(task_type)
+           : TaskStatistics{};
+}
+
+std::map<std::string, TaskStatistics>
+ExecutorManager::get_all_task_statistics() const {
+    return statistics_collector_
+           ? statistics_collector_->get_all_task_statistics()
+           : std::map<std::string, TaskStatistics>{};
 }
 
 // 关闭所有执行器

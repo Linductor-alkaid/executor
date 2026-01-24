@@ -159,16 +159,19 @@ void ThreadPool::worker_thread(size_t worker_id) {
 }
 
 void ThreadPool::execute_task(const Task& task) {
+    if (monitor_ && monitor_->is_enabled()) {
+        monitor_->record_task_start(task.task_id, "default");
+    }
     auto start_time = std::chrono::steady_clock::now();
     bool success = false;
-    
+
     try {
         // 检查超时（如果设置了超时时间）
         if (task.timeout_ms > 0) {
             // 注意：这里只做简单的超时检查，实际超时控制需要更复杂的机制
             // 阶段4暂不实现完整的超时机制
         }
-        
+
         // 执行任务
         if (task.function) {
             task.function();
@@ -179,15 +182,16 @@ void ThreadPool::execute_task(const Task& task) {
         exception_handler_.handle_task_exception("ThreadPool", std::current_exception());
         success = false;
     }
-    
-    // 计算执行时间
+
     auto end_time = std::chrono::steady_clock::now();
-    auto execution_time = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    int64_t execution_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         end_time - start_time
     ).count();
-    
-    // 更新统计信息
-    update_statistics(execution_time, success);
+
+    if (monitor_ && monitor_->is_enabled()) {
+        monitor_->record_task_complete(task.task_id, success, execution_time_ns);
+    }
+    update_statistics(execution_time_ns, success);
 }
 
 void ThreadPool::update_statistics(int64_t execution_time_ns, bool success) {
@@ -337,6 +341,10 @@ void ThreadPool::wait_for_completion() {
 
 bool ThreadPool::is_stopped() const {
     return stop_.load(std::memory_order_relaxed);
+}
+
+void ThreadPool::set_task_monitor(monitor::TaskMonitor* m) {
+    monitor_ = m;
 }
 
 bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
