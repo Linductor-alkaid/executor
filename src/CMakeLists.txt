@@ -67,12 +67,44 @@ if(MSVC)
     target_compile_options(executor PRIVATE /utf-8)
 endif()
 
-# 设置输出名称
-set_target_properties(executor PROPERTIES
-    OUTPUT_NAME executor
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-)
+# 设置输出名称和版本
+if(WIN32)
+    # Windows: 动态库需要设置输出名称和导入库名称
+    if(EXECUTOR_BUILD_SHARED)
+        set_target_properties(executor PROPERTIES
+            OUTPUT_NAME executor
+            VERSION ${PROJECT_VERSION}
+        )
+        # 对于多配置生成器（如 Visual Studio），需要为每个配置设置输出目录
+        foreach(config Release Debug RelWithDebInfo MinSizeRel)
+            string(TOUPPER ${config} config_upper)
+            set_target_properties(executor PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_BINARY_DIR}/bin/${config}
+                LIBRARY_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_BINARY_DIR}/lib/${config}
+                ARCHIVE_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_BINARY_DIR}/lib/${config}
+            )
+        endforeach()
+    else()
+        # 静态库
+        set_target_properties(executor PROPERTIES
+            OUTPUT_NAME executor
+        )
+        # 对于多配置生成器，为每个配置设置输出目录
+        foreach(config Release Debug RelWithDebInfo MinSizeRel)
+            string(TOUPPER ${config} config_upper)
+            set_target_properties(executor PROPERTIES
+                ARCHIVE_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_BINARY_DIR}/lib/${config}
+            )
+        endforeach()
+    endif()
+else()
+    # Linux/Unix
+    set_target_properties(executor PROPERTIES
+        OUTPUT_NAME executor
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+    )
+endif()
 
 # 安装目标
 install(TARGETS executor
