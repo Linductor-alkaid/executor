@@ -111,10 +111,10 @@
 
 ## 阶段 11：ICycleManager 集成（可选）
 
-- [ ] 在 `RealtimeThreadExecutor` 中支持注入 `ICycleManager`
-- [ ] 实现 `cycle_loop` 方法（使用外部周期管理器）
-- [ ] 编写 ICycleManager 集成测试
-- [ ] 编写示例 `examples/realtime_can.cpp`（展示周期管理器使用）
+- [x] 在 `RealtimeThreadExecutor` 中支持注入 `ICycleManager`
+- [x] 实现 `cycle_loop` 方法（使用外部周期管理器）
+- [x] 编写 ICycleManager 集成测试
+- [x] 编写示例 `examples/realtime_can.cpp`（展示周期管理器使用）
 
 ---
 

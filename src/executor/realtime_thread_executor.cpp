@@ -44,9 +44,27 @@ bool RealtimeThreadExecutor::start() {
         }
 
         // 如果提供了外部周期管理器，使用它进行精确周期控制
-        // 注意：阶段 7 只实现内置的 simple_cycle_loop，阶段 11 才会支持外部周期管理器
-        // 这里暂时只使用 simple_cycle_loop
-        simple_cycle_loop();
+        if (config_.cycle_manager) {
+            // 注册周期任务：回调函数是 cycle_loop()
+            if (!config_.cycle_manager->register_cycle(
+                    name_,
+                    config_.cycle_period_ns,
+                    [this]() { cycle_loop(); })) {
+                // 注册失败，回退到内置实现
+                simple_cycle_loop();
+                return;
+            }
+
+            // 启动周期任务（阻塞在此，直到 stop_cycle 被调用）
+            if (!config_.cycle_manager->start_cycle(name_)) {
+                // 启动失败，回退到内置实现
+                simple_cycle_loop();
+                return;
+            }
+        } else {
+            // 使用内置的简单周期实现
+            simple_cycle_loop();
+        }
     });
 
     return true;
@@ -56,6 +74,11 @@ void RealtimeThreadExecutor::stop() {
     // 设置停止标志
     bool expected = true;
     if (running_.compare_exchange_strong(expected, false)) {
+        // 如果使用了周期管理器，需要先停止周期任务以解除阻塞
+        if (config_.cycle_manager) {
+            config_.cycle_manager->stop_cycle(name_);
+        }
+
         // 等待线程结束
         if (thread_.joinable()) {
             thread_.join();
@@ -125,6 +148,32 @@ void RealtimeThreadExecutor::simple_cycle_loop() {
         // 等待下一个周期（使用 sleep_until 实现精确周期控制）
         std::this_thread::sleep_until(next_cycle_time);
     }
+}
+
+void RealtimeThreadExecutor::cycle_loop() {
+    // 记录周期开始时间
+    auto cycle_start = std::chrono::steady_clock::now();
+
+    // 执行周期回调函数
+    if (config_.cycle_callback) {
+        try {
+            config_.cycle_callback();
+        } catch (...) {
+            exception_handler_.handle_task_exception(name_, std::current_exception());
+        }
+    }
+
+    // 处理无锁队列中的任务
+    process_tasks();
+
+    // 记录周期结束时间并更新统计信息
+    auto cycle_end = std::chrono::steady_clock::now();
+    auto cycle_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        cycle_end - cycle_start
+    ).count();
+    update_statistics(cycle_time_ns);
+
+    // 注意：不在这里执行 sleep，周期管理器负责等待下一个周期
 }
 
 void RealtimeThreadExecutor::process_tasks() {

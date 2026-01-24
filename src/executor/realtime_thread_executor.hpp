@@ -103,6 +103,14 @@ private:
     void simple_cycle_loop();
 
     /**
+     * @brief 周期循环（使用外部周期管理器）
+     * 
+     * 当使用 ICycleManager 时，此方法被周期管理器在每个周期调用。
+     * 执行周期回调、处理任务、更新统计，但不执行 sleep（由周期管理器负责）。
+     */
+    void cycle_loop();
+
+    /**
      * @brief 处理无锁队列中的任务
      * 
      * 从无锁队列中弹出所有任务并执行，捕获异常。
