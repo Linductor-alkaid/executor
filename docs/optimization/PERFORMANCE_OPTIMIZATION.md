@@ -559,7 +559,8 @@ ctest -L benchmark -R benchmark_baseline -V
 
 | 版本 | 文件 | 说明 |
 |------|------|------|
-| v0.1.0 | [docs/optimization/v0.1.0.json](v0.1.0.json) | 当前版本性能基准 |
+| v0.1.0 | [v0.1.0.json](v0.1.0.json) | 优化前基线 |
+| v0.1.0-1.1 | [v0.1.0-1.1.json](v0.1.0-1.1.json) | 1.1 PriorityScheduler 锁粒度优化后基线；较 v0.1.0：e2e_throughput **+5.3%**，latency p99 **-18%**，submission_throughput 略波动 |
 
 保存新基线示例：`./build/tests/benchmark_baseline --json > docs/optimization/vX.Y.Z.json`。对比时可直接比较同一 `benchmarks[].metrics` 字段（如 `throughput_tasks_per_sec`、`latency_us`）。
 

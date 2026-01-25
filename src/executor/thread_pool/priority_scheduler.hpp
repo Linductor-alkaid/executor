@@ -102,8 +102,14 @@ private:
     TaskQueue normal_queue_;    // NORMAL优先级队列
     TaskQueue low_queue_;       // LOW优先级队列
 
-    // 保护所有队列操作的互斥锁
-    mutable std::mutex mutex_;
+    // 每队列独立锁（细粒度锁，减少 enqueue/dequeue 竞争）
+    mutable std::mutex critical_mutex_;
+    mutable std::mutex high_mutex_;
+    mutable std::mutex normal_mutex_;
+    mutable std::mutex low_mutex_;
+
+    /** 从 shared_ptr<Task> 拷贝到 Task&，供 dequeue 复用 */
+    static void copy_task_out(const std::shared_ptr<Task>& src, Task& out);
 };
 
 } // namespace executor
