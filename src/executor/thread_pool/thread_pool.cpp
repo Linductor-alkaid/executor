@@ -352,7 +352,58 @@ bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
         return false;  // 只有一个线程，无法窃取
     }
     
-    // 随机选择起始位置，避免热点
+    // 尝试使用基于负载的智能窃取策略
+    if (load_balancer_) {
+        // 获取所有线程的负载信息
+        std::vector<LoadBalancer::WorkerLoad> loads = load_balancer_->get_all_loads();
+        
+        if (loads.size() == local_queues_.size()) {
+            // 创建线程ID和负载的配对，用于排序
+            std::vector<std::pair<size_t, size_t>> worker_loads;
+            worker_loads.reserve(local_queues_.size());
+            
+            for (size_t i = 0; i < local_queues_.size(); ++i) {
+                if (i != worker_id) {  // 跳过自己
+                    // 计算总负载：队列大小 + 活跃任务数
+                    size_t total_load = loads[i].queue_size + loads[i].active_tasks;
+                    worker_loads.emplace_back(i, total_load);
+                }
+            }
+            
+            // 检查是否所有线程负载相同
+            bool all_same_load = true;
+            if (!worker_loads.empty()) {
+                size_t first_load = worker_loads[0].second;
+                for (const auto& wl : worker_loads) {
+                    if (wl.second != first_load) {
+                        all_same_load = false;
+                        break;
+                    }
+                }
+            }
+            
+            // 如果负载不同，按负载从高到低排序，优先窃取负载高的线程
+            if (!all_same_load && !worker_loads.empty()) {
+                std::sort(worker_loads.begin(), worker_loads.end(),
+                    [](const std::pair<size_t, size_t>& a, const std::pair<size_t, size_t>& b) {
+                        return a.second > b.second;  // 降序排序
+                    });
+                
+                // 按排序顺序尝试窃取
+                for (const auto& wl : worker_loads) {
+                    size_t target_id = wl.first;
+                    if (local_queues_[target_id].steal(task)) {
+                        // 更新目标线程的负载信息
+                        size_t queue_size = local_queues_[target_id].size();
+                        load_balancer_->update_load(target_id, queue_size, 0);
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    
+    // 回退到随机策略（如果无法获取负载信息或所有线程负载相同）
     // 使用 thread_local 随机数生成器（首次使用时会自动初始化）
     static thread_local std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<size_t> dist(0, local_queues_.size() - 1);

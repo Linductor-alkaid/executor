@@ -335,6 +335,10 @@ size_t start_index = dist(rng);  // 随机选择
 
 **实现难度**：低
 
+**实施状态**：✅ 已实施优化
+
+已实现基于负载的智能窃取策略：使用 `LoadBalancer::get_all_loads()` 获取所有线程的负载信息，按负载（queue_size + active_tasks）从高到低排序，优先尝试从负载高的线程窃取任务。如果无法获取负载信息或所有线程负载相同，回退到随机策略。性能测试结果见 [v0.1.0-4.2.json](v0.1.0-4.2.json)。相对 v0.1.0-2.1：e2e_throughput **+5.9%**（480402→508864 tasks/s），latency p99 **-44.4%**（0.18μs→0.10μs），submission_throughput **+7.3%**（405018→434673 tasks/s）。注：此优化通过智能选择高负载线程进行窃取，提高了工作窃取的成功率和整体负载均衡效果，特别是在负载不均衡的场景下效果更明显。
+
 ---
 
 ## 5. 定时器线程优化
@@ -578,6 +582,7 @@ ctest -L benchmark -R benchmark_baseline -V
 | v0.1.0-6.1 | [v0.1.0-6.1.json](v0.1.0-6.1.json) | 6.1 任务 ID 生成优化后基线；较 v0.1.0-1.1：e2e_throughput **+7.3%**，latency p99 **-44%**（0.18μs→0.10μs），submission_throughput -2.0%；较 v0.1.0：e2e_throughput **+13.0%**，latency p99 **-55%**（0.22μs→0.10μs） |
 | v0.1.0-5.2 | [v0.1.0-5.2.json](v0.1.0-5.2.json) | 5.2 延迟任务处理优化后基线；较 v0.1.0-6.1：e2e_throughput -8.1%，latency p99 +20%（0.10μs→0.12μs），submission_throughput -3.2%；注：此优化主要提升延迟任务处理效率（定时器线程 CPU 占用），基准测试主要覆盖普通任务提交/执行 |
 | v0.1.0-2.1 | [v0.1.0-2.1.json](v0.1.0-2.1.json) | 2.1 PriorityScheduler shared_ptr 优化后基线；较 v0.1.0-5.2：submission_throughput **+1.7%**（398060→405018 tasks/s），e2e_throughput **+0.3%**（479048→480402 tasks/s），latency p99 +50%（0.12μs→0.18μs）；注：主要收益在于减少内存分配开销（从 shared_ptr 控制块+对象 减少为 unique_ptr 对象），内存占用和分配次数显著降低 |
+| v0.1.0-4.2 | [v0.1.0-4.2.json](v0.1.0-4.2.json) | 4.2 工作窃取策略优化后基线；较 v0.1.0-2.1：e2e_throughput **+5.9%**（480402→508864 tasks/s），latency p99 **-44.4%**（0.18μs→0.10μs），submission_throughput **+7.3%**（405018→434673 tasks/s）；注：通过基于负载的智能窃取策略，优先从高负载线程窃取任务，提高了工作窃取成功率和整体负载均衡效果 |
 
 保存新基线示例：`./build/tests/benchmark_baseline --json > docs/optimization/vX.Y.Z.json`。对比时可直接比较同一 `benchmarks[].metrics` 字段（如 `throughput_tasks_per_sec`、`latency_us`）。
 
