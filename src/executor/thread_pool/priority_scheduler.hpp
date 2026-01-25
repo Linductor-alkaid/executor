@@ -2,10 +2,10 @@
 
 #include "executor/types.hpp"
 #include "../task/task.hpp"
-#include <queue>
-#include <mutex>
-#include <functional>
+#include <vector>
+#include <algorithm>
 #include <memory>
+#include <mutex>
 #include <cstddef>
 
 namespace executor {
@@ -17,7 +17,9 @@ namespace executor {
  * 提供线程安全的enqueue和dequeue接口。
  * 按优先级顺序调度任务，同优先级任务按提交时间（FIFO）调度。
  * 
- * 注意：使用std::shared_ptr<Task>存储任务，因为Task包含std::atomic<bool>不可复制。
+ * 使用std::vector<std::unique_ptr<Task>> + 堆操作存储任务，
+ * 相比shared_ptr减少引用计数开销和控制块内存分配。
+ * Task包含std::atomic<bool>不可复制和移动，因此使用unique_ptr管理。
  */
 class PriorityScheduler {
 public:
@@ -42,7 +44,7 @@ public:
      * 
      * 根据任务的优先级将任务放入对应的队列。
      * 
-     * @param task 任务对象（会被复制为shared_ptr）
+     * @param task 任务对象（会被复制为unique_ptr）
      */
     void enqueue(const Task& task);
 
@@ -77,25 +79,19 @@ public:
     void clear();
 
 private:
-    // shared_ptr比较器：比较Task对象（通过解引用）
-    // priority_queue是最大堆，顶部是"最大"的元素
-    // Task::operator< 返回true表示lhs优先级低于rhs，所以rhs应该在顶部
-    // 因此TaskPtrCompare应该返回*lhs < *rhs，这样rhs（优先级高）会在顶部
+    // unique_ptr比较器：比较Task对象（通过解引用）
+    // 使用std::greater确保优先级高的任务在堆顶
     struct TaskPtrCompare {
-        bool operator()(const std::shared_ptr<Task>& lhs, const std::shared_ptr<Task>& rhs) const {
+        bool operator()(const std::unique_ptr<Task>& lhs, const std::unique_ptr<Task>& rhs) const {
             if (!lhs || !rhs) return false;
-            // 使用Task的operator<进行比较
-            // 如果*lhs < *rhs为真，表示lhs优先级低于rhs，rhs应该在顶部
+            // Task::operator< 返回true表示lhs优先级低于rhs
+            // 对于std::greater，返回*lhs < *rhs时，rhs（优先级高）会在堆顶
             return *lhs < *rhs;
         }
     };
 
-    // 使用priority_queue存储shared_ptr<Task>
-    // priority_queue是最大堆，使用TaskPtrCompare比较器
-    // TaskPtrCompare返回*lhs < *rhs时，rhs会在顶部（优先级高的在顶部）
-    using TaskQueue = std::priority_queue<std::shared_ptr<Task>, 
-                                          std::vector<std::shared_ptr<Task>>, 
-                                          TaskPtrCompare>;
+    // 使用vector存储unique_ptr<Task>，配合堆操作维护优先级顺序
+    using TaskQueue = std::vector<std::unique_ptr<Task>>;
 
     TaskQueue critical_queue_;  // CRITICAL优先级队列
     TaskQueue high_queue_;      // HIGH优先级队列
@@ -108,8 +104,8 @@ private:
     mutable std::mutex normal_mutex_;
     mutable std::mutex low_mutex_;
 
-    /** 从 shared_ptr<Task> 拷贝到 Task&，供 dequeue 复用 */
-    static void copy_task_out(const std::shared_ptr<Task>& src, Task& out);
+    /** 从 unique_ptr<Task> 拷贝到 Task&，供 dequeue 复用 */
+    static void copy_task_out(const std::unique_ptr<Task>& src, Task& out);
 };
 
 } // namespace executor

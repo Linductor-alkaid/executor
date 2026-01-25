@@ -5,7 +5,7 @@
 
 namespace executor {
 
-void PriorityScheduler::copy_task_out(const std::shared_ptr<Task>& src, Task& out) {
+void PriorityScheduler::copy_task_out(const std::unique_ptr<Task>& src, Task& out) {
     if (!src) return;
     out.task_id = src->task_id;
     out.priority = src->priority;
@@ -17,7 +17,8 @@ void PriorityScheduler::copy_task_out(const std::shared_ptr<Task>& src, Task& ou
 }
 
 void PriorityScheduler::enqueue(const Task& task) {
-    auto task_ptr = std::make_shared<Task>();
+    // 创建unique_ptr<Task>（复制字段）
+    auto task_ptr = std::make_unique<Task>();
     task_ptr->task_id = task.task_id;
     task_ptr->priority = task.priority;
     task_ptr->function = task.function;
@@ -26,38 +27,48 @@ void PriorityScheduler::enqueue(const Task& task) {
     task_ptr->dependencies = task.dependencies;
     task_ptr->cancelled.store(task.cancelled.load(std::memory_order_acquire), std::memory_order_release);
 
+    TaskPtrCompare cmp;
+
     switch (task.priority) {
         case TaskPriority::CRITICAL: {
             std::lock_guard<std::mutex> lock(critical_mutex_);
-            critical_queue_.push(std::move(task_ptr));
+            critical_queue_.push_back(std::move(task_ptr));
+            std::push_heap(critical_queue_.begin(), critical_queue_.end(), cmp);
             break;
         }
         case TaskPriority::HIGH: {
             std::lock_guard<std::mutex> lock(high_mutex_);
-            high_queue_.push(std::move(task_ptr));
+            high_queue_.push_back(std::move(task_ptr));
+            std::push_heap(high_queue_.begin(), high_queue_.end(), cmp);
             break;
         }
         case TaskPriority::NORMAL: {
             std::lock_guard<std::mutex> lock(normal_mutex_);
-            normal_queue_.push(std::move(task_ptr));
+            normal_queue_.push_back(std::move(task_ptr));
+            std::push_heap(normal_queue_.begin(), normal_queue_.end(), cmp);
             break;
         }
         case TaskPriority::LOW: {
             std::lock_guard<std::mutex> lock(low_mutex_);
-            low_queue_.push(std::move(task_ptr));
+            low_queue_.push_back(std::move(task_ptr));
+            std::push_heap(low_queue_.begin(), low_queue_.end(), cmp);
             break;
         }
+        default:
+            break;
     }
 }
 
 bool PriorityScheduler::dequeue(Task& task) {
-    std::shared_ptr<Task> task_ptr;
+    TaskPtrCompare cmp;
+    std::unique_ptr<Task> task_ptr;
 
     {
         std::lock_guard<std::mutex> lock(critical_mutex_);
         if (!critical_queue_.empty()) {
-            task_ptr = critical_queue_.top();
-            critical_queue_.pop();
+            std::pop_heap(critical_queue_.begin(), critical_queue_.end(), cmp);
+            task_ptr = std::move(critical_queue_.back());
+            critical_queue_.pop_back();
         }
     }
     if (task_ptr) {
@@ -68,8 +79,9 @@ bool PriorityScheduler::dequeue(Task& task) {
     {
         std::lock_guard<std::mutex> lock(high_mutex_);
         if (!high_queue_.empty()) {
-            task_ptr = high_queue_.top();
-            high_queue_.pop();
+            std::pop_heap(high_queue_.begin(), high_queue_.end(), cmp);
+            task_ptr = std::move(high_queue_.back());
+            high_queue_.pop_back();
         }
     }
     if (task_ptr) {
@@ -80,8 +92,9 @@ bool PriorityScheduler::dequeue(Task& task) {
     {
         std::lock_guard<std::mutex> lock(normal_mutex_);
         if (!normal_queue_.empty()) {
-            task_ptr = normal_queue_.top();
-            normal_queue_.pop();
+            std::pop_heap(normal_queue_.begin(), normal_queue_.end(), cmp);
+            task_ptr = std::move(normal_queue_.back());
+            normal_queue_.pop_back();
         }
     }
     if (task_ptr) {
@@ -92,8 +105,9 @@ bool PriorityScheduler::dequeue(Task& task) {
     {
         std::lock_guard<std::mutex> lock(low_mutex_);
         if (!low_queue_.empty()) {
-            task_ptr = low_queue_.top();
-            low_queue_.pop();
+            std::pop_heap(low_queue_.begin(), low_queue_.end(), cmp);
+            task_ptr = std::move(low_queue_.back());
+            low_queue_.pop_back();
         }
     }
     if (task_ptr) {
@@ -121,10 +135,10 @@ bool PriorityScheduler::empty() const {
 
 void PriorityScheduler::clear() {
     std::scoped_lock lock(critical_mutex_, high_mutex_, normal_mutex_, low_mutex_);
-    while (!critical_queue_.empty()) critical_queue_.pop();
-    while (!high_queue_.empty()) high_queue_.pop();
-    while (!normal_queue_.empty()) normal_queue_.pop();
-    while (!low_queue_.empty()) low_queue_.pop();
+    critical_queue_.clear();
+    high_queue_.clear();
+    normal_queue_.clear();
+    low_queue_.clear();
 }
 
 } // namespace executor

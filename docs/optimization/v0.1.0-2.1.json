@@ -1,0 +1,5 @@
+{"benchmarks":[
+  {"name":"submission_throughput","config":{"num_tasks":50000,"min_threads":4,"max_threads":8,"queue_capacity":10000},"metrics":{"throughput_tasks_per_sec":405018.04,"submit_time_ms":123.45}},
+  {"name":"round_trip_latency","config":{"num_tasks":10000,"min_threads":4,"max_threads":8,"queue_capacity":10000},"metrics":{"latency_us":{"min":0.02,"avg":0.04,"p50":0.02,"p95":0.10,"p99":0.18}}},
+  {"name":"e2e_throughput","config":{"num_tasks":50000,"min_threads":4,"max_threads":8,"queue_capacity":10000},"metrics":{"throughput_tasks_per_sec":480402.33,"total_time_ms":104.08}}
+]}

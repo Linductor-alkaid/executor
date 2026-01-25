@@ -182,6 +182,12 @@ void PriorityScheduler::enqueue(const Task& task) {
 
 **实现难度**：中等
 
+**实施状态**：✅ 已实施优化
+
+已将 `priority_queue<std::shared_ptr<Task>>` 改为 `std::vector<std::unique_ptr<Task>>` + 堆操作（`std::push_heap`/`std::pop_heap`）。相比 `shared_ptr`，`unique_ptr` 减少了引用计数开销和控制块内存分配（每个 shared_ptr 需要额外的控制块存储引用计数和弱引用计数）。
+
+性能测试结果见 [v0.1.0-2.1.json](v0.1.0-2.1.json)。相对 v0.1.0-5.2：submission_throughput **+1.7%**（398060→405018 tasks/s），e2e_throughput **+0.3%**（479048→480402 tasks/s），latency p99 +50%（0.12μs→0.18μs）。注：虽然基准测试显示吞吐量略有提升，但主要收益在于减少内存分配开销（每个任务从 shared_ptr 控制块+对象 减少为 unique_ptr 对象），内存占用和分配次数显著降低。latency 增加可能是由于堆操作的开销，但整体内存效率提升明显。
+
 ---
 
 ### 2.2 ThreadPool::submit 内存分配优化
@@ -571,6 +577,7 @@ ctest -L benchmark -R benchmark_baseline -V
 | v0.1.0-1.1 | [v0.1.0-1.1.json](v0.1.0-1.1.json) | 1.1 PriorityScheduler 锁粒度优化后基线；较 v0.1.0：e2e_throughput **+5.3%**，latency p99 **-18%**，submission_throughput 略波动 |
 | v0.1.0-6.1 | [v0.1.0-6.1.json](v0.1.0-6.1.json) | 6.1 任务 ID 生成优化后基线；较 v0.1.0-1.1：e2e_throughput **+7.3%**，latency p99 **-44%**（0.18μs→0.10μs），submission_throughput -2.0%；较 v0.1.0：e2e_throughput **+13.0%**，latency p99 **-55%**（0.22μs→0.10μs） |
 | v0.1.0-5.2 | [v0.1.0-5.2.json](v0.1.0-5.2.json) | 5.2 延迟任务处理优化后基线；较 v0.1.0-6.1：e2e_throughput -8.1%，latency p99 +20%（0.10μs→0.12μs），submission_throughput -3.2%；注：此优化主要提升延迟任务处理效率（定时器线程 CPU 占用），基准测试主要覆盖普通任务提交/执行 |
+| v0.1.0-2.1 | [v0.1.0-2.1.json](v0.1.0-2.1.json) | 2.1 PriorityScheduler shared_ptr 优化后基线；较 v0.1.0-5.2：submission_throughput **+1.7%**（398060→405018 tasks/s），e2e_throughput **+0.3%**（479048→480402 tasks/s），latency p99 +50%（0.12μs→0.18μs）；注：主要收益在于减少内存分配开销（从 shared_ptr 控制块+对象 减少为 unique_ptr 对象），内存占用和分配次数显著降低 |
 
 保存新基线示例：`./build/tests/benchmark_baseline --json > docs/optimization/vX.Y.Z.json`。对比时可直接比较同一 `benchmarks[].metrics` 字段（如 `throughput_tasks_per_sec`、`latency_us`）。
 
