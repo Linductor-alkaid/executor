@@ -66,6 +66,12 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "benchmark;stress"
             TIMEOUT 120
         )
+    # 性能基准测试（可配置、JSON 输出，用于优化前后对比）
+    elseif(TEST_NAME STREQUAL "benchmark_baseline")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "benchmark;baseline"
+            TIMEOUT 120
+        )
     # 默认：单元测试
     else()
         set_tests_properties(${TEST_NAME} PROPERTIES
