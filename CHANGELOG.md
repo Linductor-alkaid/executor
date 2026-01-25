@@ -22,7 +22,7 @@
 ### 依赖与平台
 
 - C++20，仅标准库 + `pthread`（Linux），无第三方必需依赖
-- Linux 下已验证；Windows 理论支持（平台抽象已就绪）
+- Linux/windows 下已验证；
 
 ---
 
