@@ -15,6 +15,7 @@
 #include <chrono>
 #include <type_traits>
 #include <map>
+#include <queue>
 
 namespace executor {
 
@@ -257,6 +258,13 @@ private:
         std::function<void()> on_complete;  // 完成回调（用于设置 promise）
     };
 
+    // 延迟任务比较器（用于 priority_queue，最早执行的在顶部）
+    struct DelayedTaskComparator {
+        bool operator()(const DelayedTask& a, const DelayedTask& b) const {
+            return a.execute_time > b.execute_time;  // 早的在顶部（最小堆）
+        }
+    };
+
     // 周期性任务结构
     struct PeriodicTask {
         std::string task_id;
@@ -266,8 +274,8 @@ private:
         bool cancelled = false;  // 使用普通 bool，由 periodic_tasks_mutex_ 保护
     };
 
-    // 延迟任务列表
-    std::vector<DelayedTask> delayed_tasks_;
+    // 延迟任务优先级队列（按执行时间排序，最早的在顶部）
+    std::priority_queue<DelayedTask, std::vector<DelayedTask>, DelayedTaskComparator> delayed_tasks_;
     std::mutex delayed_tasks_mutex_;
 
     // 周期性任务列表
@@ -346,7 +354,7 @@ auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
     // 添加到延迟任务列表
     {
         std::lock_guard<std::mutex> lock(delayed_tasks_mutex_);
-        delayed_tasks_.push_back(std::move(delayed_task));
+        delayed_tasks_.push(std::move(delayed_task));
     }
     
     // 确保定时器线程运行

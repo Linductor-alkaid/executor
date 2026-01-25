@@ -223,24 +223,26 @@ void Executor::timer_thread_func() {
         {
             std::lock_guard<std::mutex> lock(delayed_tasks_mutex_);
             
-            // 移除已执行的任务
+            // 只检查并处理到期的任务（队列顶部是最早执行的任务）
             auto* executor = manager_->get_default_async_executor();
             if (executor) {
-                delayed_tasks_.erase(
-                    std::remove_if(delayed_tasks_.begin(), delayed_tasks_.end(),
-                        [now, executor](DelayedTask& task) {
-                            if (now >= task.execute_time) {
-                                // 执行任务（提交到执行器）
-                                executor->submit(std::move(task.task));
-                                if (task.on_complete) {
-                                    task.on_complete();
-                                }
-                                return true;  // 移除
-                            }
-                            return false;  // 保留
-                        }),
-                    delayed_tasks_.end()
-                );
+                while (!delayed_tasks_.empty()) {
+                    const auto& top = delayed_tasks_.top();
+                    if (now >= top.execute_time) {
+                        // 执行任务（提交到执行器）
+                        // 注意：top() 返回 const 引用，需要 const_cast 来移动 task
+                        DelayedTask task = std::move(const_cast<DelayedTask&>(top));
+                        delayed_tasks_.pop();
+                        
+                        executor->submit(std::move(task.task));
+                        if (task.on_complete) {
+                            task.on_complete();
+                        }
+                    } else {
+                        // 后续任务更晚，无需检查
+                        break;
+                    }
+                }
             }
         }
         

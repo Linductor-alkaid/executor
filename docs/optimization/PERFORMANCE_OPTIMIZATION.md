@@ -398,6 +398,10 @@ delayed_tasks_.erase(
 
 **实现难度**：低
 
+**实施状态**：✅ 已实施优化
+
+已使用 `std::priority_queue` 替代 `std::vector` + `std::remove_if`，按执行时间排序，只检查到期的任务。性能测试结果见 [v0.1.0-5.2.json](v0.1.0-5.2.json)。相对 v0.1.0-6.1：e2e_throughput -8.1%，latency p99 +20%（0.10μs→0.12μs），submission_throughput -3.2%。注：此优化主要提升延迟任务处理效率（定时器线程 CPU 占用），基准测试主要覆盖普通任务提交/执行，延迟任务场景的性能提升需专门测试验证。
+
 ---
 
 ## 6. 其他优化建议
@@ -566,6 +570,7 @@ ctest -L benchmark -R benchmark_baseline -V
 | v0.1.0 | [v0.1.0.json](v0.1.0.json) | 优化前基线 |
 | v0.1.0-1.1 | [v0.1.0-1.1.json](v0.1.0-1.1.json) | 1.1 PriorityScheduler 锁粒度优化后基线；较 v0.1.0：e2e_throughput **+5.3%**，latency p99 **-18%**，submission_throughput 略波动 |
 | v0.1.0-6.1 | [v0.1.0-6.1.json](v0.1.0-6.1.json) | 6.1 任务 ID 生成优化后基线；较 v0.1.0-1.1：e2e_throughput **+7.3%**，latency p99 **-44%**（0.18μs→0.10μs），submission_throughput -2.0%；较 v0.1.0：e2e_throughput **+13.0%**，latency p99 **-55%**（0.22μs→0.10μs） |
+| v0.1.0-5.2 | [v0.1.0-5.2.json](v0.1.0-5.2.json) | 5.2 延迟任务处理优化后基线；较 v0.1.0-6.1：e2e_throughput -8.1%，latency p99 +20%（0.10μs→0.12μs），submission_throughput -3.2%；注：此优化主要提升延迟任务处理效率（定时器线程 CPU 占用），基准测试主要覆盖普通任务提交/执行 |
 
 保存新基线示例：`./build/tests/benchmark_baseline --json > docs/optimization/vX.Y.Z.json`。对比时可直接比较同一 `benchmarks[].metrics` 字段（如 `throughput_tasks_per_sec`、`latency_us`）。
 
