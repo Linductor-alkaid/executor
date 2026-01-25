@@ -60,6 +60,19 @@ public:
     bool dequeue(Task& task);
 
     /**
+     * @brief 批量从优先级队列获取任务（按优先级顺序）
+     * 
+     * 按优先级从高到低依次从各队列取任务，每个优先级队列仅加锁一次，
+     * 最多取出 max_tasks 个任务。调用方必须保证 out 指向至少 max_tasks 个
+     * 已构造的 Task 对象（如 vector::resize 后传入 data()）。
+     * 
+     * @param out 用于接收任务的缓冲区，写入 out[0..return-1]
+     * @param max_tasks 最多取出的任务数
+     * @return 实际取出的任务数
+     */
+    size_t dequeue_batch(Task* out, size_t max_tasks);
+
+    /**
      * @brief 获取队列总大小
      * 
      * @return 所有优先级队列中的任务总数

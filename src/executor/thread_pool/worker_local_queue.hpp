@@ -56,6 +56,15 @@ public:
     bool push(Task&& task);
 
     /**
+     * @brief 批量推入任务（一次加锁）
+     * 
+     * @param tasks 任务数组
+     * @param n 任务数量
+     * @return 实际推入的数量（队列满时停止）
+     */
+    size_t push_batch(const Task* tasks, size_t n);
+
+    /**
      * @brief 弹出任务（由工作线程调用，从队列前端弹出）
      * 
      * @param task 用于接收任务的引用

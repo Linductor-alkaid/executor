@@ -118,6 +118,30 @@ bool PriorityScheduler::dequeue(Task& task) {
     return false;
 }
 
+size_t PriorityScheduler::dequeue_batch(Task* out, size_t max_tasks) {
+    if (max_tasks == 0 || !out) return 0;
+    TaskPtrCompare cmp;
+    size_t count = 0;
+
+    auto drain = [&](TaskQueue& queue, std::mutex& m) {
+        std::lock_guard<std::mutex> lock(m);
+        while (!queue.empty() && count < max_tasks) {
+            std::pop_heap(queue.begin(), queue.end(), cmp);
+            std::unique_ptr<Task> ptr = std::move(queue.back());
+            queue.pop_back();
+            copy_task_out(ptr, out[count]);
+            ++count;
+        }
+    };
+
+    drain(critical_queue_, critical_mutex_);
+    drain(high_queue_, high_mutex_);
+    drain(normal_queue_, normal_mutex_);
+    drain(low_queue_, low_mutex_);
+
+    return count;
+}
+
 size_t PriorityScheduler::size() const {
     std::scoped_lock lock(critical_mutex_, high_mutex_, normal_mutex_, low_mutex_);
     return critical_queue_.size() + high_queue_.size() +

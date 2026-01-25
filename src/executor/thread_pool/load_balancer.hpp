@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <vector>
+#include <tuple>
 #include <atomic>
 #include <shared_mutex>
 #include <chrono>
@@ -69,6 +70,13 @@ public:
      * @param active_tasks 正在执行的任务数
      */
     void update_load(size_t worker_id, size_t queue_size, size_t active_tasks);
+
+    /**
+     * @brief 批量更新线程负载（一次写锁）
+     * 
+     * @param updates (worker_id, queue_size, active_tasks) 列表
+     */
+    void update_load_batch(const std::vector<std::tuple<size_t, size_t, size_t>>& updates);
 
     /**
      * @brief 获取线程负载信息

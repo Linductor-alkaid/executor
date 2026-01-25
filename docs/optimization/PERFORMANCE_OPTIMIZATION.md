@@ -253,6 +253,10 @@ size_t TaskDispatcher::dispatch_batch(size_t max_tasks) {
 
 **实现难度**：中等
 
+**实施状态**：✅ 已实施优化
+
+已实现真正的批量分发：`PriorityScheduler::dequeue_batch(Task* out, size_t max_tasks)` 按优先级每队列加锁一次批量取出任务；`WorkerLocalQueue::push_batch(const Task* tasks, size_t n)` 一次加锁批量入队；`LoadBalancer::update_load_batch` 一次写锁批量更新负载。`TaskDispatcher::dispatch_batch` 重写为：批量取任务 → 按 worker 分组 → 每队列 `push_batch` → `update_load_batch`。性能基线见 [v0.1.0-3.1-before.json](v0.1.0-3.1-before.json)（优化前）、[v0.1.0-3.1.json](v0.1.0-3.1.json)（优化后）。较 v0.1.0-3.1-before：e2e_throughput **+2.9%**（454208→467566 tasks/s），submission_throughput -13.5%（475566→411136 tasks/s），latency p99 +22%（0.09μs→0.11μs）。注：批量分发主要减少调度器/本地队列/负载更新的锁次数；submit 路径仍为 `dispatch_batch(1)`，分组与拷贝带来一定开销，提交吞吐与延迟略有回退，端到端吞吐有所提升。
+
 ---
 
 ### 3.2 直接分发到本地队列
@@ -583,6 +587,7 @@ ctest -L benchmark -R benchmark_baseline -V
 | v0.1.0-5.2 | [v0.1.0-5.2.json](v0.1.0-5.2.json) | 5.2 延迟任务处理优化后基线；较 v0.1.0-6.1：e2e_throughput -8.1%，latency p99 +20%（0.10μs→0.12μs），submission_throughput -3.2%；注：此优化主要提升延迟任务处理效率（定时器线程 CPU 占用），基准测试主要覆盖普通任务提交/执行 |
 | v0.1.0-2.1 | [v0.1.0-2.1.json](v0.1.0-2.1.json) | 2.1 PriorityScheduler shared_ptr 优化后基线；较 v0.1.0-5.2：submission_throughput **+1.7%**（398060→405018 tasks/s），e2e_throughput **+0.3%**（479048→480402 tasks/s），latency p99 +50%（0.12μs→0.18μs）；注：主要收益在于减少内存分配开销（从 shared_ptr 控制块+对象 减少为 unique_ptr 对象），内存占用和分配次数显著降低 |
 | v0.1.0-4.2 | [v0.1.0-4.2.json](v0.1.0-4.2.json) | 4.2 工作窃取策略优化后基线；较 v0.1.0-2.1：e2e_throughput **+5.9%**（480402→508864 tasks/s），latency p99 **-44.4%**（0.18μs→0.10μs），submission_throughput **+7.3%**（405018→434673 tasks/s）；注：通过基于负载的智能窃取策略，优先从高负载线程窃取任务，提高了工作窃取成功率和整体负载均衡效果 |
+| v0.1.0-3.1 | [v0.1.0-3.1.json](v0.1.0-3.1.json) | 3.1 批量分发优化后基线；较 v0.1.0-3.1-before：e2e_throughput **+2.9%**（454208→467566 tasks/s），submission_throughput -13.5%，latency p99 +22%；注：批量 dequeue/push_batch/update_load_batch 减少锁次数，端到端吞吐提升，提交路径 dispatch_batch(1) 的分组与拷贝带来一定开销 |
 
 保存新基线示例：`./build/tests/benchmark_baseline --json > docs/optimization/vX.Y.Z.json`。对比时可直接比较同一 `benchmarks[].metrics` 字段（如 `throughput_tasks_per_sec`、`latency_us`）。
 

@@ -37,6 +37,22 @@ bool WorkerLocalQueue::push(Task&& task) {
     return push(task);  // 委托给 const 版本
 }
 
+size_t WorkerLocalQueue::push_batch(const Task* tasks, size_t n) {
+    if (!tasks || n == 0) return 0;
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t max_size = queue_.size();
+    size_t pushed = 0;
+    for (size_t i = 0; i < n; ++i) {
+        size_t current_size = size_.load(std::memory_order_relaxed);
+        if (current_size >= max_size) break;
+        queue_[back_index_] = TaskWrapper(tasks[i]);
+        back_index_ = (back_index_ + 1) % queue_.size();
+        size_.store(current_size + 1, std::memory_order_relaxed);
+        ++pushed;
+    }
+    return pushed;
+}
+
 bool WorkerLocalQueue::pop(Task& task) {
     std::lock_guard<std::mutex> lock(mutex_);
     

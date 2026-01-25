@@ -94,6 +94,19 @@ void LoadBalancer::update_load(size_t worker_id, size_t queue_size, size_t activ
     worker_loads_[worker_id].last_update = std::chrono::steady_clock::now();
 }
 
+void LoadBalancer::update_load_batch(const std::vector<std::tuple<size_t, size_t, size_t>>& updates) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    auto now = std::chrono::steady_clock::now();
+    const size_t num_workers = worker_loads_.size();
+    for (const auto& u : updates) {
+        size_t worker_id = std::get<0>(u);
+        if (worker_id >= num_workers) continue;
+        worker_loads_[worker_id].queue_size = std::get<1>(u);
+        worker_loads_[worker_id].active_tasks = std::get<2>(u);
+        worker_loads_[worker_id].last_update = now;
+    }
+}
+
 LoadBalancer::WorkerLoad LoadBalancer::get_load(size_t worker_id) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     
