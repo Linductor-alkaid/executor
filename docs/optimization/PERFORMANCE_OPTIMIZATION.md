@@ -429,6 +429,10 @@ std::string generate_task_id() {
 
 **实现难度**：低
 
+**实施状态**：✅ 已实施优化
+
+已使用原子计数器（`std::atomic<uint64_t>`）替代时间戳实现，性能测试结果见 [v0.1.0-6.1.json](v0.1.0-6.1.json)。相对 v0.1.0-1.1：e2e_throughput **+7.3%**，latency p99 **-44%**（从 0.18μs 降至 0.10μs），submission_throughput 略有波动（-2.0%）。
+
 ---
 
 ### 6.2 统计信息更新优化
@@ -561,6 +565,7 @@ ctest -L benchmark -R benchmark_baseline -V
 |------|------|------|
 | v0.1.0 | [v0.1.0.json](v0.1.0.json) | 优化前基线 |
 | v0.1.0-1.1 | [v0.1.0-1.1.json](v0.1.0-1.1.json) | 1.1 PriorityScheduler 锁粒度优化后基线；较 v0.1.0：e2e_throughput **+5.3%**，latency p99 **-18%**，submission_throughput 略波动 |
+| v0.1.0-6.1 | [v0.1.0-6.1.json](v0.1.0-6.1.json) | 6.1 任务 ID 生成优化后基线；较 v0.1.0-1.1：e2e_throughput **+7.3%**，latency p99 **-44%**（0.18μs→0.10μs），submission_throughput -2.0%；较 v0.1.0：e2e_throughput **+13.0%**，latency p99 **-55%**（0.22μs→0.10μs） |
 
 保存新基线示例：`./build/tests/benchmark_baseline --json > docs/optimization/vX.Y.Z.json`。对比时可直接比较同一 `benchmarks[].metrics` 字段（如 `throughput_tasks_per_sec`、`latency_us`）。
 

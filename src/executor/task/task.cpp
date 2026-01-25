@@ -1,7 +1,12 @@
 #include "executor/types.hpp"
-#include <chrono>
+#include <atomic>
 
 namespace executor {
+
+namespace {
+    // 全局任务ID计数器，使用原子操作保证线程安全
+    static std::atomic<uint64_t> g_task_id_counter{1};
+}
 
 /**
  * @brief Task 比较操作符（用于优先级队列）
@@ -28,13 +33,11 @@ bool operator>(const Task& lhs, const Task& rhs) {
 /**
  * @brief 创建任务ID（辅助函数）
  * 
- * 基于时间戳生成唯一的任务ID
+ * 使用原子计数器生成唯一的任务ID，性能优于基于时间戳的实现
  */
 std::string generate_task_id() {
-    auto now = std::chrono::steady_clock::now();
-    auto duration = now.time_since_epoch();
-    auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
-    return "task_" + std::to_string(nanoseconds);
+    uint64_t id = g_task_id_counter.fetch_add(1, std::memory_order_relaxed);
+    return "task_" + std::to_string(id);
 }
 
 /**

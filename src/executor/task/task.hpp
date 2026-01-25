@@ -21,7 +21,7 @@ bool operator>(const Task& lhs, const Task& rhs);
 /**
  * @brief 创建任务ID（辅助函数）
  * 
- * 基于时间戳生成唯一的任务ID
+ * 使用原子计数器生成唯一的任务ID，性能优于基于时间戳的实现
  * 
  * @return 唯一的任务ID字符串
  */
