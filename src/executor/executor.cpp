@@ -190,6 +190,49 @@ void Executor::wait_for_completion() {
     if (ex) ex->wait_for_completion();
 }
 
+// 注册 GPU 执行器
+bool Executor::register_gpu_executor(const std::string& name,
+                                     const gpu::GpuExecutorConfig& config) {
+    // 创建 GPU 执行器
+    auto executor = manager_->create_gpu_executor(config);
+    if (!executor) {
+        return false;  // 创建失败
+    }
+    
+    // 启动执行器（必须在注册前启动）
+    if (!executor->start()) {
+        return false;  // 启动失败
+    }
+    
+    // 注册执行器
+    return manager_->register_gpu_executor(name, std::move(executor));
+}
+
+// 获取 GPU 执行器
+IGpuExecutor* Executor::get_gpu_executor(const std::string& name) {
+    return manager_->get_gpu_executor(name);
+}
+
+// 获取所有 GPU 执行器名称
+std::vector<std::string> Executor::get_gpu_executor_names() const {
+    return manager_->get_gpu_executor_names();
+}
+
+// 获取 GPU 执行器状态
+gpu::GpuExecutorStatus Executor::get_gpu_executor_status(const std::string& name) const {
+    auto* executor = manager_->get_gpu_executor(name);
+    if (!executor) {
+        gpu::GpuExecutorStatus status;
+        status.name = name;
+        status.is_running = false;
+        status.backend = gpu::GpuBackend::CUDA;  // 默认值
+        status.device_id = 0;
+        return status;
+    }
+    
+    return executor->get_status();
+}
+
 // 启动定时器线程
 void Executor::start_timer_thread() {
     if (timer_running_.exchange(true)) {

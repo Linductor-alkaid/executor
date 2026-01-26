@@ -96,24 +96,24 @@
 
 ### 1.4 Executor Facade 扩展
 
-- [ ] 扩展 `include/executor/executor.hpp`
-  - [ ] 添加 `register_gpu_executor()` 方法声明
-  - [ ] 添加 `submit_gpu()` 模板方法声明
-  - [ ] 添加 `get_gpu_executor()` 方法声明
-  - [ ] 添加 `get_gpu_executor_names()` 方法声明
-  - [ ] 添加 `get_gpu_executor_status()` 方法声明
+- [x] 扩展 `include/executor/executor.hpp`
+  - [x] 添加 `register_gpu_executor()` 方法声明
+  - [x] 添加 `submit_gpu()` 模板方法声明
+  - [x] 添加 `get_gpu_executor()` 方法声明
+  - [x] 添加 `get_gpu_executor_names()` 方法声明
+  - [x] 添加 `get_gpu_executor_status()` 方法声明
 
-- [ ] 扩展 `src/executor/executor.cpp`
-  - [ ] 实现 `register_gpu_executor()` 方法
-  - [ ] 实现 `submit_gpu()` 模板方法
-  - [ ] 实现 `get_gpu_executor()` 方法
-  - [ ] 实现 `get_gpu_executor_names()` 方法
-  - [ ] 实现 `get_gpu_executor_status()` 方法
+- [x] 扩展 `src/executor/executor.cpp`
+  - [x] 实现 `register_gpu_executor()` 方法
+  - [x] 实现 `submit_gpu()` 模板方法
+  - [x] 实现 `get_gpu_executor()` 方法
+  - [x] 实现 `get_gpu_executor_names()` 方法
+  - [x] 实现 `get_gpu_executor_status()` 方法
 
-- [ ] 编写 Executor Facade GPU 扩展集成测试
-  - [ ] 测试 GPU 执行器注册
-  - [ ] 测试 GPU 任务提交
-  - [ ] 测试状态查询
+- [x] 编写 Executor Facade GPU 扩展集成测试
+  - [x] 测试 GPU 执行器注册
+  - [x] 测试 GPU 任务提交
+  - [x] 测试状态查询
 
 ### 1.5 CMake 构建系统扩展
 

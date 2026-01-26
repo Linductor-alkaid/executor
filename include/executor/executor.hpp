@@ -220,6 +220,56 @@ public:
      */
     void wait_for_completion();
 
+    /**
+     * @brief 注册 GPU 执行器
+     * 
+     * 创建并注册 GPU 执行器。
+     * 
+     * @param name 执行器名称
+     * @param config GPU 执行器配置
+     * @return 是否注册成功
+     */
+    bool register_gpu_executor(const std::string& name,
+                              const gpu::GpuExecutorConfig& config);
+
+    /**
+     * @brief 提交 GPU kernel 任务
+     * 
+     * @tparam KernelFunc GPU kernel 函数类型
+     * @param executor_name GPU 执行器名称
+     * @param kernel GPU kernel 函数
+     * @param config GPU 任务配置
+     * @return std::future<void> 任务执行结果的 future
+     */
+    template<typename KernelFunc>
+    auto submit_gpu(const std::string& executor_name,
+                   KernelFunc&& kernel,
+                   const gpu::GpuTaskConfig& config)
+        -> std::future<void>;
+
+    /**
+     * @brief 获取 GPU 执行器
+     * 
+     * @param name 执行器名称
+     * @return GPU 执行器指针，如果不存在则返回 nullptr
+     */
+    IGpuExecutor* get_gpu_executor(const std::string& name);
+
+    /**
+     * @brief 获取所有 GPU 执行器名称
+     * 
+     * @return GPU 执行器名称列表
+     */
+    std::vector<std::string> get_gpu_executor_names() const;
+
+    /**
+     * @brief 获取 GPU 执行器状态
+     * 
+     * @param name 执行器名称
+     * @return GPU 执行器状态
+     */
+    gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
+
 private:
     /**
      * @brief 单例模式构造函数（私有）
@@ -363,6 +413,19 @@ auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
     }
     
     return future;
+}
+
+// GPU 任务提交模板方法实现
+template<typename KernelFunc>
+auto Executor::submit_gpu(const std::string& executor_name,
+                         KernelFunc&& kernel,
+                         const gpu::GpuTaskConfig& config)
+    -> std::future<void> {
+    auto* executor = manager_->get_gpu_executor(executor_name);
+    if (!executor) {
+        throw std::runtime_error("GPU executor '" + executor_name + "' not found. Call register_gpu_executor() first.");
+    }
+    return executor->submit_kernel(std::forward<KernelFunc>(kernel), config);
 }
 
 } // namespace executor

@@ -52,6 +52,11 @@ target_include_directories(executor
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# GPU 支持宏定义
+if(EXECUTOR_ENABLE_GPU)
+    target_compile_definitions(executor PUBLIC EXECUTOR_ENABLE_GPU)
+endif()
+
 # CUDA 支持（如果启用）
 # 注意：使用动态加载，不链接CUDA库，只包含头文件用于类型定义
 if(EXECUTOR_CUDA_ENABLED)

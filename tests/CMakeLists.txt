@@ -27,6 +27,11 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     # 链接 executor 库
     target_link_libraries(${TEST_NAME} PRIVATE executor)
     
+    # 如果启用了 GPU 支持，传递宏定义给测试
+    if(EXECUTOR_ENABLE_GPU)
+        target_compile_definitions(${TEST_NAME} PRIVATE EXECUTOR_ENABLE_GPU)
+    endif()
+    
     # 如果是CUDA测试，添加CUDA头文件支持（不链接库，使用动态加载）
     if(TEST_NAME MATCHES ".*cuda.*" AND EXECUTOR_CUDA_ENABLED)
         if(CUDA_INCLUDE_DIRS)
