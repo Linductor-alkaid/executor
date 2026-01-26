@@ -28,25 +28,49 @@
 
 ### 1.2 CUDA 执行器基础实现
 
-- [ ] 创建 `src/executor/gpu/cuda_executor.hpp`
-  - [ ] 定义 `CudaExecutor` 类（继承 `IGpuExecutor`）
-  - [ ] 声明私有成员变量（设备ID、流管理、任务队列等）
+- [x] 创建 `src/executor/gpu/cuda_executor.hpp`
+  - [x] 定义 `CudaExecutor` 类（继承 `IGpuExecutor`）
+  - [x] 声明私有成员变量（设备ID、流管理、任务队列等）
 
-- [ ] 创建 `src/executor/gpu/cuda_executor.cpp`
-  - [ ] 实现构造函数和析构函数
-  - [ ] 实现 `start()` 和 `stop()` 方法
-  - [ ] 实现 `get_name()` 和 `get_device_info()` 方法
-  - [ ] 实现基础的内存管理（`allocate_device_memory`、`free_device_memory`）
-  - [ ] 实现基础的内存复制（`copy_to_device`、`copy_to_host`）
-  - [ ] 实现 `synchronize()` 方法
-  - [ ] 实现 `submit_kernel_impl()` 方法（基础版本，单流执行）
-  - [ ] 实现 `get_status()` 方法（基础版本）
+- [x] 创建 `src/executor/gpu/cuda_executor.cpp`
+  - [x] 实现构造函数和析构函数
+  - [x] 实现 `start()` 和 `stop()` 方法
+  - [x] 实现 `get_name()` 和 `get_device_info()` 方法
+  - [x] 实现基础的内存管理（`allocate_device_memory`、`free_device_memory`）
+  - [x] 实现基础的内存复制（`copy_to_device`、`copy_to_host`）
+  - [x] 实现 `synchronize()` 方法
+  - [x] 实现 `submit_kernel_impl()` 方法（基础版本，单流执行）
+  - [x] 实现 `get_status()` 方法（基础版本）
 
-- [ ] 编写 CUDA 执行器单元测试
-  - [ ] 测试执行器创建和销毁
-  - [ ] 测试设备信息查询
-  - [ ] 测试基础内存管理
-  - [ ] 测试基础 kernel 提交
+- [x] 编写 CUDA 执行器单元测试
+  - [x] 测试执行器创建和销毁
+  - [x] 测试设备信息查询
+  - [x] 测试基础内存管理
+  - [x] 测试基础 kernel 提交
+
+### 1.2.1 CUDA 动态加载器实现
+
+- [x] 创建 `src/executor/gpu/cuda_loader.hpp`
+  - [x] 定义 `CudaLoader` 类（单例模式）
+  - [x] 定义 CUDA 函数指针类型
+  - [x] 定义 `CudaFunctionPointers` 结构体
+  - [x] 声明 DLL 搜索和加载接口
+
+- [x] 创建 `src/executor/gpu/cuda_loader.cpp`
+  - [x] 实现 DLL 搜索逻辑（Windows/Linux）
+  - [x] 实现动态 DLL 加载
+  - [x] 实现函数指针获取
+  - [x] 实现生命周期管理（单例模式）
+
+- [x] 修改 `CudaExecutor` 集成动态加载
+  - [x] 集成 `CudaLoader` 到 `CudaExecutor`
+  - [x] 将所有 CUDA 函数调用改为通过函数指针调用
+  - [x] 实现降级（CUDA 不可用时安全返回）
+
+- [x] 修改 CMake 配置
+  - [x] 移除 CUDA 库的静态链接
+  - [x] 移除延迟加载配置
+  - [x] 保留 CUDA 头文件包含（用于类型定义）
 
 ### 1.3 ExecutorManager 扩展
 
@@ -93,21 +117,21 @@
 
 ### 1.5 CMake 构建系统扩展
 
-- [ ] 扩展 `CMakeLists.txt`
-  - [ ] 添加 `EXECUTOR_ENABLE_GPU` 选项
-  - [ ] 添加 `EXECUTOR_ENABLE_CUDA` 选项
-  - [ ] 添加 CUDA 库查找逻辑（`find_package(CUDA)`）
-  - [ ] 添加条件编译逻辑（仅在启用 GPU 时编译 GPU 相关代码）
-  - [ ] 添加 CUDA 库链接逻辑
+- [x] 扩展 `CMakeLists.txt`
+  - [x] 添加 `EXECUTOR_ENABLE_GPU` 选项
+  - [x] 添加 `EXECUTOR_ENABLE_CUDA` 选项
+  - [x] 添加 CUDA 库查找逻辑（`find_package(CUDAToolkit)` 和 `find_package(CUDA)`）
+  - [x] 添加条件编译逻辑（仅在启用 GPU 时编译 GPU 相关代码）
+  - [x] 添加 CUDA 头文件包含（用于类型定义，不链接库）
 
 - [ ] 创建 `cmake/FindCUDA.cmake`（如果需要）
   - [ ] 实现 CUDA 库查找逻辑
   - [ ] 设置 CUDA 包含目录和库目录
 
-- [ ] 测试构建系统
-  - [ ] 测试禁用 GPU 时的构建（不应包含 GPU 代码）
-  - [ ] 测试启用 GPU 时的构建（应包含 GPU 代码）
-  - [ ] 测试 CUDA 库链接
+- [x] 测试构建系统
+  - [x] 测试禁用 GPU 时的构建（不应包含 GPU 代码）
+  - [x] 测试启用 GPU 时的构建（应包含 GPU 代码）
+  - [x] 测试动态加载（不依赖静态链接）
 
 ### 1.6 基础示例
 

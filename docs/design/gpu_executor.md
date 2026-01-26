@@ -52,6 +52,7 @@ graph TB
         end
         
         subgraph gpu_executor[GPU执行器]
+            cuda_loader[CUDA动态加载器<br/>CudaLoader]
             cuda_executor[CUDA执行器]
             opencl_executor[OpenCL执行器]
             sycl_executor[SYCL执行器]
@@ -100,6 +101,7 @@ graph TB
     %% GPU执行器内部流
     gpu_executor_interface --> gpu_memory_manager
     gpu_executor_interface --> gpu_stream_manager
+    cuda_executor --> cuda_loader
     gpu_memory_manager --> cuda_executor
     gpu_memory_manager --> opencl_executor
     gpu_memory_manager --> sycl_executor
@@ -512,12 +514,97 @@ public:
 
 #### 5.1 CUDA 执行器实现
 
+**CUDA 动态加载器设计**：
+
+为了支持 CUDA 不在系统 PATH 中的场景，以及实现真正的可选依赖，CUDA 执行器使用动态加载机制：
+
+```cpp
+namespace executor {
+namespace gpu {
+
+/**
+ * @brief CUDA 函数指针类型定义
+ */
+using CudaFreeFunc = cudaError_t (*)(void*);
+using CudaGetDeviceCountFunc = cudaError_t (*)(int*);
+using CudaSetDeviceFunc = cudaError_t (*)(int);
+using CudaGetDevicePropertiesFunc = cudaError_t (*)(cudaDeviceProp*, int);
+using CudaMallocFunc = cudaError_t (*)(void**, size_t);
+using CudaMemcpyFunc = cudaError_t (*)(void*, const void*, size_t, cudaMemcpyKind);
+// ... 其他函数指针类型 ...
+
+/**
+ * @brief CUDA 函数指针集合
+ */
+struct CudaFunctionPointers {
+    CudaFreeFunc cudaFree = nullptr;
+    CudaGetDeviceCountFunc cudaGetDeviceCount = nullptr;
+    // ... 其他函数指针 ...
+    
+    bool is_complete() const;  // 检查所有函数是否已加载
+};
+
+/**
+ * @brief CUDA 动态加载器（单例模式）
+ * 
+ * 负责动态搜索和加载 CUDA DLL，获取 CUDA 函数指针。
+ * 支持自动搜索常见安装路径，即使 CUDA 不在 PATH 中也能工作。
+ */
+class CudaLoader {
+public:
+    static CudaLoader& instance();
+    
+    bool load();  // 加载 CUDA DLL
+    void unload();  // 卸载 CUDA DLL
+    bool is_available() const;  // 检查是否可用
+    const CudaFunctionPointers& get_functions() const;  // 获取函数指针集合
+    std::string get_dll_path() const;  // 获取已加载的 DLL 路径
+
+private:
+    std::string search_cuda_dll();  // 搜索 CUDA DLL
+    bool try_load_dll(const std::string& dll_path);  // 尝试加载 DLL
+    bool load_functions();  // 加载所有函数指针
+    
+#ifdef _WIN32
+    std::string search_windows_paths();  // Windows 路径搜索
+#else
+    std::string search_linux_paths();  // Linux 路径搜索
+#endif
+    
+    mutable std::mutex mutex_;
+    bool is_loaded_;
+    std::string dll_path_;
+#ifdef _WIN32
+    HMODULE dll_handle_;
+#else
+    void* dll_handle_;
+#endif
+    CudaFunctionPointers functions_;
+};
+
+} // namespace gpu
+} // namespace executor
+```
+
+**DLL 搜索策略**：
+
+1. **环境变量**：优先检查 `CUDA_PATH` 环境变量
+2. **常见安装路径**：
+   - Windows: `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v*\bin\`
+   - Linux: `/usr/local/cuda*/lib64/`
+3. **系统 PATH**：最后从系统 PATH/LD_LIBRARY_PATH 搜索
+
+**CUDA 执行器实现**：
+
 ```cpp
 namespace executor {
 namespace gpu {
 
 /**
  * @brief CUDA 执行器实现
+ * 
+ * 使用 CudaLoader 动态加载 CUDA 函数，所有 CUDA API 调用
+ * 都通过函数指针进行，不依赖静态链接。
  */
 class CudaExecutor : public IGpuExecutor {
 public:
@@ -550,17 +637,19 @@ private:
     std::string name_;
     GpuExecutorConfig config_;
     int device_id_;
+    bool is_available_;
+    CudaLoader* loader_;  // CUDA 加载器（单例引用）
+    
+#ifdef EXECUTOR_ENABLE_CUDA
     cudaDeviceProp device_prop_;
-    
-    // 流管理
+    cudaStream_t default_stream_;
     std::vector<cudaStream_t> streams_;
-    std::mutex streams_mutex_;
+    mutable std::mutex streams_mutex_;
+#endif
     
-    // 任务队列
-    std::queue<std::function<void()>> task_queue_;
-    std::mutex queue_mutex_;
-    std::condition_variable queue_condition_;
-    std::atomic<bool> stop_{false};
+    // 内存管理
+    std::unordered_map<void*, size_t> allocated_memory_;
+    mutable std::mutex memory_mutex_;
     
     // 统计信息
     std::atomic<size_t> active_kernels_{0};
@@ -568,14 +657,22 @@ private:
     std::atomic<size_t> failed_kernels_{0};
     std::atomic<int64_t> total_kernel_time_ns_{0};
     
-    // 内存管理
-    std::unordered_map<void*, size_t> allocated_memory_;
-    std::mutex memory_mutex_;
+    // 辅助方法
+    bool check_cuda_available();
+    bool initialize_device();
+    bool check_cuda_error(cudaError_t error_code, const char* operation);
 };
 
 } // namespace gpu
 } // namespace executor
 ```
+
+**动态加载的优势**：
+
+1. **真正的可选依赖**：程序可以在没有 CUDA 的环境中运行，不会因为缺少 DLL 而崩溃
+2. **灵活的部署**：不需要将 CUDA DLL 添加到系统 PATH，程序会自动搜索
+3. **多版本支持**：可以支持多个 CUDA 版本，自动选择可用的版本
+4. **优雅降级**：CUDA 不可用时，执行器会安全地报告不可用，而不是崩溃
 
 #### 5.2 OpenCL 执行器实现
 
@@ -825,12 +922,15 @@ executor.start_realtime_task("can0");
 
 ### 挑战 4：依赖管理
 
-**问题**：GPU 库（CUDA、OpenCL）为可选依赖
+**问题**：GPU 库（CUDA、OpenCL）为可选依赖，且 CUDA DLL 可能不在系统 PATH 中
 
 **解决方案**：
 - 使用 CMake 选项控制编译
+- **动态加载机制**：运行时动态搜索和加载 CUDA DLL
 - 运行时检测 GPU 可用性
 - 提供编译时和运行时的优雅降级
+
+**CUDA 动态加载实现**：
 
 ```cmake
 # CMakeLists.txt
@@ -840,9 +940,21 @@ option(EXECUTOR_ENABLE_OPENCL "Enable OpenCL support" OFF)
 
 if(EXECUTOR_ENABLE_GPU)
     if(EXECUTOR_ENABLE_CUDA)
-        find_package(CUDA REQUIRED)
-        target_link_libraries(executor PRIVATE ${CUDA_LIBRARIES})
-        target_include_directories(executor PRIVATE ${CUDA_INCLUDE_DIRS})
+        # 查找 CUDA（用于头文件类型定义）
+        find_package(CUDAToolkit QUIET)
+        if(NOT CUDAToolkit_FOUND)
+            find_package(CUDA QUIET)
+        endif()
+        
+        if(CUDA_FOUND OR CUDAToolkit_FOUND)
+            # 仅包含头文件，不链接库（使用动态加载）
+            if(CUDA_INCLUDE_DIRS)
+                target_include_directories(executor PRIVATE ${CUDA_INCLUDE_DIRS})
+            elseif(CUDAToolkit_INCLUDE_DIRS)
+                target_include_directories(executor PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+            endif()
+            # 不链接 CUDA 库，CudaLoader 会在运行时动态加载
+        endif()
     endif()
     
     if(EXECUTOR_ENABLE_OPENCL)
@@ -851,6 +963,14 @@ if(EXECUTOR_ENABLE_GPU)
     endif()
 endif()
 ```
+
+**动态加载的优势**：
+
+1. **真正的可选依赖**：程序可以在没有 CUDA 的环境中运行，不会因为缺少 DLL 而崩溃
+2. **灵活的部署**：不需要将 CUDA DLL 添加到系统 PATH，程序会自动搜索常见安装路径
+3. **多版本支持**：可以支持多个 CUDA 版本（9.0-12.x），自动选择可用的版本
+4. **优雅降级**：CUDA 不可用时，执行器会安全地报告不可用，而不是崩溃
+5. **跨平台支持**：Windows 和 Linux 都支持动态加载机制
 
 ---
 
