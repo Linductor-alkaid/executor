@@ -71,7 +71,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             TIMEOUT 30
         )
     # 集成/端到端测试
-    elseif(TEST_NAME MATCHES "^test_(executor_facade|executor_manager|e2e_workflow|thread_pool_integration|monitor_integration|cycle_manager_integration|realtime_thread_executor|thread_pool_executor)$")
+    elseif(TEST_NAME MATCHES "^test_(executor_facade|executor_manager|executor_manager_gpu|e2e_workflow|thread_pool_integration|monitor_integration|cycle_manager_integration|realtime_thread_executor|thread_pool_executor)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "integration"
             TIMEOUT 60

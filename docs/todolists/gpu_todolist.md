@@ -74,25 +74,25 @@
 
 ### 1.3 ExecutorManager 扩展
 
-- [ ] 扩展 `include/executor/executor_manager.hpp`
-  - [ ] 添加 `register_gpu_executor()` 方法声明
-  - [ ] 添加 `get_gpu_executor()` 方法声明
-  - [ ] 添加 `create_gpu_executor()` 方法声明
-  - [ ] 添加 `get_gpu_executor_names()` 方法声明
-  - [ ] 添加 GPU 执行器注册表成员变量
+- [x] 扩展 `include/executor/executor_manager.hpp`
+  - [x] 添加 `register_gpu_executor()` 方法声明
+  - [x] 添加 `get_gpu_executor()` 方法声明
+  - [x] 添加 `create_gpu_executor()` 方法声明
+  - [x] 添加 `get_gpu_executor_names()` 方法声明
+  - [x] 添加 GPU 执行器注册表成员变量
 
-- [ ] 扩展 `src/executor/executor_manager.cpp`
-  - [ ] 实现 `register_gpu_executor()` 方法
-  - [ ] 实现 `get_gpu_executor()` 方法
-  - [ ] 实现 `create_gpu_executor()` 方法（工厂方法）
-  - [ ] 实现 `get_gpu_executor_names()` 方法
-  - [ ] 在 `shutdown()` 中添加 GPU 执行器关闭逻辑
-  - [ ] 在析构函数中添加 GPU 执行器清理逻辑
+- [x] 扩展 `src/executor/executor_manager.cpp`
+  - [x] 实现 `register_gpu_executor()` 方法
+  - [x] 实现 `get_gpu_executor()` 方法
+  - [x] 实现 `create_gpu_executor()` 方法（工厂方法）
+  - [x] 实现 `get_gpu_executor_names()` 方法
+  - [x] 在 `shutdown()` 中添加 GPU 执行器关闭逻辑
+  - [x] 在析构函数中添加 GPU 执行器清理逻辑
 
-- [ ] 编写 ExecutorManager GPU 扩展集成测试
-  - [ ] 测试 GPU 执行器注册和获取
+- [x] 编写 ExecutorManager GPU 扩展集成测试
+  - [x] 测试 GPU 执行器注册和获取
   - [ ] 测试多 GPU 执行器管理
-  - [ ] 测试生命周期管理（RAII）
+  - [x] 测试生命周期管理（RAII）
 
 ### 1.4 Executor Facade 扩展
 

@@ -107,6 +107,43 @@ public:
     std::vector<std::string> get_realtime_executor_names() const;
 
     /**
+     * @brief 注册 GPU 执行器
+     * 
+     * @param name 执行器名称
+     * @param executor 执行器指针（所有权转移）
+     * @return 是否注册成功（如果名称已存在则返回 false）
+     */
+    bool register_gpu_executor(const std::string& name,
+                               std::unique_ptr<IGpuExecutor> executor);
+
+    /**
+     * @brief 获取已注册的 GPU 执行器
+     * 
+     * @param name 执行器名称
+     * @return GPU 执行器指针，如果不存在则返回 nullptr
+     */
+    IGpuExecutor* get_gpu_executor(const std::string& name);
+
+    /**
+     * @brief 创建 GPU 执行器（便捷方法）
+     * 
+     * 注意：此方法仅创建执行器对象，不会自动注册
+     * 需要调用 register_gpu_executor() 进行注册
+     * 
+     * @param config GPU 执行器配置
+     * @return 执行器指针，如果创建失败则返回 nullptr
+     */
+    std::unique_ptr<IGpuExecutor> create_gpu_executor(
+        const gpu::GpuExecutorConfig& config);
+
+    /**
+     * @brief 获取所有 GPU 执行器名称
+     * 
+     * @return GPU 执行器名称列表
+     */
+    std::vector<std::string> get_gpu_executor_names() const;
+
+    /**
      * @brief 关闭所有执行器
      * 
      * @param wait_for_tasks 是否等待任务完成（默认：true）
@@ -137,6 +174,12 @@ private:
 
     // 读写锁（保护实时执行器注册表）
     mutable std::shared_mutex mutex_;
+
+    // GPU 执行器注册表
+    std::unordered_map<std::string, std::unique_ptr<IGpuExecutor>> gpu_executors_;
+
+    // 读写锁（保护 GPU 执行器注册表）
+    mutable std::shared_mutex gpu_mutex_;
 
     // 统计收集器（任务监控）
     std::unique_ptr<monitor::StatisticsCollector> statistics_collector_;

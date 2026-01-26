@@ -2,8 +2,14 @@
 #include "thread_pool_executor.hpp"
 #include "realtime_thread_executor.hpp"
 #include "executor/monitor/statistics_collector.hpp"
+#include "executor/interfaces.hpp"
+#include "executor/config.hpp"
 #include <mutex>
 #include <algorithm>
+
+#ifdef EXECUTOR_ENABLE_GPU
+#include "executor/gpu/cuda_executor.hpp"
+#endif
 
 namespace executor {
 
@@ -130,6 +136,81 @@ std::vector<std::string> ExecutorManager::get_realtime_executor_names() const {
     return names;
 }
 
+// 注册 GPU 执行器
+bool ExecutorManager::register_gpu_executor(const std::string& name,
+                                             std::unique_ptr<IGpuExecutor> executor) {
+    if (name.empty() || executor == nullptr) {
+        return false;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(gpu_mutex_);
+    
+    // 检查名称是否已存在
+    if (gpu_executors_.find(name) != gpu_executors_.end()) {
+        return false;  // 名称已存在
+    }
+
+    // 注册执行器
+    gpu_executors_[name] = std::move(executor);
+    return true;
+}
+
+// 获取已注册的 GPU 执行器
+IGpuExecutor* ExecutorManager::get_gpu_executor(const std::string& name) {
+    std::shared_lock<std::shared_mutex> lock(gpu_mutex_);
+    
+    auto it = gpu_executors_.find(name);
+    if (it == gpu_executors_.end()) {
+        return nullptr;  // 不存在
+    }
+    
+    return it->second.get();
+}
+
+// 创建 GPU 执行器（便捷方法）
+std::unique_ptr<IGpuExecutor> ExecutorManager::create_gpu_executor(
+    const gpu::GpuExecutorConfig& config) {
+#ifdef EXECUTOR_ENABLE_GPU
+    // 验证配置
+    if (!gpu::validate_gpu_config(config)) {
+        return nullptr;
+    }
+
+    try {
+        // 根据后端类型创建对应的执行器
+        if (config.backend == gpu::GpuBackend::CUDA) {
+#ifdef EXECUTOR_ENABLE_CUDA
+            return std::make_unique<gpu::CudaExecutor>(config.name, config);
+#else
+            return nullptr;  // CUDA 支持未启用
+#endif
+        }
+        // 其他后端（OpenCL、SYCL）待后续实现
+        return nullptr;
+    } catch (const std::exception&) {
+        // 创建失败（如配置无效），返回 nullptr
+        return nullptr;
+    }
+#else
+    // GPU 支持未启用
+    return nullptr;
+#endif
+}
+
+// 获取所有 GPU 执行器名称
+std::vector<std::string> ExecutorManager::get_gpu_executor_names() const {
+    std::shared_lock<std::shared_mutex> lock(gpu_mutex_);
+    
+    std::vector<std::string> names;
+    names.reserve(gpu_executors_.size());
+    
+    for (const auto& pair : gpu_executors_) {
+        names.push_back(pair.first);
+    }
+    
+    return names;
+}
+
 void ExecutorManager::enable_monitoring(bool enable) {
     if (statistics_collector_) {
         statistics_collector_->get_task_monitor().set_enabled(enable);
@@ -165,6 +246,20 @@ void ExecutorManager::shutdown(bool wait_for_tasks) {
             }
         }
         realtime_executors_.clear();
+    }
+    
+    // 停止所有 GPU 执行器
+    {
+        std::unique_lock<std::shared_mutex> lock(gpu_mutex_);
+        for (auto& pair : gpu_executors_) {
+            if (pair.second) {
+                pair.second->stop();
+                if (wait_for_tasks) {
+                    pair.second->wait_for_completion();
+                }
+            }
+        }
+        gpu_executors_.clear();
     }
     
     // 停止异步执行器
