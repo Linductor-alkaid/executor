@@ -8,23 +8,23 @@
 
 ### 1.1 类型定义与接口
 
-- [ ] 创建 `include/executor/gpu_types.hpp`
-  - [ ] 定义 `GpuBackend` 枚举（CUDA、OpenCL、SYCL、HIP）
-  - [ ] 定义 `GpuDeviceInfo` 结构体
-  - [ ] 定义 `GpuExecutorStatus` 结构体
-  - [ ] 定义 `GpuTaskConfig` 结构体
-  - [ ] 编写类型定义单元测试
+- [x] 补充 `include/executor/types.hpp`
+  - [x] 定义 `GpuBackend` 枚举（CUDA、OpenCL、SYCL、HIP）
+  - [x] 定义 `GpuDeviceInfo` 结构体
+  - [x] 定义 `GpuExecutorStatus` 结构体
+  - [x] 定义 `GpuTaskConfig` 结构体
+  - [x] 编写类型定义单元测试
 
-- [ ] 创建 `include/executor/gpu_executor.hpp`
-  - [ ] 定义 `IGpuExecutor` 接口类
-  - [ ] 实现模板方法 `submit_kernel`
-  - [ ] 定义内存管理接口（`allocate_device_memory`、`free_device_memory` 等）
-  - [ ] 定义流管理接口（`create_stream`、`destroy_stream`、`synchronize_stream` 等）
-  - [ ] 定义状态查询接口（`get_device_info`、`get_status` 等）
+- [x] 补充 `include/executor/executor.hpp`
+  - [x] 定义 `IGpuExecutor` 接口类
+  - [x] 实现模板方法 `submit_kernel`
+  - [x] 定义内存管理接口（`allocate_device_memory`、`free_device_memory` 等）
+  - [x] 定义流管理接口（`create_stream`、`destroy_stream`、`synchronize_stream` 等）
+  - [x] 定义状态查询接口（`get_device_info`、`get_status` 等）
 
-- [ ] 创建 `include/executor/gpu_config.hpp`
-  - [ ] 定义 `GpuExecutorConfig` 结构体
-  - [ ] 添加配置验证函数
+- [x] 补充 `include/executor/config.hpp`
+  - [x] 定义 `GpuExecutorConfig` 结构体
+  - [x] 添加配置验证函数
 
 ### 1.2 CUDA 执行器基础实现
 
