@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include "types.hpp"
 
 namespace executor {
 
@@ -67,5 +68,48 @@ struct ThreadPoolStatus {
     double avg_task_time_ms = 0.0;       // 平均任务执行时间（毫秒）
     double cpu_usage_percent = 0.0;       // CPU使用率
 };
+
+/**
+ * @brief GPU 相关配置
+ */
+namespace gpu {
+
+/**
+ * @brief GPU 执行器配置
+ */
+struct GpuExecutorConfig {
+    std::string name;                             // 执行器名称
+    GpuBackend backend = GpuBackend::CUDA;        // GPU后端类型
+    int device_id = 0;                            // GPU设备ID
+    size_t max_queue_size = 1000;                 // 最大任务队列大小
+    size_t memory_pool_size = 0;                 // 内存池大小（0表示不使用内存池）
+    int default_stream_count = 1;                // 默认流数量
+    bool enable_unified_memory = false;          // 是否启用统一内存（Unified Memory）
+    bool enable_monitoring = true;                // 启用监控（默认开启）
+};
+
+/**
+ * @brief 验证 GPU 执行器配置
+ * 
+ * @param config GPU 执行器配置
+ * @return 是否有效
+ */
+inline bool validate_gpu_config(const GpuExecutorConfig& config) {
+    if (config.name.empty()) {
+        return false;
+    }
+    if (config.max_queue_size == 0) {
+        return false;
+    }
+    if (config.device_id < 0) {
+        return false;
+    }
+    if (config.default_stream_count < 1) {
+        return false;
+    }
+    return true;
+}
+
+} // namespace gpu
 
 } // namespace executor

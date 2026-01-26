@@ -85,4 +85,65 @@ struct CycleStatistics {
     bool is_running = false;                      // 是否运行中
 };
 
+/**
+ * @brief GPU 相关类型定义
+ */
+namespace gpu {
+
+/**
+ * @brief GPU 后端类型
+ */
+enum class GpuBackend {
+    CUDA,      // NVIDIA CUDA
+    OPENCL,    // OpenCL (跨平台)
+    SYCL,      // SYCL (Intel/AMD)
+    HIP        // AMD ROCm
+};
+
+/**
+ * @brief GPU 设备信息
+ */
+struct GpuDeviceInfo {
+    std::string name;                             // 设备名称
+    GpuBackend backend;                            // 后端类型
+    int device_id = 0;                             // 设备ID
+    size_t total_memory_bytes = 0;                // 总内存（字节）
+    size_t free_memory_bytes = 0;                 // 空闲内存（字节）
+    int compute_capability_major = 0;              // 计算能力主版本（CUDA）
+    int compute_capability_minor = 0;              // 计算能力次版本（CUDA）
+    size_t max_threads_per_block = 0;              // 每个Block最大线程数
+    size_t max_blocks_per_grid[3] = {0, 0, 0};    // Grid最大维度
+};
+
+/**
+ * @brief GPU 执行器状态
+ */
+struct GpuExecutorStatus {
+    std::string name;                             // 执行器名称
+    bool is_running = false;                      // 是否运行中
+    GpuBackend backend;                            // 后端类型
+    int device_id = 0;                             // 设备ID
+    size_t active_kernels = 0;                    // 活跃kernel数
+    size_t completed_kernels = 0;                 // 已完成kernel数
+    size_t failed_kernels = 0;                    // 失败kernel数
+    size_t queue_size = 0;                        // 任务队列大小
+    double avg_kernel_time_ms = 0.0;              // 平均kernel执行时间（毫秒）
+    size_t memory_used_bytes = 0;                  // 已使用内存（字节）
+    size_t memory_total_bytes = 0;                 // 总内存（字节）
+    double memory_usage_percent = 0.0;            // 内存使用率
+};
+
+/**
+ * @brief GPU 任务配置
+ */
+struct GpuTaskConfig {
+    size_t grid_size[3] = {1, 1, 1};              // Grid维度
+    size_t block_size[3] = {1, 1, 1};            // Block维度
+    size_t shared_memory_bytes = 0;               // 共享内存大小（字节）
+    int stream_id = 0;                            // 流ID（0表示默认流）
+    bool async = true;                            // 是否异步执行
+};
+
+} // namespace gpu
+
 } // namespace executor
