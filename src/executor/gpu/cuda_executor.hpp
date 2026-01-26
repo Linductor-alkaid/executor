@@ -3,6 +3,7 @@
 #include "../../../include/executor/interfaces.hpp"
 #include "../../../include/executor/config.hpp"
 #include "../../../include/executor/types.hpp"
+#include "cuda_loader.hpp"
 #include <string>
 #include <atomic>
 #include <mutex>
@@ -111,6 +112,7 @@ private:
     int device_id_;                            // 设备ID
     bool is_available_;                        // CUDA是否可用
     std::atomic<bool> is_running_{false};      // 是否运行中
+    CudaLoader* loader_;                       // CUDA加载器（单例引用）
 
 #ifdef EXECUTOR_ENABLE_CUDA
     cudaDeviceProp device_prop_;               // 设备属性

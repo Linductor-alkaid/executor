@@ -27,63 +27,15 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     # 链接 executor 库
     target_link_libraries(${TEST_NAME} PRIVATE executor)
     
-    # 如果是CUDA测试，添加CUDA支持
+    # 如果是CUDA测试，添加CUDA头文件支持（不链接库，使用动态加载）
     if(TEST_NAME MATCHES ".*cuda.*" AND EXECUTOR_CUDA_ENABLED)
         if(CUDA_INCLUDE_DIRS)
             target_include_directories(${TEST_NAME} PRIVATE ${CUDA_INCLUDE_DIRS})
         elseif(CUDAToolkit_INCLUDE_DIRS)
             target_include_directories(${TEST_NAME} PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
         endif()
-        
-        if(CUDAToolkit_FOUND)
-            target_link_libraries(${TEST_NAME} PRIVATE CUDA::cudart)
-            # Windows: 使用延迟加载
-            if(WIN32)
-                if(CUDA_VERSION)
-                    string(REGEX REPLACE "^([0-9]+)\\..*" "\\1" cuda_major ${CUDA_VERSION})
-                    # 获取当前的链接标志
-                    get_target_property(current_flags ${TEST_NAME} LINK_FLAGS)
-                    if(current_flags)
-                        set(new_flags "${current_flags} /DELAYLOAD:cudart64_${cuda_major}.dll")
-                    else()
-                        set(new_flags "/DELAYLOAD:cudart64_${cuda_major}.dll")
-                    endif()
-                    set_target_properties(${TEST_NAME} PROPERTIES
-                        LINK_FLAGS "${new_flags}"
-                    )
-                else()
-                    get_target_property(current_flags ${TEST_NAME} LINK_FLAGS)
-                    if(current_flags)
-                        set(new_flags "${current_flags} /DELAYLOAD:cudart64_11.dll /DELAYLOAD:cudart64_12.dll")
-                    else()
-                        set(new_flags "/DELAYLOAD:cudart64_11.dll /DELAYLOAD:cudart64_12.dll")
-                    endif()
-                    set_target_properties(${TEST_NAME} PROPERTIES
-                        LINK_FLAGS "${new_flags}"
-                    )
-                endif()
-                target_link_libraries(${TEST_NAME} PRIVATE delayimp)
-            endif()
-        elseif(CUDA_LIBRARIES)
-            target_link_libraries(${TEST_NAME} PRIVATE ${CUDA_LIBRARIES})
-            if(CUDA_LIBRARY_DIRS)
-                target_link_directories(${TEST_NAME} PRIVATE ${CUDA_LIBRARY_DIRS})
-            endif()
-            # Windows: 使用延迟加载
-            if(WIN32)
-                foreach(lib ${CUDA_LIBRARIES})
-                    if(lib MATCHES "cudart")
-                        get_filename_component(lib_name ${lib} NAME_WE)
-                        string(REGEX REPLACE "lib" "" dll_name ${lib_name})
-                        set_target_properties(${TEST_NAME} PROPERTIES
-                            LINK_FLAGS "/DELAYLOAD:${dll_name}.dll"
-                        )
-                        target_link_libraries(${TEST_NAME} PRIVATE delayimp)
-                        break()
-                    endif()
-                endforeach()
-            endif()
-        endif()
+        # 不链接CUDA库，使用动态加载
+        # CudaLoader会在运行时动态搜索和加载CUDA DLL
     endif()
     
     # 添加src目录到包含路径，以便测试可以访问内部头文件
