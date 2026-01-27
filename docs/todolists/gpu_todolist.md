@@ -135,15 +135,15 @@
 
 ### 1.6 基础示例
 
-- [ ] 创建 `examples/gpu_basic.cpp`
-  - [ ] 实现基本的 GPU 执行器注册
-  - [ ] 实现基本的 GPU 任务提交
-  - [ ] 实现基本的 GPU 内存管理
-  - [ ] 添加注释说明
+- [x] 创建 `examples/gpu_basic.cpp`
+  - [x] 实现基本的 GPU 执行器注册
+  - [x] 实现基本的 GPU 任务提交
+  - [x] 实现基本的 GPU 内存管理
+  - [x] 添加注释说明
 
-- [ ] 更新 `examples/CMakeLists.txt`
-  - [ ] 添加 `gpu_basic` 示例的构建规则
-  - [ ] 添加条件编译（仅在启用 GPU 时构建）
+- [x] 更新 `examples/CMakeLists.txt`
+  - [x] 添加 `gpu_basic` 示例的构建规则
+  - [x] 添加条件编译（仅在启用 GPU 时构建）
 
 ---
 
