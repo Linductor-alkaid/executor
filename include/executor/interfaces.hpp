@@ -5,6 +5,7 @@
 #include <future>
 #include <functional>
 #include <type_traits>
+#include <vector>
 
 namespace executor {
 
@@ -220,6 +221,32 @@ public:
         -> std::future<void>;
 
     /**
+     * @brief 批量提交 GPU kernel 任务
+     *
+     * 在同一把锁内连续入队，减少多次 submit 时的锁竞争。
+     *
+     * @param tasks 任务列表，每项为 (kernel 函数, 配置)
+     * @return 与 tasks 一一对应的 future 列表
+     */
+    virtual std::vector<std::future<void>> submit_kernels_batch(
+        const std::vector<std::pair<std::function<void(void*)>, gpu::GpuTaskConfig>>& tasks);
+
+    /**
+     * @brief 在依赖完成后提交 GPU kernel 任务
+     *
+     * dependency 完成后才执行 kernel，priority 仍来自 config。
+     *
+     * @tparam KernelFunc GPU kernel 函数类型
+     * @param dependency 依赖的 future，需先完成
+     * @param kernel GPU kernel 函数
+     * @param config GPU 任务配置
+     * @return std::future<void> 任务执行结果的 future
+     */
+    template<typename KernelFunc>
+    auto submit_kernel_after(std::shared_future<void> dependency, KernelFunc&& kernel,
+                             const gpu::GpuTaskConfig& config) -> std::future<void>;
+
+    /**
      * @brief 分配设备内存
      * 
      * @param size 内存大小（字节）
@@ -397,6 +424,36 @@ auto IGpuExecutor::submit_kernel(KernelFunc&& kernel, const gpu::GpuTaskConfig& 
         };
     } else {
         kernel_func = [kernel = std::forward<KernelFunc>(kernel)](void* stream) mutable {
+            (void)stream;
+            kernel();
+        };
+    }
+    return submit_kernel_impl(std::move(kernel_func), config);
+}
+
+inline std::vector<std::future<void>> IGpuExecutor::submit_kernels_batch(
+    const std::vector<std::pair<std::function<void(void*)>, gpu::GpuTaskConfig>>& tasks) {
+    std::vector<std::future<void>> result;
+    result.reserve(tasks.size());
+    for (const auto& p : tasks) {
+        result.push_back(submit_kernel_impl(p.first, p.second));
+    }
+    return result;
+}
+
+template<typename KernelFunc>
+auto IGpuExecutor::submit_kernel_after(std::shared_future<void> dependency, KernelFunc&& kernel,
+                                       const gpu::GpuTaskConfig& config) -> std::future<void> {
+    std::shared_future<void> dep = std::move(dependency);
+    std::function<void(void*)> kernel_func;
+    if constexpr (std::is_invocable_v<KernelFunc, void*>) {
+        kernel_func = [dep, kernel = std::forward<KernelFunc>(kernel)](void* stream) mutable {
+            dep.wait();
+            kernel(stream);
+        };
+    } else {
+        kernel_func = [dep, kernel = std::forward<KernelFunc>(kernel)](void* stream) mutable {
+            dep.wait();
             (void)stream;
             kernel();
         };

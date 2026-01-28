@@ -289,6 +289,9 @@ bool CudaExecutor::start() {
             [this](void* p) { raw_free_device_memory(p); },
             config_.memory_pool_size);
     }
+
+    worker_thread_ = std::thread(&CudaExecutor::worker_thread_func, this);
+    worker_joined_ = false;
 #endif
 
     return true;
@@ -300,9 +303,15 @@ void CudaExecutor::stop() {
     }
 
     is_running_.store(false);
-    
-    // 等待所有任务完成
+    queue_not_empty_cv_.notify_all();
+
     wait_for_completion();
+
+    queue_not_empty_cv_.notify_all();
+    if (worker_thread_.joinable() && !worker_joined_) {
+        worker_thread_.join();
+        worker_joined_ = true;
+    }
 }
 
 void CudaExecutor::set_exception_callback(
@@ -316,6 +325,12 @@ void CudaExecutor::wait_for_completion() {
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
+    {
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        queue_drained_cv_.wait(lock, [this] {
+            return task_queue_.empty() && active_kernels_.load() == 0;
+        });
+    }
     synchronize();
 #endif
 }
@@ -806,7 +821,10 @@ GpuExecutorStatus CudaExecutor::get_status() const {
     status.active_kernels = active_kernels_.load();
     status.completed_kernels = completed_kernels_.load();
     status.failed_kernels = failed_kernels_.load();
-    status.queue_size = 0;  // 当前模型无待执行队列
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        status.queue_size = task_queue_.size();
+    }
 
     if (!is_available_) {
         return status;
@@ -853,6 +871,90 @@ GpuExecutorStatus CudaExecutor::get_status() const {
     return status;
 }
 
+void CudaExecutor::worker_thread_func() {
+#ifdef EXECUTOR_ENABLE_CUDA
+    while (true) {
+        GpuQueuedTask task;
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            while (task_queue_.empty() && is_running_.load()) {
+                queue_not_empty_cv_.wait(lock);
+            }
+            if (!is_running_.load() && task_queue_.empty()) {
+                break;
+            }
+            if (task_queue_.empty()) {
+                continue;
+            }
+            task = task_queue_.top();
+            task_queue_.pop();
+            queue_not_full_cv_.notify_one();
+        }
+        active_kernels_++;
+        run_one_task(task);
+        active_kernels_--;
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            if (task_queue_.empty() && active_kernels_.load() == 0) {
+                queue_drained_cv_.notify_all();
+            }
+        }
+    }
+#else
+    (void)0;
+#endif
+}
+
+void CudaExecutor::run_one_task(GpuQueuedTask& task) {
+#ifdef EXECUTOR_ENABLE_CUDA
+    auto start_time = std::chrono::high_resolution_clock::now();
+    void* stream_ptr = nullptr;
+    if (loader_->is_available()) {
+        cudaStream_t s = get_stream(task.config.stream_id);
+        stream_ptr = static_cast<void*>(s);
+    }
+    try {
+        if (!ensure_device_context()) {
+            auto eptr = std::make_exception_ptr(
+                std::runtime_error("CudaExecutor: ensure_device_context failed"));
+            exception_handler_.handle_task_exception(name_, eptr);
+            if (task.promise) task.promise->set_exception(eptr);
+            failed_kernels_++;
+            return;
+        }
+        task.kernel_func(stream_ptr);
+        if (loader_->is_available()) {
+            const auto& funcs = loader_->get_functions();
+            if (funcs.cudaGetLastError != nullptr) {
+                cudaError_t err = funcs.cudaGetLastError();
+                if (err != cudaSuccess) {
+                    std::exception_ptr eptr = make_cuda_exception_ptr(err, "cudaGetLastError (after kernel)");
+                    exception_handler_.handle_task_exception(name_, eptr);
+                    if (task.promise) task.promise->set_exception(eptr);
+                    failed_kernels_++;
+                    return;
+                }
+            }
+            if (!task.config.async) {
+                synchronize_stream(task.config.stream_id);
+            }
+        }
+        if (task.promise) task.promise->set_value();
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            end_time - start_time).count();
+        total_kernel_time_ns_ += duration;
+        completed_kernels_++;
+    } catch (...) {
+        exception_handler_.handle_task_exception(name_, std::current_exception());
+        if (task.promise) task.promise->set_exception(std::current_exception());
+        failed_kernels_++;
+    }
+#else
+    (void)task;
+#endif
+}
+
 std::future<void> CudaExecutor::submit_kernel_impl(
     std::function<void(void*)> kernel_func,
     const GpuTaskConfig& config) {
@@ -866,66 +968,82 @@ std::future<void> CudaExecutor::submit_kernel_impl(
         return future;
     }
 
-    void* stream_ptr = nullptr;
 #ifdef EXECUTOR_ENABLE_CUDA
-    cudaStream_t s = get_stream(config.stream_id);
-    stream_ptr = static_cast<void*>(s);
-#endif
-
-    active_kernels_++;
-
-    std::thread([this, kernel_func = std::move(kernel_func), config, promise, stream_ptr]() mutable {
-        auto start_time = std::chrono::high_resolution_clock::now();
-        
-        try {
-#ifdef EXECUTOR_ENABLE_CUDA
-            if (!ensure_device_context()) {
-                auto eptr = std::make_exception_ptr(
-                    std::runtime_error("CudaExecutor: ensure_device_context failed"));
-                exception_handler_.handle_task_exception(name_, eptr);
-                promise->set_exception(eptr);
-                failed_kernels_++;
-                active_kernels_--;
-                return;
-            }
-#endif
-            kernel_func(stream_ptr);
-#ifdef EXECUTOR_ENABLE_CUDA
-            if (loader_->is_available()) {
-                const auto& funcs = loader_->get_functions();
-                if (funcs.cudaGetLastError != nullptr) {
-                    cudaError_t err = funcs.cudaGetLastError();
-                    if (err != cudaSuccess) {
-                        std::exception_ptr eptr = make_cuda_exception_ptr(err, "cudaGetLastError (after kernel)");
-                        exception_handler_.handle_task_exception(name_, eptr);
-                        promise->set_exception(eptr);
-                        failed_kernels_++;
-                        active_kernels_--;
-                        return;
-                    }
-                }
-                if (!config.async) {
-                    synchronize_stream(config.stream_id);
-                }
-            }
-#endif
-            promise->set_value();
-            
-            auto end_time = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                end_time - start_time).count();
-            total_kernel_time_ns_ += duration;
-            completed_kernels_++;
-        } catch (...) {
-            exception_handler_.handle_task_exception(name_, std::current_exception());
-            promise->set_exception(std::current_exception());
-            failed_kernels_++;
-        }
-        
-        active_kernels_--;
-    }).detach();
-
+    GpuQueuedTask task;
+    task.kernel_func = std::move(kernel_func);
+    task.config = config;
+    if (task.config.priority < 0) task.config.priority = 0;
+    if (task.config.priority > 3) task.config.priority = 3;
+    task.promise = promise;
+    task.submit_time_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    {
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        queue_not_full_cv_.wait(lock, [this] {
+            return task_queue_.size() < config_.max_queue_size;
+        });
+        task_queue_.push(std::move(task));
+    }
+    queue_not_empty_cv_.notify_one();
     return future;
+#else
+    promise->set_exception(std::make_exception_ptr(
+        std::runtime_error("CudaExecutor: CUDA not enabled")));
+    return future;
+#endif
+}
+
+std::vector<std::future<void>> CudaExecutor::submit_kernels_batch(
+    const std::vector<std::pair<std::function<void(void*)>, GpuTaskConfig>>& tasks) {
+    std::vector<std::future<void>> result;
+    result.reserve(tasks.size());
+    if (!is_available_ || !is_running_.load()) {
+        auto eptr = std::make_exception_ptr(
+            std::runtime_error("CudaExecutor is not available or not running"));
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            (void)i;
+            auto p = std::make_shared<std::promise<void>>();
+            p->set_exception(eptr);
+            result.push_back(p->get_future());
+        }
+        return result;
+    }
+#ifdef EXECUTOR_ENABLE_CUDA
+    auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    const size_t chunk = 64u;
+    for (size_t off = 0; off < tasks.size(); off += chunk) {
+        size_t end = (std::min)(off + chunk, tasks.size());
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            for (size_t i = off; i < end; ++i) {
+                queue_not_full_cv_.wait(lock, [this] {
+                    return task_queue_.size() < config_.max_queue_size;
+                });
+                const auto& p = tasks[i];
+                GpuQueuedTask task;
+                task.kernel_func = p.first;
+                task.config = p.second;
+                if (task.config.priority < 0) task.config.priority = 0;
+                if (task.config.priority > 3) task.config.priority = 3;
+                task.promise = std::make_shared<std::promise<void>>();
+                result.push_back(task.promise->get_future());
+                task.submit_time_ns = now_ns + static_cast<int64_t>(i);
+                task_queue_.push(std::move(task));
+            }
+        }
+        queue_not_empty_cv_.notify_one();
+    }
+    return result;
+#else
+    auto eptr = std::make_exception_ptr(
+        std::runtime_error("CudaExecutor: CUDA not enabled"));
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        (void)i;
+        auto prom = std::make_shared<std::promise<void>>();
+        prom->set_exception(eptr);
+        result.push_back(prom->get_future());
+    }
+    return result;
+#endif
 }
 
 #ifdef EXECUTOR_ENABLE_CUDA

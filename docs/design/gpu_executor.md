@@ -1049,6 +1049,20 @@ endif()
 - **优化**：使用任务队列，批量提交
 - **注意**：GPU kernel 启动本身有延迟（~10-100μs）
 
+**任务队列与优先级、批量提交、任务依赖**（2.7 已实现）：
+- **优先级任务队列**：`GpuTaskConfig.priority`（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）与 CPU `submit_priority` 对齐；执行器内部使用有界优先级队列，高优先级先出队执行，同优先级 FIFO。
+- **批量提交**：`submit_kernels_batch(tasks)` 在同一把锁内连续入队并一次性唤醒 worker，减少多次 `submit_kernel` 的锁竞争。
+- **任务依赖**：`submit_kernel_after(dependency, kernel, config)` 在 `dependency` 的 future 完成后才执行 kernel，依赖通过包装“先 wait 再执行”入队，priority 仍来自 config。
+
+**队列 vs 多次提交 基准数据**（`test_cuda_executor` 中 batch 测试，median of 5 runs，submit+drain 总耗时）：
+
+| 场景 | submit_kernel (ms) | submit_kernels_batch (ms) | 说明 |
+|------|--------------------|---------------------------|------|
+| 1 thread, N=1024 | 6.99 | 4.64 | 单线程下 batch 更少加锁、更少 notify，约 1.5x 更快 |
+| 8 threads, N=4096 (512/thread) | 10.75 | 9.48 | 多线程下 batch 减少锁竞争，约 1.13x 更快（queue advantage） |
+
+数据来源：本地运行 `build/tests/test_cuda_executor` 输出；环境/GPU 不同时数值会波动，趋势为多线程下 batch 优势更明显。更多数据见 `docs/optimization/gpu_queue_benchmark.json`。
+
 ### 2. 内存传输优化
 
 - **异步传输**：与计算重叠，隐藏传输延迟

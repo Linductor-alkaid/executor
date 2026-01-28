@@ -17,6 +17,8 @@
 #include <functional>
 #include <queue>
 #include <condition_variable>
+#include <chrono>
+#include <thread>
 
 #ifdef EXECUTOR_ENABLE_CUDA
 #include <cuda_runtime.h>
@@ -79,6 +81,12 @@ public:
     void set_exception_callback(
         std::function<void(const std::string&, std::exception_ptr)> callback);
 
+    /**
+     * @brief 批量提交（覆盖以在同一把锁内入队，对外可调用）
+     */
+    std::vector<std::future<void>> submit_kernels_batch(
+        const std::vector<std::pair<std::function<void(void*)>, GpuTaskConfig>>& tasks) override;
+
 protected:
     /**
      * @brief 提交 GPU kernel 实现（内部方法）
@@ -86,6 +94,28 @@ protected:
     std::future<void> submit_kernel_impl(
         std::function<void(void*)> kernel_func,
         const GpuTaskConfig& config) override;
+
+private:
+    /** 队列项：优先级高的先执行，同优先级按 submit_time_ns FIFO */
+    struct GpuQueuedTask {
+        std::function<void(void*)> kernel_func;
+        GpuTaskConfig config;
+        std::shared_ptr<std::promise<void>> promise;
+        int64_t submit_time_ns = 0;
+    };
+    struct GpuQueuedTaskCompare {
+        bool operator()(const GpuQueuedTask& a, const GpuQueuedTask& b) const {
+            if (a.config.priority != b.config.priority)
+                return a.config.priority < b.config.priority;
+            return a.submit_time_ns > b.submit_time_ns;
+        }
+    };
+
+    /** worker 线程主循环 */
+    void worker_thread_func();
+
+    /** 执行单任务（设备上下文、kernel、错误检查、promise、统计） */
+    void run_one_task(GpuQueuedTask& task);
 
 private:
     /**
@@ -191,6 +221,15 @@ private:
     std::atomic<size_t> completed_kernels_{0}; // 已完成kernel数
     std::atomic<size_t> failed_kernels_{0};    // 失败kernel数
     std::atomic<int64_t> total_kernel_time_ns_{0}; // 总kernel执行时间（纳秒）
+
+    // 任务队列与 worker
+    std::priority_queue<GpuQueuedTask, std::vector<GpuQueuedTask>, GpuQueuedTaskCompare> task_queue_;
+    mutable std::mutex queue_mutex_;
+    std::condition_variable queue_not_empty_cv_;
+    std::condition_variable queue_not_full_cv_;
+    std::condition_variable queue_drained_cv_;
+    std::thread worker_thread_;
+    bool worker_joined_ = false;
 
     util::ExceptionHandler exception_handler_;  // 任务异常处理，与 CPU 执行器一致
 };

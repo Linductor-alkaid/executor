@@ -1,5 +1,6 @@
 #include <cassert>
 #include <iostream>
+#include <iomanip>
 #include <thread>
 #include <vector>
 #include <atomic>
@@ -7,6 +8,7 @@
 #include <future>
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -45,6 +47,9 @@ bool test_cuda_executor_stream_callback();
 bool test_cuda_exception_propagation();
 bool test_cuda_error_handling();
 bool test_cuda_exception_callback();
+bool test_cuda_executor_priority_queue();
+bool test_cuda_executor_batch_submit();
+bool test_cuda_executor_task_dependency();
 
 // ========== CUDA 执行器基本功能测试 ==========
 
@@ -795,6 +800,239 @@ bool test_cuda_exception_callback() {
 #endif
 }
 
+// ========== 任务队列优化测试（2.7） ==========
+
+bool test_cuda_executor_priority_queue() {
+    std::cout << "Testing CudaExecutor priority queue..." << std::endl;
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_priority";
+    config.device_id = 0;
+    config.max_queue_size = 64;
+    config.default_stream_count = 1;
+    CudaExecutor executor(config.name, config);
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping priority test" << std::endl;
+        return true;
+    }
+    std::mutex order_mutex;
+    std::vector<int> completion_order;
+    const int num_low = 4;
+    const int num_high = 4;
+    GpuTaskConfig low_cfg;
+    low_cfg.priority = 0;
+    low_cfg.async = false;
+    GpuTaskConfig high_cfg;
+    high_cfg.priority = 3;
+    high_cfg.async = false;
+    for (int i = 0; i < num_low; ++i) {
+        executor.submit_kernel([&order_mutex, &completion_order, i](void*) {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            completion_order.push_back(100 + i);
+        }, low_cfg);
+    }
+    for (int i = 0; i < num_high; ++i) {
+        executor.submit_kernel([&order_mutex, &completion_order, i](void*) {
+            std::lock_guard<std::mutex> lock(order_mutex);
+            completion_order.push_back(200 + i);
+        }, high_cfg);
+    }
+    executor.wait_for_completion();
+    TEST_ASSERT(completion_order.size() == static_cast<size_t>(num_low + num_high),
+                "All tasks should complete");
+    int first_high = -1;
+    for (size_t j = 0; j < completion_order.size(); ++j) {
+        if (completion_order[j] >= 200) {
+            first_high = static_cast<int>(j);
+            break;
+        }
+    }
+    TEST_ASSERT(first_high >= 0, "At least one high-priority task should complete");
+    TEST_ASSERT(first_high < num_high,
+                "First high-priority completion should be among the first num_high (priority order)");
+    executor.stop();
+    std::cout << "  CudaExecutor priority queue: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA not enabled, skipping" << std::endl;
+    return true;
+#endif
+}
+
+static double median_of_five(double a, double b, double c, double d, double e) {
+    double x[5] = {a, b, c, d, e};
+    std::sort(x, x + 5);
+    return x[2];
+}
+
+bool test_cuda_executor_batch_submit() {
+    std::cout << "Testing CudaExecutor batch submit..." << std::endl;
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_batch";
+    config.device_id = 0;
+    config.max_queue_size = 8000;
+    config.default_stream_count = 1;
+    CudaExecutor executor(config.name, config);
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping batch test" << std::endl;
+        return true;
+    }
+    GpuTaskConfig cfg;
+    cfg.async = false;
+    cfg.priority = 1;
+    auto empty_kernel = [](void*) {};
+
+    // 正确性：批量提交 N 个任务并等待完成
+    const size_t n = 200;
+    std::vector<std::pair<std::function<void(void*)>, GpuTaskConfig>> batch;
+    batch.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        batch.push_back({empty_kernel, cfg});
+    }
+    auto batch_futures = executor.submit_kernels_batch(batch);
+    TEST_ASSERT(batch_futures.size() == n, "Batch should return n futures");
+    for (auto& f : batch_futures) {
+        f.get();
+    }
+    executor.wait_for_completion();
+    auto status = executor.get_status();
+    TEST_ASSERT(status.completed_kernels >= n, "All batch tasks should complete");
+
+    // ---------- 性能测试设计 ----------
+    // 指标：提交阶段耗时（多线程入队时的锁竞争）。批量入队减少加锁次数，多线程下应明显更快。
+    // 单线程：锁竞争小，两者接近。多线程：每线程循环 submit_kernel 导致高锁竞争；每线程一次 batch 则低锁竞争。
+    const int kRuns = 5;
+    const size_t kSingleN = 1024;
+    const unsigned kNumThreads = 8;
+    const size_t kPerThread = 512;
+    const size_t kTotalMt = kNumThreads * kPerThread;
+
+    std::vector<std::pair<std::function<void(void*)>, GpuTaskConfig>> batch_1024;
+    batch_1024.reserve(kSingleN);
+    for (size_t i = 0; i < kSingleN; ++i) {
+        batch_1024.push_back({empty_kernel, cfg});
+    }
+    std::vector<std::pair<std::function<void(void*)>, GpuTaskConfig>> batch_per_thread;
+    batch_per_thread.reserve(kPerThread);
+    for (size_t i = 0; i < kPerThread; ++i) {
+        batch_per_thread.push_back({empty_kernel, cfg});
+    }
+
+    double st_single[5], st_batch[5], mt_single[5], mt_batch[5];
+    for (int run = 0; run < kRuns; ++run) {
+        // 1) 单线程：1024 次 submit_kernel
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < kSingleN; ++i) {
+            executor.submit_kernel(empty_kernel, cfg);
+        }
+        auto t1 = std::chrono::high_resolution_clock::now();
+        executor.wait_for_completion();
+        st_single[run] = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        // 2) 单线程：一次 submit_kernels_batch(1024)
+        t0 = std::chrono::high_resolution_clock::now();
+        auto futures = executor.submit_kernels_batch(batch_1024);
+        t1 = std::chrono::high_resolution_clock::now();
+        for (auto& f : futures) { f.get(); }
+        executor.wait_for_completion();
+        st_batch[run] = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        // 3) 多线程：每线程 512 次 submit_kernel（高锁竞争）
+        t0 = std::chrono::high_resolution_clock::now();
+        {
+            std::vector<std::thread> threads;
+            for (unsigned t = 0; t < kNumThreads; ++t) {
+                threads.emplace_back([&executor, &cfg, kPerThread, &empty_kernel]() {
+                    for (size_t i = 0; i < kPerThread; ++i) {
+                        executor.submit_kernel(empty_kernel, cfg);
+                    }
+                });
+            }
+            for (auto& th : threads) th.join();
+        }
+        t1 = std::chrono::high_resolution_clock::now();
+        executor.wait_for_completion();
+        mt_single[run] = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        // 4) 多线程：每线程一次 submit_kernels_batch(512)（低锁竞争）
+        t0 = std::chrono::high_resolution_clock::now();
+        {
+            std::vector<std::thread> threads;
+            for (unsigned t = 0; t < kNumThreads; ++t) {
+                threads.emplace_back([&executor, &batch_per_thread]() {
+                    executor.submit_kernels_batch(batch_per_thread);
+                });
+            }
+            for (auto& th : threads) th.join();
+        }
+        t1 = std::chrono::high_resolution_clock::now();
+        executor.wait_for_completion();
+        mt_batch[run] = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
+
+    double st_single_med = median_of_five(st_single[0], st_single[1], st_single[2], st_single[3], st_single[4]);
+    double st_batch_med = median_of_five(st_batch[0], st_batch[1], st_batch[2], st_batch[3], st_batch[4]);
+    double mt_single_med = median_of_five(mt_single[0], mt_single[1], mt_single[2], mt_single[3], mt_single[4]);
+    double mt_batch_med = median_of_five(mt_batch[0], mt_batch[1], mt_batch[2], mt_batch[3], mt_batch[4]);
+
+    std::cout << "  Queue vs multiple submit (median of " << kRuns << " runs, submit+drain):" << std::endl;
+    std::cout << "    1 thread,  N=" << kSingleN << ": submit_kernel " << std::fixed << std::setprecision(2)
+              << st_single_med << " ms,  batch " << st_batch_med << " ms" << std::endl;
+    std::cout << "    " << kNumThreads << " threads, N=" << kTotalMt << " ("
+              << kPerThread << "/thread): submit_kernel " << mt_single_med << " ms,  batch " << mt_batch_med << " ms";
+    if (mt_batch_med > 0) {
+        double ratio = mt_single_med / mt_batch_med;
+        std::cout << "  => batch " << std::setprecision(2) << ratio << "x faster (queue advantage)";
+    }
+    std::cout << std::endl;
+
+    executor.stop();
+    std::cout << "  CudaExecutor batch submit: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA not enabled, skipping" << std::endl;
+    return true;
+#endif
+}
+
+bool test_cuda_executor_task_dependency() {
+    std::cout << "Testing CudaExecutor task dependency (submit_kernel_after)..." << std::endl;
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_dep";
+    config.device_id = 0;
+    config.max_queue_size = 64;
+    config.default_stream_count = 1;
+    CudaExecutor executor(config.name, config);
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping dependency test" << std::endl;
+        return true;
+    }
+    std::atomic<bool> task_a_done{false};
+    GpuTaskConfig cfg;
+    cfg.async = false;
+    auto future_a = executor.submit_kernel([&task_a_done](void*) {
+        task_a_done.store(true);
+    }, cfg);
+    std::shared_future<void> shared_a = future_a.share();
+    std::atomic<bool> task_b_started_after_a{false};
+    auto future_b = executor.submit_kernel_after(shared_a, [&task_a_done, &task_b_started_after_a](void*) {
+        task_b_started_after_a.store(task_a_done.load());
+    }, cfg);
+    future_b.get();
+    TEST_ASSERT(task_a_done.load(), "Task A should have completed");
+    TEST_ASSERT(task_b_started_after_a.load(), "Task B should start after A (dependency)");
+    executor.wait_for_completion();
+    executor.stop();
+    std::cout << "  CudaExecutor task dependency: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA not enabled, skipping" << std::endl;
+    return true;
+#endif
+}
+
 // ========== 主函数 ==========
 
 // 全局初始化函数，在main之前执行
@@ -844,6 +1082,9 @@ int main() {
         all_passed &= test_cuda_exception_propagation();
         all_passed &= test_cuda_error_handling();
         all_passed &= test_cuda_exception_callback();
+        all_passed &= test_cuda_executor_priority_queue();
+        all_passed &= test_cuda_executor_batch_submit();
+        all_passed &= test_cuda_executor_task_dependency();
         
         std::cout << "=========================================" << std::endl;
         if (all_passed) {

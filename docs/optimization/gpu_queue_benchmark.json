@@ -1,0 +1,21 @@
+{
+  "description": "GPU task queue: submit_kernel vs submit_kernels_batch (CudaExecutor, test_cuda_executor batch test)",
+  "metric": "submit+drain total time (ms), median of 5 runs",
+  "runs": [
+    {
+      "date": "2025-01-28",
+      "single_thread": {
+        "config": {"threads": 1, "tasks_total": 1024},
+        "submit_kernel_ms": 6.99,
+        "submit_kernels_batch_ms": 4.64,
+        "batch_faster_ratio": 1.51
+      },
+      "multi_thread": {
+        "config": {"threads": 8, "tasks_per_thread": 512, "tasks_total": 4096},
+        "submit_kernel_ms": 10.75,
+        "submit_kernels_batch_ms": 9.48,
+        "batch_faster_ratio": 1.13
+      }
+    }
+  ]
+}
