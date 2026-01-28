@@ -150,6 +150,8 @@ target_link_libraries(myapp PRIVATE executor::executor)
 
 以下为 **实时线程**（`register_realtime_task` + `RealtimeThreadExecutor` 周期回调）在不同周期下的 jitter（实际触发时刻 − 期望时刻，单位 μs）统计。运行 `./build/tests/benchmark_realtime_precision --json`（Windows 下为 `.\build\tests\Debug\benchmark_realtime_precision.exe --json`）可复现。
 
+**更高实时精度需求**：若需进一步压低 jitter（如硬实时、高频率周期），建议接入 **周期管理器**（`RealtimeThreadConfig::cycle_manager`，实现 `ICycleManager`），由外部统一驱动周期并配合实时调度（如 Linux `SCHED_FIFO`）、CPU 隔离等使用。详见 [API.md 第 7 节](docs/API.md) 与 [examples/realtime_can.cpp](examples/realtime_can.cpp)。
+
 #### Linux
 
 完整 JSON 见 [docs/optimization/realtime_precision_linux.json](docs/optimization/realtime_precision_linux.json)。
