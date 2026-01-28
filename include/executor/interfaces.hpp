@@ -315,6 +315,9 @@ public:
      * dst_ptr 须由本执行器分配，src_ptr 须由 src_executor 分配。
      * 同设备请使用 copy_device_to_device。
      *
+     * @note EXPERIMENTAL - Not tested on real hardware.
+     *       If you have a multi-GPU setup, please test and report issues.
+     *
      * @param src_executor 源设备对应执行器
      * @param src_ptr 源设备内存指针
      * @param dst_ptr 本设备目标内存指针
