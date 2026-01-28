@@ -77,27 +77,30 @@ public:
         (void)ptr;
     }
 
-    bool copy_to_device(void* dst, const void* src, size_t size, bool async = false) override {
+    bool copy_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override {
         (void)dst;
         (void)src;
         (void)size;
         (void)async;
+        (void)stream_id;
         return true;
     }
 
-    bool copy_to_host(void* dst, const void* src, size_t size, bool async = false) override {
+    bool copy_to_host(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override {
         (void)dst;
         (void)src;
         (void)size;
         (void)async;
+        (void)stream_id;
         return true;
     }
 
-    bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false) override {
+    bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override {
         (void)dst;
         (void)src;
         (void)size;
         (void)async;
+        (void)stream_id;
         return true;
     }
 
@@ -114,6 +117,14 @@ public:
 
     void destroy_stream(int stream_id) override {
         (void)stream_id;
+    }
+
+    bool add_stream_callback(int stream_id, std::function<void()> callback) override {
+        (void)stream_id;
+        if (callback) {
+            callback();
+        }
+        return true;
     }
 
     std::future<void> submit_kernel_impl(

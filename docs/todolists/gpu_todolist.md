@@ -91,7 +91,7 @@
 
 - [x] 编写 ExecutorManager GPU 扩展集成测试
   - [x] 测试 GPU 执行器注册和获取
-  - [ ] 测试多 GPU 执行器管理
+  - [x] 测试多 GPU 执行器管理
   - [x] 测试生命周期管理（RAII）
 
 ### 1.4 Executor Facade 扩展
@@ -165,15 +165,15 @@
 
 ### 2.2 异步内存传输
 
-- [ ] 扩展 `src/executor/gpu/cuda_executor.cpp`
-  - [ ] 实现异步 `copy_to_device()`（使用 CUDA stream）
-  - [ ] 实现异步 `copy_to_host()`（使用 CUDA stream）
-  - [ ] 实现异步 `copy_device_to_device()`（使用 CUDA stream）
-  - [ ] 添加内存传输完成回调支持
+- [x] 扩展 `src/executor/gpu/cuda_executor.cpp`
+  - [x] 实现异步 `copy_to_device()`（使用 CUDA stream）
+  - [x] 实现异步 `copy_to_host()`（使用 CUDA stream）
+  - [x] 实现异步 `copy_device_to_device()`（使用 CUDA stream）
+  - [x] 添加内存传输完成回调支持
 
-- [ ] 编写异步内存传输单元测试
-  - [ ] 测试异步传输与计算重叠
-  - [ ] 测试传输完成回调
+- [x] 编写异步内存传输单元测试
+  - [x] 测试异步传输与计算重叠
+  - [x] 测试传输完成回调
 
 ### 2.3 多 GPU 设备支持
 

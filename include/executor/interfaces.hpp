@@ -241,9 +241,10 @@ public:
      * @param src 源主机内存指针
      * @param size 复制大小（字节）
      * @param async 是否异步复制
+     * @param stream_id 流ID（async 时使用，0=默认流）
      * @return 是否成功
      */
-    virtual bool copy_to_device(void* dst, const void* src, size_t size, bool async = false) = 0;
+    virtual bool copy_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) = 0;
 
     /**
      * @brief 从设备内存复制到主机内存
@@ -252,9 +253,10 @@ public:
      * @param src 源设备内存指针
      * @param size 复制大小（字节）
      * @param async 是否异步复制
+     * @param stream_id 流ID（async 时使用，0=默认流）
      * @return 是否成功
      */
-    virtual bool copy_to_host(void* dst, const void* src, size_t size, bool async = false) = 0;
+    virtual bool copy_to_host(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) = 0;
 
     /**
      * @brief 在设备内存之间复制
@@ -263,9 +265,10 @@ public:
      * @param src 源设备内存指针
      * @param size 复制大小（字节）
      * @param async 是否异步复制
+     * @param stream_id 流ID（async 时使用，0=默认流）
      * @return 是否成功
      */
-    virtual bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false) = 0;
+    virtual bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) = 0;
 
     /**
      * @brief 同步所有操作
@@ -294,6 +297,17 @@ public:
      * @param stream_id 流ID
      */
     virtual void destroy_stream(int stream_id) = 0;
+
+    /**
+     * @brief 在指定流上注册主机回调
+     *
+     * 当该流上此前排队的操作（包括异步 copy）都完成后，在适当时机调用 callback。
+     *
+     * @param stream_id 流ID（0=默认流）
+     * @param callback 回调函数
+     * @return 成功返回 true，无效 stream_id 或不可用时返回 false
+     */
+    virtual bool add_stream_callback(int stream_id, std::function<void()> callback) = 0;
 
     /**
      * @brief 获取执行器名称

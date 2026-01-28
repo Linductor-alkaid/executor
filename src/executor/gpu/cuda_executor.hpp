@@ -51,9 +51,10 @@ public:
     // 实现 IGpuExecutor 接口
     void* allocate_device_memory(size_t size) override;
     void free_device_memory(void* ptr) override;
-    bool copy_to_device(void* dst, const void* src, size_t size, bool async = false) override;
-    bool copy_to_host(void* dst, const void* src, size_t size, bool async = false) override;
-    bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false) override;
+    bool copy_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
+    bool copy_to_host(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
+    bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
+    bool add_stream_callback(int stream_id, std::function<void()> callback) override;
     void synchronize() override;
     void synchronize_stream(int stream_id) override;
     int create_stream() override;

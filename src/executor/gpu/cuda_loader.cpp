@@ -244,6 +244,9 @@ bool CudaLoader::load_functions() {
         get_function_pointer("cudaStreamDestroy"));
     functions_.cudaMemGetInfo = reinterpret_cast<CudaMemGetInfoFunc>(
         get_function_pointer("cudaMemGetInfo"));
+    // 可选：CUDA 10+ 提供，用于流回调
+    functions_.cudaLaunchHostFunc = reinterpret_cast<CudaLaunchHostFuncFunc>(
+        get_function_pointer("cudaLaunchHostFunc"));
 
     return functions_.is_complete();
 }

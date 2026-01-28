@@ -165,6 +165,47 @@ int main() {
     }
     std::cout << std::endl;
 
+    // ---------- 2b. 异步内存传输与指定流（重叠 copy 与 kernel） ----------
+    std::cout << "Example 2b: Async memory transfer with stream" << std::endl;
+    {
+        auto* gpu_exec = exec.get_gpu_executor("cuda0");
+        if (!gpu_exec) {
+            std::cerr << "  GPU executor not found" << std::endl;
+        } else {
+            int stream_id = gpu_exec->create_stream();
+            if (stream_id < 0) {
+                std::cout << "  create_stream failed, skip async demo." << std::endl;
+            } else {
+                const size_t n = 256;
+                const size_t size_bytes = n * sizeof(float);
+                std::vector<float> host_src(n, 2.0f);
+                std::vector<float> host_dst(n, 0.0f);
+                void* d_ptr = gpu_exec->allocate_device_memory(size_bytes);
+                if (d_ptr) {
+                    // 异步 copy 到设备（指定流）
+                    if (gpu_exec->copy_to_device(d_ptr, host_src.data(), size_bytes, true, stream_id)) {
+                        gpu::GpuTaskConfig task_config;
+                        task_config.grid_size[0] = 1;
+                        task_config.block_size[0] = 1;
+                        task_config.stream_id = stream_id;
+                        auto future = exec.submit_gpu("cuda0", [d_ptr]() { (void)d_ptr; }, task_config);
+                        future.wait();
+                        gpu_exec->synchronize_stream(stream_id);
+                        // 再复制回主机（可同步或异步）
+                        if (gpu_exec->copy_to_host(host_dst.data(), d_ptr, size_bytes, false, stream_id)) {
+                            std::cout << "  Async copy (stream " << stream_id
+                                      << ") -> kernel -> sync -> copy_to_host done." << std::endl;
+                            std::cout << "  host_dst[0] = " << host_dst[0] << " (expected 2.0)" << std::endl;
+                        }
+                    }
+                    gpu_exec->free_device_memory(d_ptr);
+                }
+                gpu_exec->destroy_stream(stream_id);
+            }
+        }
+    }
+    std::cout << std::endl;
+
     // ---------- 3. 状态查询 ----------
     std::cout << "Example 3: GPU executor status" << std::endl;
     {

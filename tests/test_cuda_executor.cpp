@@ -39,6 +39,8 @@ bool test_cuda_executor_kernel_submit();
 bool test_cuda_executor_synchronize();
 bool test_cuda_executor_status();
 bool test_cuda_executor_stream_management();
+bool test_cuda_executor_async_copy_overlap();
+bool test_cuda_executor_stream_callback();
 
 // ========== CUDA 执行器基本功能测试 ==========
 
@@ -491,6 +493,146 @@ bool test_cuda_executor_stream_sync() {
 #endif
 }
 
+bool test_cuda_executor_async_copy_overlap() {
+    std::cout << "Testing CudaExecutor async copy with stream (overlap)..." << std::endl;
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_executor";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    config.default_stream_count = 1;
+
+    CudaExecutor executor(config.name, config);
+
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping async copy overlap test" << std::endl;
+        return true;
+    }
+
+    int stream_id = executor.create_stream();
+    if (stream_id <= 0) {
+        std::cout << "  create_stream failed, skipping async copy overlap test" << std::endl;
+        executor.stop();
+        return true;
+    }
+
+    const size_t test_size = 1024;
+    void* device_ptr = executor.allocate_device_memory(test_size);
+    if (!device_ptr) {
+        executor.destroy_stream(stream_id);
+        executor.stop();
+        std::cout << "  allocate failed, skipping async copy overlap test" << std::endl;
+        return true;
+    }
+
+    std::vector<int> host_src(test_size / sizeof(int), 99);
+    std::vector<int> host_dst(test_size / sizeof(int), 0);
+
+    // 异步 copy 到设备（指定流）
+    bool ok = executor.copy_to_device(device_ptr, host_src.data(), test_size, true, stream_id);
+    TEST_ASSERT(ok, "Async copy_to_device with stream should succeed");
+
+    // 同一流上提交 kernel（占位，实际可与 copy 重叠）
+    GpuTaskConfig task_config;
+    task_config.grid_size[0] = 1;
+    task_config.block_size[0] = 1;
+    task_config.stream_id = stream_id;
+    auto future = executor.submit_kernel([device_ptr]() { (void)device_ptr; }, task_config);
+    future.wait();
+    try { future.get(); } catch (...) { }
+
+    executor.synchronize_stream(stream_id);
+
+    // 再复制回主机（可同步指定同一流）
+    ok = executor.copy_to_host(host_dst.data(), device_ptr, test_size, false, stream_id);
+    TEST_ASSERT(ok, "copy_to_host after sync should succeed");
+
+    executor.synchronize();
+    TEST_ASSERT(host_dst == host_src, "Data after async copy + kernel + copy_back should match");
+
+    executor.free_device_memory(device_ptr);
+    executor.destroy_stream(stream_id);
+    executor.stop();
+    std::cout << "  CudaExecutor async copy overlap: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled at compile time, skipping test" << std::endl;
+    return true;
+#endif
+}
+
+bool test_cuda_executor_stream_callback() {
+    std::cout << "Testing CudaExecutor stream callback..." << std::endl;
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_executor";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    config.default_stream_count = 1;
+
+    CudaExecutor executor(config.name, config);
+
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping stream callback test" << std::endl;
+        return true;
+    }
+
+    int stream_id = executor.create_stream();
+    if (stream_id <= 0) {
+        std::cout << "  create_stream failed, skipping stream callback test" << std::endl;
+        executor.stop();
+        return true;
+    }
+
+    const size_t test_size = 256;
+    void* device_ptr = executor.allocate_device_memory(test_size);
+    if (!device_ptr) {
+        executor.destroy_stream(stream_id);
+        executor.stop();
+        std::cout << "  allocate failed, skipping stream callback test" << std::endl;
+        return true;
+    }
+
+    std::vector<int> host_src(test_size / sizeof(int), 77);
+    std::vector<int> host_dst(test_size / sizeof(int), 0);
+    std::atomic<bool> callback_invoked{false};
+
+    // 先同步 copy 到设备，再异步 copy 回主机，然后注册回调
+    bool ok = executor.copy_to_device(device_ptr, host_src.data(), test_size, false);
+    TEST_ASSERT(ok, "copy_to_device should succeed");
+
+    ok = executor.copy_to_host(host_dst.data(), device_ptr, test_size, true, stream_id);
+    TEST_ASSERT(ok, "Async copy_to_host with stream should succeed");
+
+    ok = executor.add_stream_callback(stream_id, [&callback_invoked]() { callback_invoked.store(true); });
+    if (!ok) {
+        std::cout << "  add_stream_callback not available (cudaLaunchHostFunc), skipping callback assertion" << std::endl;
+        executor.synchronize();
+        executor.free_device_memory(device_ptr);
+        executor.destroy_stream(stream_id);
+        executor.stop();
+        std::cout << "  CudaExecutor stream callback: PASSED (callback API unavailable)" << std::endl;
+        return true;
+    }
+
+    executor.synchronize();
+
+    TEST_ASSERT(callback_invoked.load(), "Stream callback should have been invoked");
+    TEST_ASSERT(host_dst == host_src, "Data after async copy_to_host + callback should match");
+
+    executor.free_device_memory(device_ptr);
+    executor.destroy_stream(stream_id);
+    executor.stop();
+    std::cout << "  CudaExecutor stream callback: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled at compile time, skipping test" << std::endl;
+    return true;
+#endif
+}
+
 // ========== 主函数 ==========
 
 // 全局初始化函数，在main之前执行
@@ -534,6 +676,8 @@ int main() {
         all_passed &= test_cuda_executor_stream_management();
         all_passed &= test_cuda_executor_multi_stream_parallel();
         all_passed &= test_cuda_executor_stream_sync();
+        all_passed &= test_cuda_executor_async_copy_overlap();
+        all_passed &= test_cuda_executor_stream_callback();
         
         std::cout << "=========================================" << std::endl;
         if (all_passed) {

@@ -60,6 +60,7 @@ using CudaStreamCreateFunc = cudaError_t (*)(cudaStream_t*);
 using CudaStreamSynchronizeFunc = cudaError_t (*)(cudaStream_t);
 using CudaStreamDestroyFunc = cudaError_t (*)(cudaStream_t);
 using CudaMemGetInfoFunc = cudaError_t (*)(size_t*, size_t*);
+using CudaLaunchHostFuncFunc = cudaError_t (*)(cudaStream_t, void (*)(void*), void*);
 
 /**
  * @brief CUDA函数指针集合
@@ -77,9 +78,11 @@ struct CudaFunctionPointers {
     CudaStreamSynchronizeFunc cudaStreamSynchronize = nullptr;
     CudaStreamDestroyFunc cudaStreamDestroy = nullptr;
     CudaMemGetInfoFunc cudaMemGetInfo = nullptr;
-    
+    CudaLaunchHostFuncFunc cudaLaunchHostFunc = nullptr;  // 可选，CUDA 10+
+
     /**
      * @brief 检查所有函数指针是否已加载
+     * @note cudaLaunchHostFunc 为可选，不参与 is_complete 判定
      */
     bool is_complete() const {
         return cudaFree != nullptr &&

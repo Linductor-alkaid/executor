@@ -2,6 +2,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <thread>
+#include <functional>
 
 #ifdef EXECUTOR_ENABLE_CUDA
 #include <cuda_runtime.h>
@@ -9,6 +10,22 @@
 #include <windows.h>
 #endif
 #endif
+
+namespace {
+
+struct StreamCallbackContext {
+    std::function<void()> callback;
+};
+
+void stream_host_callback(void* userData) {
+    StreamCallbackContext* ctx = static_cast<StreamCallbackContext*>(userData);
+    if (ctx && ctx->callback) {
+        ctx->callback();
+    }
+    delete ctx;
+}
+
+}  // namespace
 
 namespace executor {
 namespace gpu {
@@ -306,7 +323,7 @@ void CudaExecutor::free_device_memory(void* ptr) {
 #endif
 }
 
-bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool async) {
+bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
     if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
         return false;
     }
@@ -318,7 +335,10 @@ bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool 
         if (funcs.cudaMemcpyAsync == nullptr) {
             return false;
         }
-        cudaStream_t stream = get_default_stream();
+        cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
+        if (stream_id != 0 && stream == nullptr) {
+            return false;  // 无效 stream_id
+        }
         error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream);
     } else {
         if (funcs.cudaMemcpy == nullptr) {
@@ -332,11 +352,12 @@ bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool 
     (void)src;
     (void)size;
     (void)async;
+    (void)stream_id;
     return false;
 #endif
 }
 
-bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool async) {
+bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool async, int stream_id) {
     if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
         return false;
     }
@@ -348,7 +369,10 @@ bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool as
         if (funcs.cudaMemcpyAsync == nullptr) {
             return false;
         }
-        cudaStream_t stream = get_default_stream();
+        cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
+        if (stream_id != 0 && stream == nullptr) {
+            return false;  // 无效 stream_id
+        }
         error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost, stream);
     } else {
         if (funcs.cudaMemcpy == nullptr) {
@@ -362,11 +386,12 @@ bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool as
     (void)src;
     (void)size;
     (void)async;
+    (void)stream_id;
     return false;
 #endif
 }
 
-bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size, bool async) {
+bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
     if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
         return false;
     }
@@ -378,7 +403,10 @@ bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size
         if (funcs.cudaMemcpyAsync == nullptr) {
             return false;
         }
-        cudaStream_t stream = get_default_stream();
+        cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
+        if (stream_id != 0 && stream == nullptr) {
+            return false;  // 无效 stream_id
+        }
         error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToDevice, stream);
     } else {
         if (funcs.cudaMemcpy == nullptr) {
@@ -392,6 +420,38 @@ bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size
     (void)src;
     (void)size;
     (void)async;
+    (void)stream_id;
+    return false;
+#endif
+}
+
+bool CudaExecutor::add_stream_callback(int stream_id, std::function<void()> callback) {
+    if (!is_available_ || !is_running_.load() || !callback || !loader_->is_available()) {
+        return false;
+    }
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    const auto& funcs = loader_->get_functions();
+    if (funcs.cudaLaunchHostFunc == nullptr) {
+        return false;
+    }
+    cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
+    if (stream_id != 0 && stream == nullptr) {
+        return false;  // 无效 stream_id
+    }
+    StreamCallbackContext* ctx = new (std::nothrow) StreamCallbackContext{std::move(callback)};
+    if (ctx == nullptr) {
+        return false;
+    }
+    cudaError_t error = funcs.cudaLaunchHostFunc(stream, &stream_host_callback, ctx);
+    if (!check_cuda_error(error, "cudaLaunchHostFunc")) {
+        delete ctx;
+        return false;
+    }
+    return true;
+#else
+    (void)stream_id;
+    (void)callback;
     return false;
 #endif
 }

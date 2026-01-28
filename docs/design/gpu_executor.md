@@ -238,9 +238,10 @@ public:
      * @param src 源主机内存指针
      * @param size 复制大小（字节）
      * @param async 是否异步复制
+     * @param stream_id 流ID（async 时使用，0=默认流）
      * @return 是否成功
      */
-    virtual bool copy_to_device(void* dst, const void* src, size_t size, bool async = false) = 0;
+    virtual bool copy_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) = 0;
 
     /**
      * @brief 从设备内存复制到主机内存
@@ -249,9 +250,10 @@ public:
      * @param src 源设备内存指针
      * @param size 复制大小（字节）
      * @param async 是否异步复制
+     * @param stream_id 流ID（async 时使用，0=默认流）
      * @return 是否成功
      */
-    virtual bool copy_to_host(void* dst, const void* src, size_t size, bool async = false) = 0;
+    virtual bool copy_to_host(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) = 0;
 
     /**
      * @brief 在设备内存之间复制
@@ -260,9 +262,10 @@ public:
      * @param src 源设备内存指针
      * @param size 复制大小（字节）
      * @param async 是否异步复制
+     * @param stream_id 流ID（async 时使用，0=默认流）
      * @return 是否成功
      */
-    virtual bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false) = 0;
+    virtual bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) = 0;
 
     /**
      * @brief 同步所有操作
@@ -291,6 +294,18 @@ public:
      * @param stream_id 流ID
      */
     virtual void destroy_stream(int stream_id) = 0;
+
+    /**
+     * @brief 在指定流上注册主机回调
+     *
+     * 当该流上此前排队的操作（包括异步 copy）都完成后，在适当时机调用 callback。
+     * 用于“传输完成”等通知；回调可能在独立线程中执行，避免在回调内重入同一执行器。
+     *
+     * @param stream_id 流ID（0=默认流）
+     * @param callback 回调函数
+     * @return 成功返回 true，无效 stream_id 或不可用时返回 false
+     */
+    virtual bool add_stream_callback(int stream_id, std::function<void()> callback) = 0;
 
     /**
      * @brief 获取执行器名称
@@ -620,13 +635,14 @@ public:
     // 实现 IGpuExecutor 接口
     void* allocate_device_memory(size_t size) override;
     void free_device_memory(void* ptr) override;
-    bool copy_to_device(void* dst, const void* src, size_t size, bool async = false) override;
-    bool copy_to_host(void* dst, const void* src, size_t size, bool async = false) override;
-    bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false) override;
+    bool copy_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
+    bool copy_to_host(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
+    bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
     void synchronize() override;
     void synchronize_stream(int stream_id) override;
     int create_stream() override;
     void destroy_stream(int stream_id) override;
+    bool add_stream_callback(int stream_id, std::function<void()> callback) override;
     std::string get_name() const override;
     GpuDeviceInfo get_device_info() const override;
     GpuExecutorStatus get_status() const override;
@@ -823,11 +839,14 @@ float* device_data = static_cast<float*>(
 // 从主机内存复制到设备内存
 float* host_data = new float[1024 * 1024];
 // ... 初始化 host_data ...
-gpu_executor->copy_to_device(device_data, host_data, data_size, true);
+// 异步复制时可指定 stream_id，与同流上的 kernel 重叠
+int stream_id = 1;  // create_stream() 返回的流
+gpu_executor->copy_to_device(device_data, host_data, data_size, true, stream_id);
 
-// 提交 GPU kernel
+// 提交 GPU kernel（同一流，与 copy 顺序执行、可重叠）
 executor::gpu::GpuTaskConfig config;
 config.grid_size[0] = 1024;
+config.stream_id = stream_id;
 auto future = executor.submit_gpu("cuda0",
     [device_data](cudaStream_t stream) {
         process_kernel<<<1024, 256, 0, stream>>>(device_data);
@@ -835,9 +854,10 @@ auto future = executor.submit_gpu("cuda0",
     config
 );
 
-// 等待完成并复制结果回主机
+// 等待完成并复制结果回主机（可异步 + add_stream_callback 做“传输完成”通知）
 future.wait();
 gpu_executor->copy_to_host(host_data, device_data, data_size);
+// 或：copy_to_host(..., true, stream_id); add_stream_callback(stream_id, []{ ... }); synchronize();
 
 // 释放内存
 gpu_executor->free_device_memory(device_data);
