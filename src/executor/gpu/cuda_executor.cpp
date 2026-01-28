@@ -1,4 +1,5 @@
 #include "cuda_executor.hpp"
+#include "gpu_memory_manager.hpp"
 #include <chrono>
 #include <cstdio>
 #include <stdexcept>
@@ -70,12 +71,14 @@ CudaExecutor::CudaExecutor(const std::string& name, const GpuExecutorConfig& con
 CudaExecutor::~CudaExecutor() {
     stop();
 
+    memory_manager_.reset();
+
 #ifdef EXECUTOR_ENABLE_CUDA
     if (is_available_ && loader_->is_available()) {
         (void)ensure_device_context();  // 多 GPU 场景下确保操作本设备
         const auto& funcs = loader_->get_functions();
         
-        // 释放所有已分配的内存
+        // 释放所有已分配的内存（仅未使用内存池时 allocated_memory_ 非空）
         {
             std::lock_guard<std::mutex> lock(memory_mutex_);
             for (auto& [ptr, size] : allocated_memory_) {
@@ -258,6 +261,13 @@ bool CudaExecutor::start() {
             }
         }
     }
+
+    if (config_.memory_pool_size > 0) {
+        memory_manager_ = std::make_unique<GpuMemoryManager>(
+            [this](size_t sz) { return raw_allocate_device_memory(sz); },
+            [this](void* p) { raw_free_device_memory(p); },
+            config_.memory_pool_size);
+    }
 #endif
 
     return true;
@@ -284,9 +294,55 @@ void CudaExecutor::wait_for_completion() {
 #endif
 }
 
+void* CudaExecutor::raw_allocate_device_memory(size_t size) {
+#ifdef EXECUTOR_ENABLE_CUDA
+    if (!is_available_ || !is_running_.load() || !loader_->is_available()) {
+        return nullptr;
+    }
+    if (!ensure_device_context()) {
+        return nullptr;
+    }
+    const auto& funcs = loader_->get_functions();
+    if (funcs.cudaMalloc == nullptr) {
+        return nullptr;
+    }
+    void* ptr = nullptr;
+    cudaError_t error = funcs.cudaMalloc(&ptr, size);
+    if (!check_cuda_error(error, "cudaMalloc") || ptr == nullptr) {
+        return nullptr;
+    }
+    return ptr;
+#else
+    (void)size;
+    return nullptr;
+#endif
+}
+
+void CudaExecutor::raw_free_device_memory(void* ptr) {
+#ifdef EXECUTOR_ENABLE_CUDA
+    if (!is_available_ || ptr == nullptr || !loader_->is_available()) {
+        return;
+    }
+    if (!ensure_device_context()) {
+        return;
+    }
+    const auto& funcs = loader_->get_functions();
+    if (funcs.cudaFree != nullptr) {
+        cudaError_t error = funcs.cudaFree(ptr);
+        check_cuda_error(error, "cudaFree");
+    }
+#else
+    (void)ptr;
+#endif
+}
+
 void* CudaExecutor::allocate_device_memory(size_t size) {
     if (!is_available_ || !is_running_.load() || !loader_->is_available()) {
         return nullptr;
+    }
+
+    if (memory_manager_) {
+        return memory_manager_->allocate(size);
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
@@ -304,7 +360,6 @@ void* CudaExecutor::allocate_device_memory(size_t size) {
         return nullptr;
     }
 
-    // 记录已分配的内存
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
         allocated_memory_[ptr] = size;
@@ -322,6 +377,11 @@ void CudaExecutor::free_device_memory(void* ptr) {
         return;
     }
 
+    if (memory_manager_) {
+        memory_manager_->free(ptr);
+        return;
+    }
+
 #ifdef EXECUTOR_ENABLE_CUDA
     if (!ensure_device_context()) {
         return;
@@ -331,11 +391,10 @@ void CudaExecutor::free_device_memory(void* ptr) {
         return;
     }
 
-    // 检查是否是我们分配的内存
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
         if (allocated_memory_.find(ptr) == allocated_memory_.end()) {
-            return;  // 不是我们分配的内存，忽略
+            return;
         }
         allocated_memory_.erase(ptr);
     }

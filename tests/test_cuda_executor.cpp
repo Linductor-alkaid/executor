@@ -34,6 +34,7 @@ using namespace executor::gpu;
 bool test_cuda_executor_creation();
 bool test_cuda_executor_device_info();
 bool test_cuda_executor_memory_management();
+bool test_cuda_executor_memory_pool();
 bool test_cuda_executor_memory_copy();
 bool test_cuda_executor_kernel_submit();
 bool test_cuda_executor_synchronize();
@@ -166,6 +167,50 @@ bool test_cuda_executor_memory_management() {
     
     executor.stop();
     std::cout << "  CudaExecutor memory management: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled at compile time, skipping test" << std::endl;
+    return true;
+#endif
+}
+
+bool test_cuda_executor_memory_pool() {
+    std::cout << "Testing CudaExecutor memory pool (memory_pool_size > 0)..." << std::endl;
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_executor_pool";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    config.memory_pool_size = 2 * 1024 * 1024;
+
+    CudaExecutor executor(config.name, config);
+
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping memory pool tests" << std::endl;
+        return true;
+    }
+
+    const size_t block_size = 64 * 1024;
+    std::vector<void*> ptrs;
+    for (int i = 0; i < 20; ++i) {
+        void* ptr = executor.allocate_device_memory(block_size);
+        if (ptr != nullptr) {
+            ptrs.push_back(ptr);
+        }
+    }
+    TEST_ASSERT(ptrs.size() >= 10, "At least 10 allocations should succeed");
+
+    for (void* ptr : ptrs) {
+        executor.free_device_memory(ptr);
+    }
+
+    void* again = executor.allocate_device_memory(block_size);
+    TEST_ASSERT(again != nullptr, "Allocate after free should succeed (pool reuse)");
+    executor.free_device_memory(again);
+
+    executor.stop();
+    std::cout << "  CudaExecutor memory pool: PASSED" << std::endl;
     return true;
 #else
     std::cout << "  CUDA support not enabled at compile time, skipping test" << std::endl;
@@ -669,6 +714,7 @@ int main() {
         all_passed &= test_cuda_executor_creation();
         all_passed &= test_cuda_executor_device_info();
         all_passed &= test_cuda_executor_memory_management();
+        all_passed &= test_cuda_executor_memory_pool();
         all_passed &= test_cuda_executor_memory_copy();
         all_passed &= test_cuda_executor_kernel_submit();
         all_passed &= test_cuda_executor_synchronize();

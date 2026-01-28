@@ -4,6 +4,8 @@
 #include "../../../include/executor/config.hpp"
 #include "../../../include/executor/types.hpp"
 #include "cuda_loader.hpp"
+#include "gpu_memory_manager.hpp"
+#include <memory>
 #include <string>
 #include <atomic>
 #include <mutex>
@@ -132,6 +134,19 @@ private:
      */
     bool ensure_device_context() const;
 
+    /**
+     * @brief 底层设备内存分配（不经过内存池，不写入 allocated_memory_）
+     * @param size 字节数
+     * @return 设备指针，失败返回 nullptr
+     */
+    void* raw_allocate_device_memory(size_t size);
+
+    /**
+     * @brief 底层设备内存释放（不操作 allocated_memory_）
+     * @param ptr 设备指针
+     */
+    void raw_free_device_memory(void* ptr);
+
 private:
     std::string name_;                          // 执行器名称
     GpuExecutorConfig config_;                  // 配置
@@ -148,7 +163,8 @@ private:
 #endif
 
     // 内存管理
-    std::unordered_map<void*, size_t> allocated_memory_;  // 已分配内存映射
+    std::unique_ptr<GpuMemoryManager> memory_manager_;    // 内存池（memory_pool_size > 0 时使用）
+    std::unordered_map<void*, size_t> allocated_memory_;  // 已分配内存映射（仅未使用池时）
     mutable std::mutex memory_mutex_;                     // 内存映射互斥锁（mutable用于const方法）
 
     // 统计信息

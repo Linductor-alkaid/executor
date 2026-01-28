@@ -193,28 +193,28 @@
 
 ### 2.4 内存池优化
 
-- [ ] 创建 `src/executor/gpu/gpu_memory_manager.hpp`
-  - [ ] 定义 `GpuMemoryManager` 类
-  - [ ] 定义内存块结构
-  - [ ] 定义内存池管理接口
+- [x] 创建 `src/executor/gpu/gpu_memory_manager.hpp`
+  - [x] 定义 `GpuMemoryManager` 类
+  - [x] 定义内存块结构
+  - [x] 定义内存池管理接口
 
-- [ ] 创建 `src/executor/gpu/gpu_memory_manager.cpp`
-  - [ ] 实现内存池初始化
-  - [ ] 实现内存分配（从池中分配）
-  - [ ] 实现内存释放（回收到池中）
-  - [ ] 实现内存碎片整理
-  - [ ] 实现内存使用统计
+- [x] 创建 `src/executor/gpu/gpu_memory_manager.cpp`
+  - [x] 实现内存池初始化
+  - [x] 实现内存分配（从池中分配）
+  - [x] 实现内存释放（回收到池中）
+  - [x] 实现内存碎片整理
+  - [x] 实现内存使用统计
 
-- [ ] 集成内存池到 CUDA 执行器
-  - [ ] 在 `CudaExecutor` 中使用 `GpuMemoryManager`
-  - [ ] 添加配置选项（启用/禁用内存池）
-  - [ ] 添加内存池大小配置
+- [x] 集成内存池到 CUDA 执行器
+  - [x] 在 `CudaExecutor` 中使用 `GpuMemoryManager`
+  - [x] 添加配置选项（启用/禁用内存池）
+  - [x] 添加内存池大小配置
 
-- [ ] 编写内存池单元测试
-  - [ ] 测试内存分配和释放
-  - [ ] 测试内存碎片整理
-  - [ ] 测试内存使用统计
-  - [ ] 性能测试（对比直接分配 vs 内存池）
+- [x] 编写内存池单元测试
+  - [x] 测试内存分配和释放
+  - [x] 测试内存碎片整理
+  - [x] 测试内存使用统计
+  - [x] 性能测试（对比直接分配 vs 内存池）
 
 ### 2.5 监控和统计
 

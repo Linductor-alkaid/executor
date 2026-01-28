@@ -7,9 +7,10 @@
 # 收集测试源文件
 file(GLOB TEST_SOURCES "*.cpp")
 
-# 如果未启用CUDA，排除CUDA相关测试
+# 如果未启用CUDA，排除CUDA/GPU相关测试（executor 不编译 gpu 源）
 if(NOT EXECUTOR_CUDA_ENABLED)
     list(FILTER TEST_SOURCES EXCLUDE REGEX ".*cuda.*")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX ".*gpu_memory_manager.*")
 endif()
 
 # 如果没有测试文件，创建一个占位符说明
@@ -33,7 +34,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     
     # 如果是 CUDA/GPU 测试，添加 CUDA 头文件支持（不链接库，使用动态加载）
-    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*") AND EXECUTOR_CUDA_ENABLED)
+    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*") AND EXECUTOR_CUDA_ENABLED)
         if(CUDA_INCLUDE_DIRS)
             target_include_directories(${TEST_NAME} PRIVATE ${CUDA_INCLUDE_DIRS})
         elseif(CUDAToolkit_INCLUDE_DIRS)
@@ -70,7 +71,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     
     # 根据测试类型设置 LABELS 和 TIMEOUT
     # 单元测试
-    if(TEST_NAME MATCHES "^test_(util|task|thread_pool|statistics_collector|task_monitor|cuda_executor)$")
+    if(TEST_NAME MATCHES "^test_(util|task|thread_pool|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "unit"
             TIMEOUT 30
