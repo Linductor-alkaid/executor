@@ -29,6 +29,8 @@ ExecutorManager& ExecutorManager::instance() {
 ExecutorManager::ExecutorManager()
     : default_async_executor_(nullptr)
     , statistics_collector_(std::make_unique<monitor::StatisticsCollector>()) {
+    statistics_collector_->set_gpu_status_provider(
+        [this]() { return get_all_gpu_executor_statuses(); });
 }
 
 // 析构函数（RAII）
@@ -209,6 +211,19 @@ std::vector<std::string> ExecutorManager::get_gpu_executor_names() const {
     }
     
     return names;
+}
+
+// 获取所有 GPU 执行器状态
+std::map<std::string, gpu::GpuExecutorStatus>
+ExecutorManager::get_all_gpu_executor_statuses() const {
+    std::shared_lock<std::shared_mutex> lock(gpu_mutex_);
+    std::map<std::string, gpu::GpuExecutorStatus> result;
+    for (const auto& pair : gpu_executors_) {
+        if (pair.second) {
+            result[pair.first] = pair.second->get_status();
+        }
+    }
+    return result;
 }
 
 void ExecutorManager::enable_monitoring(bool enable) {

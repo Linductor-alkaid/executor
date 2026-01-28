@@ -270,6 +270,13 @@ public:
      */
     gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 
+    /**
+     * @brief 获取所有 GPU 执行器状态（监控查询）
+     * 
+     * @return 执行器名称到状态的映射
+     */
+    std::map<std::string, gpu::GpuExecutorStatus> get_all_gpu_executor_status() const;
+
 private:
     /**
      * @brief 单例模式构造函数（私有）

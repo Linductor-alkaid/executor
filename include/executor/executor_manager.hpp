@@ -144,6 +144,13 @@ public:
     std::vector<std::string> get_gpu_executor_names() const;
 
     /**
+     * @brief 获取所有 GPU 执行器状态（用于监控查询）
+     * 
+     * @return 执行器名称到状态的映射
+     */
+    std::map<std::string, gpu::GpuExecutorStatus> get_all_gpu_executor_statuses() const;
+
+    /**
      * @brief 关闭所有执行器
      * 
      * @param wait_for_tasks 是否等待任务完成（默认：true）

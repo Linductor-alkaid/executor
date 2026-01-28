@@ -780,6 +780,7 @@ GpuExecutorStatus CudaExecutor::get_status() const {
     status.active_kernels = active_kernels_.load();
     status.completed_kernels = completed_kernels_.load();
     status.failed_kernels = failed_kernels_.load();
+    status.queue_size = 0;  // 当前模型无待执行队列
 
     if (!is_available_) {
         return status;

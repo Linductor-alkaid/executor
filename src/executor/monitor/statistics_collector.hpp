@@ -4,6 +4,7 @@
 #include "executor/monitor/task_monitor.hpp"
 #include <string>
 #include <map>
+#include <functional>
 
 namespace executor {
 namespace monitor {
@@ -39,8 +40,25 @@ public:
      */
     std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
+    /**
+     * @brief 设置 GPU 状态提供者（由 ExecutorManager 注入，避免循环依赖）
+     */
+    void set_gpu_status_provider(
+        std::function<std::map<std::string, gpu::GpuExecutorStatus>()> provider);
+
+    /**
+     * @brief 按名称获取 GPU 执行器状态
+     */
+    gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
+
+    /**
+     * @brief 获取所有 GPU 执行器状态
+     */
+    std::map<std::string, gpu::GpuExecutorStatus> get_all_gpu_executor_statuses() const;
+
 private:
     TaskMonitor task_monitor_;
+    std::function<std::map<std::string, gpu::GpuExecutorStatus>()> gpu_status_provider_;
 };
 
 }  // namespace monitor

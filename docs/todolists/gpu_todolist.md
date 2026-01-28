@@ -218,22 +218,22 @@
 
 ### 2.5 监控和统计
 
-- [ ] 扩展 `src/executor/gpu/cuda_executor.cpp`
-  - [ ] 实现详细的统计信息收集
-    - [ ] kernel 执行时间统计
-    - [ ] 内存使用统计
-    - [ ] 任务队列大小统计
-    - [ ] 失败任务统计
-  - [ ] 实现 `get_status()` 方法（完整版本）
-  - [ ] 添加性能计数器
+- [x] 扩展 `src/executor/gpu/cuda_executor.cpp`
+  - [x] 实现详细的统计信息收集
+    - [x] kernel 执行时间统计
+    - [x] 内存使用统计
+    - [x] 任务队列大小统计
+    - [x] 失败任务统计
+  - [x] 实现 `get_status()` 方法（完整版本）
+  - [x] 添加性能计数器
 
-- [ ] 集成到监控模块
-  - [ ] 在 `StatisticsCollector` 中添加 GPU 统计支持
-  - [ ] 在 `Executor` Facade 中添加 GPU 监控查询
+- [x] 集成到监控模块
+  - [x] 在 `StatisticsCollector` 中添加 GPU 统计支持
+  - [x] 在 `Executor` Facade 中添加 GPU 监控查询
 
-- [ ] 编写监控功能测试
-  - [ ] 测试统计信息收集
-  - [ ] 测试监控查询 API
+- [x] 编写监控功能测试
+  - [x] 测试统计信息收集
+  - [x] 测试监控查询 API
 
 ### 2.6 异常处理
 

@@ -233,6 +233,11 @@ gpu::GpuExecutorStatus Executor::get_gpu_executor_status(const std::string& name
     return executor->get_status();
 }
 
+// 获取所有 GPU 执行器状态
+std::map<std::string, gpu::GpuExecutorStatus> Executor::get_all_gpu_executor_status() const {
+    return manager_->get_all_gpu_executor_statuses();
+}
+
 // 启动定时器线程
 void Executor::start_timer_thread() {
     if (timer_running_.exchange(true)) {
