@@ -354,19 +354,7 @@ size_t start_index = dist(rng);  // 随机选择
 - 对于短周期任务（< 10ms），精度不够
 - 使用 `std::this_thread::sleep_for` 可能不够精确
 
-**当前实现**：
-```cpp
-// executor.cpp
-void Executor::timer_thread_func() {
-    const auto check_interval = std::chrono::milliseconds(10);  // 固定 10ms
-    while (timer_running_.load()) {
-        // 处理延迟任务和周期性任务
-        std::this_thread::sleep_for(check_interval);  // 可能不够精确
-    }
-}
-```
-
-**优化建议**：
+**优化建议**（已实施）：
 - 使用 `std::this_thread::sleep_until` 实现精确定时
 - 根据最短周期动态调整检查间隔
 - 使用优先级队列管理延迟任务，只检查最近的任务
@@ -376,6 +364,44 @@ void Executor::timer_thread_func() {
 - 降低 CPU 占用（减少无效检查）
 
 **实现难度**：低到中等
+
+**实施状态**：✅ 已实施优化
+
+已改用 `std::this_thread::sleep_until(next_wake)` 替代固定 `sleep_for(10ms)`。每次循环在处理完延迟任务与周期性任务后，动态计算 `next_wake = min(earliest_delayed, earliest_periodic, now + max_interval)`：若存在未处理完的延迟任务则取堆顶 `execute_time`，若存在周期性任务则取各 `next_execute_time` 的最小值，否则使用 `max_interval`（`kTimerMaxSleepMs = 10` ms）作为上限，避免休眠过久无法响应新任务。定时器精度测试结果见 [timer_precision_v0.1.0-5.1.json](timer_precision_v0.1.0-5.1.json)。
+
+#### 5.1 定时器精度测试
+
+使用 `benchmark_timer_precision` 对 **delayed** 与 **periodic** 在不同周期（1 / 5 / 10 / 50 / 100 ms）下测量 jitter（实际触发时刻 − 期望时刻，单位 μs），并输出 min / avg / p50 / p95 / p99。
+
+**运行方式**：
+
+```bash
+# 构建后运行（可读文本）
+./build/tests/benchmark_timer_precision
+
+# 仅输出 JSON，便于保存与对比
+./build/tests/benchmark_timer_precision --json
+
+# 保存结果示例
+./build/tests/benchmark_timer_precision --json > docs/optimization/timer_precision_v0.1.0-5.1.json
+```
+
+**JSON 结构**：根为 `{"benchmarks": [...]}`。每项包含 `name`（`timer_precision_delayed` 或 `timer_precision_periodic`）、`config`（如 `periods_ms`、`tasks_per_period` / `cycles_per_period`）、`metrics`。`metrics` 下按周期 `"1ms"` … `"100ms"` 列出 `jitter_us` 的 `min` / `avg` / `p50` / `p95` / `p99`。
+
+**已记录的定时器精度**（5.1 优化后，[timer_precision_v0.1.0-5.1.json](timer_precision_v0.1.0-5.1.json)）：
+
+| 类型 | 周期 | jitter_us (min) | jitter_us (avg) | jitter_us (p50) | jitter_us (p95) | jitter_us (p99) |
+|------|------|-----------------|-----------------|-----------------|-----------------|-----------------|
+| delayed | 1 ms | 322.36 | 501.46 | 380.14 | 704.60 | 718.94 |
+| delayed | 5 ms | 4405.39 | 4512.59 | 4501.21 | 4566.87 | 4569.65 |
+| delayed | 10 ms | 96.65 | 572.32 | 606.97 | 696.51 | 702.22 |
+| delayed | 50 ms | 230.34 | 360.35 | 369.14 | 437.11 | 441.60 |
+| delayed | 100 ms | 355.93 | 537.36 | 492.60 | 880.23 | 893.60 |
+| periodic | 1 ms | 0.00 | 568.23 | 503.30 | 1109.69 | 1109.69 |
+| periodic | 5 ms | 0.00 | 999.47 | 1060.36 | 1772.58 | 1772.58 |
+| periodic | 10 ms | 0.00 | 861.23 | 853.64 | 1578.87 | 1578.87 |
+| periodic | 50 ms | 0.00 | 1109.52 | 1050.15 | 2083.51 | 2083.51 |
+| periodic | 100 ms | 0.00 | 1198.82 | 1193.13 | 2174.76 | 2174.76 |
 
 ---
 

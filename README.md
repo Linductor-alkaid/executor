@@ -146,9 +146,21 @@ target_link_libraries(myapp PRIVATE executor::executor)
 - **Windows 定时器精度**：虽然启用了高精度定时器，但由于系统调度器的限制，短周期（< 10ms）的精度可能不如 Linux
 - **实时调度**：Windows 不支持 Linux 的实时调度策略（SCHED_FIFO/SCHED_RR），使用线程优先级代替
 
+### 实时线程周期精度（误差）
+
+以下为 **实时线程**（`register_realtime_task` + `RealtimeThreadExecutor` 周期回调）在不同周期下的 jitter（实际触发时刻 − 期望时刻，单位 μs）统计。**本记录取自 Linux 设备**；完整 JSON 见 [docs/optimization/realtime_precision_linux.json](docs/optimization/realtime_precision_linux.json)。运行 `./build/tests/benchmark_realtime_precision --json` 可复现。
+
+| 周期 | jitter_us (min) | jitter_us (avg) | jitter_us (p50) | jitter_us (p95) | jitter_us (p99) |
+|------|-----------------|-----------------|-----------------|-----------------|-----------------|
+| 1 ms | 0.00 | 59.98 | 54.64 | 64.34 | 64.34 |
+| 5 ms | 0.00 | 90.47 | 91.39 | 129.46 | 129.46 |
+| 10 ms | 0.00 | 81.40 | 85.71 | 104.31 | 104.31 |
+| 50 ms | 0.00 | 89.74 | 85.11 | 108.31 | 108.31 |
+| 100 ms | 0.00 | 108.96 | 109.16 | 141.39 | 141.39 |
+
 ## 版本
 
-当前版本：**v0.1.0**
+当前版本：**v0.1.1**
 
 变更记录见 [CHANGELOG.md](CHANGELOG.md)
 

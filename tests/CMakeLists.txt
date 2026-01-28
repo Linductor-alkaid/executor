@@ -94,6 +94,18 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "benchmark;baseline"
             TIMEOUT 120
         )
+    # 定时器精度基准测试（多周期 delayed/periodic jitter，JSON 输出）
+    elseif(TEST_NAME STREQUAL "benchmark_timer_precision")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "benchmark"
+            TIMEOUT 120
+        )
+    # 实时线程周期精度基准测试（RealtimeThreadExecutor cycle jitter，JSON 输出）
+    elseif(TEST_NAME STREQUAL "benchmark_realtime_precision")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "benchmark"
+            TIMEOUT 120
+        )
     # 默认：单元测试
     else()
         set_tests_properties(${TEST_NAME} PROPERTIES

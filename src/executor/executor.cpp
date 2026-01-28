@@ -260,69 +260,74 @@ void Executor::stop_timer_thread() {
     }
 }
 
+namespace {
+
+constexpr int64_t kTimerMaxSleepMs = 10;  // 无待处理任务时的最大休眠间隔（ms）
+
+}  // namespace
+
 // 定时器线程函数
 void Executor::timer_thread_func() {
-    const auto check_interval = std::chrono::milliseconds(10);  // 检查间隔：10ms
-    
+    using clock = std::chrono::steady_clock;
+    const auto max_interval = std::chrono::milliseconds(kTimerMaxSleepMs);
+
     while (timer_running_.load(std::memory_order_acquire)) {
-        auto now = std::chrono::steady_clock::now();
-        
+        auto now = clock::now();
+        auto next_wake = now + max_interval;
+
         // 处理延迟任务
         {
             std::lock_guard<std::mutex> lock(delayed_tasks_mutex_);
-            
-            // 只检查并处理到期的任务（队列顶部是最早执行的任务）
+
             auto* executor = manager_->get_default_async_executor();
             if (executor) {
                 while (!delayed_tasks_.empty()) {
                     const auto& top = delayed_tasks_.top();
                     if (now >= top.execute_time) {
-                        // 执行任务（提交到执行器）
-                        // 注意：top() 返回 const 引用，需要 const_cast 来移动 task
                         DelayedTask task = std::move(const_cast<DelayedTask&>(top));
                         delayed_tasks_.pop();
-                        
+
                         executor->submit(std::move(task.task));
                         if (task.on_complete) {
                             task.on_complete();
                         }
                     } else {
-                        // 后续任务更晚，无需检查
                         break;
                     }
                 }
             }
+
+            if (!delayed_tasks_.empty()) {
+                auto ed = delayed_tasks_.top().execute_time;
+                if (ed < next_wake) next_wake = ed;
+            }
         }
-        
+
         // 处理周期性任务
         {
             std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
-            
+
             for (auto it = periodic_tasks_.begin(); it != periodic_tasks_.end();) {
                 auto& periodic_task = it->second;
-                
-                // 检查是否已取消
+
                 if (periodic_task.cancelled) {
                     it = periodic_tasks_.erase(it);
                     continue;
                 }
-                
-                // 检查是否到了执行时间
+
                 if (now >= periodic_task.next_execute_time) {
-                    // 执行任务
                     periodic_task.task();
-                    
-                    // 更新下次执行时间
-                    periodic_task.next_execute_time = now + 
-                        std::chrono::milliseconds(periodic_task.period_ms);
+                    periodic_task.next_execute_time =
+                        now + std::chrono::milliseconds(periodic_task.period_ms);
                 }
-                
+
+                if (periodic_task.next_execute_time < next_wake)
+                    next_wake = periodic_task.next_execute_time;
                 ++it;
             }
         }
-        
-        // 休眠一段时间
-        std::this_thread::sleep_for(check_interval);
+
+        std::this_thread::sleep_until(next_wake);
     }
 }
 
