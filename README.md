@@ -148,7 +148,11 @@ target_link_libraries(myapp PRIVATE executor::executor)
 
 ### 实时线程周期精度（误差）
 
-以下为 **实时线程**（`register_realtime_task` + `RealtimeThreadExecutor` 周期回调）在不同周期下的 jitter（实际触发时刻 − 期望时刻，单位 μs）统计。**本记录取自 Linux 设备**；完整 JSON 见 [docs/optimization/realtime_precision_linux.json](docs/optimization/realtime_precision_linux.json)。运行 `./build/tests/benchmark_realtime_precision --json` 可复现。
+以下为 **实时线程**（`register_realtime_task` + `RealtimeThreadExecutor` 周期回调）在不同周期下的 jitter（实际触发时刻 − 期望时刻，单位 μs）统计。运行 `./build/tests/benchmark_realtime_precision --json`（Windows 下为 `.\build\tests\Debug\benchmark_realtime_precision.exe --json`）可复现。
+
+#### Linux
+
+完整 JSON 见 [docs/optimization/realtime_precision_linux.json](docs/optimization/realtime_precision_linux.json)。
 
 | 周期 | jitter_us (min) | jitter_us (avg) | jitter_us (p50) | jitter_us (p95) | jitter_us (p99) |
 |------|-----------------|-----------------|-----------------|-----------------|-----------------|
@@ -157,6 +161,18 @@ target_link_libraries(myapp PRIVATE executor::executor)
 | 10 ms | 0.00 | 81.40 | 85.71 | 104.31 | 104.31 |
 | 50 ms | 0.00 | 89.74 | 85.11 | 108.31 | 108.31 |
 | 100 ms | 0.00 | 108.96 | 109.16 | 141.39 | 141.39 |
+
+#### Windows
+
+完整 JSON 见 [docs/optimization/realtime_precision_windows.json](docs/optimization/realtime_precision_windows.json)。Windows 非实时系统，调度与定时器分辨率会导致周期回调普遍偏晚；长周期下误差更大，仅适合软实时或对数毫秒级抖动不敏感的场景。
+
+| 周期 | jitter_us (min) | jitter_us (avg) | jitter_us (p50) | jitter_us (p95) | jitter_us (p99) |
+|------|-----------------|-----------------|-----------------|-----------------|-----------------|
+| 1 ms | 109.00 | 109.00 | 109.00 | 109.00 | 109.00 |
+| 5 ms | 0.00 | 1146.65 | 1077.90 | 1947.10 | 1947.10 |
+| 10 ms | 0.00 | 1041.09 | 1159.20 | 1530.40 | 1530.40 |
+| 50 ms | 0.00 | 7967.12 | 7344.40 | 14731.90 | 14731.90 |
+| 100 ms | 0.00 | 10888.87 | 8839.40 | 16736.00 | 16736.00 |
 
 ## 版本
 
