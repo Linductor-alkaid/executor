@@ -104,6 +104,17 @@ public:
         return true;
     }
 
+    bool copy_from_peer(IGpuExecutor* src_executor, const void* src_ptr, void* dst_ptr,
+                       size_t size, bool async = false, int stream_id = 0) override {
+        (void)src_executor;
+        (void)src_ptr;
+        (void)dst_ptr;
+        (void)size;
+        (void)async;
+        (void)stream_id;
+        return false;
+    }
+
     void synchronize() override {
     }
 

@@ -32,8 +32,8 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         target_compile_definitions(${TEST_NAME} PRIVATE EXECUTOR_ENABLE_GPU)
     endif()
     
-    # 如果是CUDA测试，添加CUDA头文件支持（不链接库，使用动态加载）
-    if(TEST_NAME MATCHES ".*cuda.*" AND EXECUTOR_CUDA_ENABLED)
+    # 如果是 CUDA/GPU 测试，添加 CUDA 头文件支持（不链接库，使用动态加载）
+    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*") AND EXECUTOR_CUDA_ENABLED)
         if(CUDA_INCLUDE_DIRS)
             target_include_directories(${TEST_NAME} PRIVATE ${CUDA_INCLUDE_DIRS})
         elseif(CUDAToolkit_INCLUDE_DIRS)
@@ -76,7 +76,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             TIMEOUT 30
         )
     # 集成/端到端测试
-    elseif(TEST_NAME MATCHES "^test_(executor_facade|executor_manager|executor_manager_gpu|e2e_workflow|thread_pool_integration|monitor_integration|cycle_manager_integration|realtime_thread_executor|thread_pool_executor)$")
+    elseif(TEST_NAME MATCHES "^test_(executor_facade|executor_manager|executor_manager_gpu|gpu_multi_device|e2e_workflow|thread_pool_integration|monitor_integration|cycle_manager_integration|realtime_thread_executor|thread_pool_executor)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "integration"
             TIMEOUT 60

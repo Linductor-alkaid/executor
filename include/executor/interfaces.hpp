@@ -310,6 +310,31 @@ public:
     virtual bool add_stream_callback(int stream_id, std::function<void()> callback) = 0;
 
     /**
+     * @brief 从 peer 执行器所在设备拷贝到本执行器设备（P2P 设备间拷贝）
+     *
+     * dst_ptr 须由本执行器分配，src_ptr 须由 src_executor 分配。
+     * 同设备请使用 copy_device_to_device。
+     *
+     * @param src_executor 源设备对应执行器
+     * @param src_ptr 源设备内存指针
+     * @param dst_ptr 本设备目标内存指针
+     * @param size 拷贝字节数
+     * @param async 是否异步
+     * @param stream_id 流ID（async 时使用，0=默认流）
+     * @return 是否成功；默认实现返回 false
+     */
+    virtual bool copy_from_peer(IGpuExecutor* src_executor, const void* src_ptr, void* dst_ptr,
+                               size_t size, bool async = false, int stream_id = 0) {
+        (void)src_executor;
+        (void)src_ptr;
+        (void)dst_ptr;
+        (void)size;
+        (void)async;
+        (void)stream_id;
+        return false;
+    }
+
+    /**
      * @brief 获取执行器名称
      * @return 执行器名称
      */

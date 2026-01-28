@@ -61,6 +61,12 @@ using CudaStreamSynchronizeFunc = cudaError_t (*)(cudaStream_t);
 using CudaStreamDestroyFunc = cudaError_t (*)(cudaStream_t);
 using CudaMemGetInfoFunc = cudaError_t (*)(size_t*, size_t*);
 using CudaLaunchHostFuncFunc = cudaError_t (*)(cudaStream_t, void (*)(void*), void*);
+using CudaMemcpyPeerFunc = cudaError_t (*)(void*, int, const void*, int, size_t);
+using CudaMemcpyPeerAsyncFunc = cudaError_t (*)(void*, int, const void*, int, size_t, cudaStream_t);
+using CudaDeviceCanAccessPeerFunc = cudaError_t (*)(int*, int, int);
+using CudaDeviceEnablePeerAccessFunc = cudaError_t (*)(int, unsigned int);
+using CudaGetLastErrorFunc = cudaError_t (*)();
+using CudaGetErrorStringFunc = const char* (*)(cudaError_t);
 
 /**
  * @brief CUDA函数指针集合
@@ -79,10 +85,16 @@ struct CudaFunctionPointers {
     CudaStreamDestroyFunc cudaStreamDestroy = nullptr;
     CudaMemGetInfoFunc cudaMemGetInfo = nullptr;
     CudaLaunchHostFuncFunc cudaLaunchHostFunc = nullptr;  // 可选，CUDA 10+
+    CudaMemcpyPeerFunc cudaMemcpyPeer = nullptr;          // P2P 可选
+    CudaMemcpyPeerAsyncFunc cudaMemcpyPeerAsync = nullptr;
+    CudaDeviceCanAccessPeerFunc cudaDeviceCanAccessPeer = nullptr;
+    CudaDeviceEnablePeerAccessFunc cudaDeviceEnablePeerAccess = nullptr;
+    CudaGetLastErrorFunc cudaGetLastError = nullptr;
+    CudaGetErrorStringFunc cudaGetErrorString = nullptr;
 
     /**
      * @brief 检查所有函数指针是否已加载
-     * @note cudaLaunchHostFunc 为可选，不参与 is_complete 判定
+     * @note cudaLaunchHostFunc、P2P 相关为可选，不参与 is_complete 判定
      */
     bool is_complete() const {
         return cudaFree != nullptr &&
@@ -97,6 +109,16 @@ struct CudaFunctionPointers {
                cudaStreamSynchronize != nullptr &&
                cudaStreamDestroy != nullptr &&
                cudaMemGetInfo != nullptr;
+    }
+
+    /**
+     * @brief 检查 P2P 相关函数是否已加载
+     */
+    bool is_p2p_available() const {
+        return cudaMemcpyPeer != nullptr &&
+               cudaMemcpyPeerAsync != nullptr &&
+               cudaDeviceCanAccessPeer != nullptr &&
+               cudaDeviceEnablePeerAccess != nullptr;
     }
 };
 

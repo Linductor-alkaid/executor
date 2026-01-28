@@ -894,6 +894,8 @@ for (auto& future : futures) {
 }
 ```
 
+**设备间 P2P 拷贝（copy_from_peer）**：跨设备拷贝使用 `copy_from_peer`。以目标执行器为当前设备，从源执行器所在设备的 `src_ptr` 拷贝到本设备的 `dst_ptr`。`dst_ptr` 须由本执行器分配，`src_ptr` 须由 `src_executor` 分配；同设备请用 `copy_device_to_device`。实现依赖 `cudaMemcpyPeer` / `cudaDeviceCanAccessPeer` / `cudaDeviceEnablePeerAccess`，不支持 P2P 时返回 `false`。示例见 `examples/gpu_multi_device.cpp`。
+
 ### 示例 4：CPU-GPU 混合执行
 
 ```cpp

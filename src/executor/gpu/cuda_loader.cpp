@@ -248,6 +248,20 @@ bool CudaLoader::load_functions() {
     functions_.cudaLaunchHostFunc = reinterpret_cast<CudaLaunchHostFuncFunc>(
         get_function_pointer("cudaLaunchHostFunc"));
 
+    // P2P 可选：设备间拷贝
+    functions_.cudaMemcpyPeer = reinterpret_cast<CudaMemcpyPeerFunc>(
+        get_function_pointer("cudaMemcpyPeer"));
+    functions_.cudaMemcpyPeerAsync = reinterpret_cast<CudaMemcpyPeerAsyncFunc>(
+        get_function_pointer("cudaMemcpyPeerAsync"));
+    functions_.cudaDeviceCanAccessPeer = reinterpret_cast<CudaDeviceCanAccessPeerFunc>(
+        get_function_pointer("cudaDeviceCanAccessPeer"));
+    functions_.cudaDeviceEnablePeerAccess = reinterpret_cast<CudaDeviceEnablePeerAccessFunc>(
+        get_function_pointer("cudaDeviceEnablePeerAccess"));
+    functions_.cudaGetLastError = reinterpret_cast<CudaGetLastErrorFunc>(
+        get_function_pointer("cudaGetLastError"));
+    functions_.cudaGetErrorString = reinterpret_cast<CudaGetErrorStringFunc>(
+        get_function_pointer("cudaGetErrorString"));
+
     return functions_.is_complete();
 }
 

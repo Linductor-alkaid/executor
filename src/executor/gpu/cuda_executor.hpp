@@ -54,6 +54,8 @@ public:
     bool copy_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
     bool copy_to_host(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
     bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
+    bool copy_from_peer(IGpuExecutor* src_executor, const void* src_ptr, void* dst_ptr,
+                       size_t size, bool async = false, int stream_id = 0) override;
     bool add_stream_callback(int stream_id, std::function<void()> callback) override;
     void synchronize() override;
     void synchronize_stream(int stream_id) override;
@@ -94,9 +96,9 @@ private:
      * @return 是否成功
      */
 #ifdef EXECUTOR_ENABLE_CUDA
-    bool check_cuda_error(cudaError_t error_code, const char* operation);
+    bool check_cuda_error(cudaError_t error_code, const char* operation) const;
 #else
-    bool check_cuda_error(int error_code, const char* operation);
+    bool check_cuda_error(int error_code, const char* operation) const;
 #endif
 
     /**
@@ -123,6 +125,12 @@ private:
 #ifdef EXECUTOR_ENABLE_CUDA
     cudaStream_t create_one_stream();
 #endif
+
+    /**
+     * @brief 确保当前 CUDA 上下文为本执行器对应设备（多 GPU 安全）
+     * @return 是否成功
+     */
+    bool ensure_device_context() const;
 
 private:
     std::string name_;                          // 执行器名称

@@ -177,19 +177,19 @@
 
 ### 2.3 多 GPU 设备支持
 
-- [ ] 扩展 `src/executor/gpu/cuda_executor.cpp`
-  - [ ] 实现设备选择逻辑（`cudaSetDevice`）
-  - [ ] 实现设备间内存复制（P2P）
-  - [ ] 实现设备间通信优化
+- [x] 扩展 `src/executor/gpu/cuda_executor.cpp`
+  - [x] 实现设备选择逻辑（`cudaSetDevice`）
+  - [x] 实现设备间内存复制（P2P）
+  - [x] 实现设备间通信优化
 
-- [ ] 创建 `examples/gpu_multi_device.cpp`
-  - [ ] 实现多 GPU 设备注册
-  - [ ] 实现多 GPU 并行任务提交
-  - [ ] 实现设备间数据同步
+- [x] 创建 `examples/gpu_multi_device.cpp`
+  - [x] 实现多 GPU 设备注册
+  - [x] 实现多 GPU 并行任务提交
+  - [x] 实现设备间数据同步
 
-- [ ] 编写多 GPU 设备集成测试
-  - [ ] 测试多设备管理
-  - [ ] 测试设备间负载均衡
+- [x] 编写多 GPU 设备集成测试
+  - [x] 测试多设备管理
+  - [x] 测试设备间负载均衡
 
 ### 2.4 内存池优化
 
