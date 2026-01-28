@@ -97,12 +97,14 @@ bool test_realtime_executor_cycle_loop_execution() {
     TEST_ASSERT(executor.start(), "Start should succeed");
 
     std::this_thread::sleep_for(std::chrono::milliseconds(80));
-    int count_before_stop = cycle_count.load();
     executor.stop();
-
-    TEST_ASSERT(count_before_stop > 0, "Cycle callback should have been called");
+    // 在 stop() 之后再读取回调次数，避免竞态：stop() 前读取时工作线程可能多跑一个周期，
+    // 导致 status.cycle_count 比当时读到的值多 1（CI 环境更容易触发）。
+    int final_callback_count = cycle_count.load();
     auto status = executor.get_status();
-    TEST_ASSERT(status.cycle_count == count_before_stop,
+
+    TEST_ASSERT(final_callback_count > 0, "Cycle callback should have been called");
+    TEST_ASSERT(status.cycle_count == final_callback_count,
                 "Executor cycle count should match callback invocations");
 
     std::cout << "  Cycle_loop execution: PASSED" << std::endl;
