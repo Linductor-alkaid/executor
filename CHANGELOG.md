@@ -4,6 +4,28 @@
 
 ---
 
+## [0.2.0] - 2026-01-29
+
+### 新增
+
+- **GPU 执行器（CUDA）**：`IGpuExecutor` 接口，CUDA 执行器实现，与 ExecutorManager/Executor Facade 集成
+- **GPU 任务与配置**：`register_gpu_executor`、`submit_gpu`、`get_gpu_executor`、`get_gpu_executor_status`、`get_gpu_executor_names`；`GpuExecutorConfig`、`GpuTaskConfig`、`GpuDeviceInfo`、`GpuExecutorStatus`
+- **CUDA 动态加载**：运行时加载 CUDA 库，无静态链接，CUDA 不可用时安全降级
+- **GPU 内存与流**：设备内存分配/释放、主机↔设备/设备↔设备拷贝（含异步）、流创建/销毁/同步、流回调
+- **多 GPU 设备**：按设备 ID 注册多个执行器；设备间 P2P 拷贝为**实验性**，未在多 GPU 实机充分测试
+- **GPU 内存池与监控**：可选内存池（`GpuMemoryManager`）、kernel 与内存统计、异常处理与错误码转换
+- **GPU 任务队列**：优先级、批量提交、任务依赖（`submit_kernel_after`）
+- **构建与示例**：`EXECUTOR_ENABLE_GPU`、`EXECUTOR_ENABLE_CUDA` 选项；示例 `gpu_basic`、`gpu_multi_device`
+
+### 其他
+
+- **CI**：C/C++ 工作流重构，依赖升级至 v4
+- **文档与测试**：实时线程周期精度记录与外部接入说明；定时器优化；消除测试中数据竞态
+
+详细设计见 [docs/design/gpu_executor.md](docs/design/gpu_executor.md)。
+
+---
+
 ## [0.1.1] - 2026-01-25
 
 ### 优化
