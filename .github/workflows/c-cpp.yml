@@ -28,7 +28,7 @@ jobs:
 
     steps:
     - name: 检出代码
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: 安装依赖 (Ubuntu)
       if: runner.os == 'Linux'
@@ -62,7 +62,7 @@ jobs:
 
     - name: 上传构建产物 (Release)
       if: matrix.build_type == 'Release'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: executor-${{ matrix.os }}-${{ matrix.compiler.name }}-${{ matrix.compiler.version }}
         path: |
@@ -77,7 +77,7 @@ jobs:
     
     steps:
     - name: 检出代码
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: 安装依赖
       run: |
@@ -107,7 +107,7 @@ jobs:
         lcov --list coverage.info
 
     - name: 上传到 Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v4
       with:
         files: ./build/coverage.info
         flags: unittests
