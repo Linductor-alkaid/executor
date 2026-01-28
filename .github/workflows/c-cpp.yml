@@ -1,23 +1,114 @@
-name: C/C++ CI
+name: CI
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ master ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ master ]
 
 jobs:
-  build:
-
-    runs-on: ubuntu-latest
+  build-and-test:
+    name: ${{ matrix.os }} - ${{ matrix.compiler.name }} ${{ matrix.compiler.version }} - ${{ matrix.build_type }}
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+        build_type: [Release, Debug]
+        compiler:
+          - { name: gcc, version: 11 }
+          - { name: clang, version: 14 }
+        exclude:
+          # Windows 只用 MSVC
+          - os: windows-latest
+            compiler: { name: gcc }
+          - os: windows-latest
+            compiler: { name: clang }
 
     steps:
-    - uses: actions/checkout@v4
-    - name: configure
-      run: ./configure
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
+    - name: 检出代码
+      uses: actions/checkout@v3
+
+    - name: 安装依赖 (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build
+        if [ "${{ matrix.compiler.name }}" = "gcc" ]; then
+          sudo apt-get install -y g++-${{ matrix.compiler.version }}
+          echo "CC=gcc-${{ matrix.compiler.version }}" >> $GITHUB_ENV
+          echo "CXX=g++-${{ matrix.compiler.version }}" >> $GITHUB_ENV
+        else
+          sudo apt-get install -y clang-${{ matrix.compiler.version }}
+          echo "CC=clang-${{ matrix.compiler.version }}" >> $GITHUB_ENV
+          echo "CXX=clang++-${{ matrix.compiler.version }}" >> $GITHUB_ENV
+        fi
+
+    - name: 配置 CMake
+      run: |
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DEXECUTOR_BUILD_TESTS=ON \
+          -DEXECUTOR_BUILD_EXAMPLES=ON \
+          -DEXECUTOR_ENABLE_COVERAGE=OFF
+
+    - name: 编译
+      run: cmake --build build --config ${{ matrix.build_type }} -j
+
+    - name: 运行测试
+      working-directory: build
+      run: ctest -C ${{ matrix.build_type }} --output-on-failure --verbose
+
+    - name: 上传构建产物 (Release)
+      if: matrix.build_type == 'Release'
+      uses: actions/upload-artifact@v3
+      with:
+        name: executor-${{ matrix.os }}-${{ matrix.compiler.name }}-${{ matrix.compiler.version }}
+        path: |
+          build/lib*
+          build/tests/executor_*_test
+        retention-days: 7
+
+  # 可选：代码覆盖率任务
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-22.04
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v3
+
+    - name: 安装依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build g++-11 lcov
+
+    - name: 配置 CMake (启用覆盖率)
+      run: |
+        cmake -B build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_COMPILER=g++-11 \
+          -DEXECUTOR_BUILD_TESTS=ON \
+          -DEXECUTOR_ENABLE_COVERAGE=ON
+
+    - name: 编译
+      run: cmake --build build -j
+
+    - name: 运行测试
+      working-directory: build
+      run: ctest --output-on-failure
+
+    - name: 生成覆盖率报告
+      run: |
+        cd build
+        lcov --capture --directory . --output-file coverage.info
+        lcov --remove coverage.info '/usr/*' '*/tests/*' '*/examples/*' --output-file coverage.info
+        lcov --list coverage.info
+
+    - name: 上传到 Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./build/coverage.info
+        flags: unittests
+        name: codecov-executor
