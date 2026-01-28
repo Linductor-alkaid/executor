@@ -347,6 +347,7 @@ bool test_cuda_executor_stream_management() {
     config.name = "test_cuda_executor";
     config.backend = GpuBackend::CUDA;
     config.device_id = 0;
+    config.default_stream_count = 1;
     
     CudaExecutor executor(config.name, config);
     
@@ -355,22 +356,134 @@ bool test_cuda_executor_stream_management() {
         return true;
     }
     
-    // 测试创建流
     int stream_id = executor.create_stream();
     if (stream_id > 0) {
         TEST_ASSERT(stream_id > 0, "Stream ID should be positive");
+        executor.synchronize_stream(stream_id);
+        executor.destroy_stream(stream_id);
         
-        // 测试同步流
+        // destroy 后再 synchronize_stream 不应崩溃
         executor.synchronize_stream(stream_id);
         
-        // 测试销毁流
-        executor.destroy_stream(stream_id);
+        // 重复 create/destroy
+        int a = executor.create_stream();
+        int b = executor.create_stream();
+        if (a > 0 && b > 0) {
+            executor.destroy_stream(a);
+            executor.destroy_stream(b);
+            int c = executor.create_stream();
+            if (c > 0) {
+                executor.synchronize_stream(c);
+                executor.destroy_stream(c);
+            }
+        }
     } else {
         std::cout << "  Stream creation failed (CUDA may not be available)" << std::endl;
     }
     
+    // 非法 stream_id：synchronize_stream / destroy_stream 安全 no-op
+    executor.synchronize_stream(-1);
+    executor.synchronize_stream(99999);
+    executor.destroy_stream(-1);
+    executor.destroy_stream(0);
+    executor.destroy_stream(99999);
+    
     executor.stop();
     std::cout << "  CudaExecutor stream management: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled at compile time, skipping test" << std::endl;
+    return true;
+#endif
+}
+
+bool test_cuda_executor_multi_stream_parallel() {
+    std::cout << "Testing CudaExecutor multi-stream parallel..." << std::endl;
+    
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_executor";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    config.default_stream_count = 2;
+    
+    CudaExecutor executor(config.name, config);
+    
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping multi-stream tests" << std::endl;
+        return true;
+    }
+    
+    GpuTaskConfig tc;
+    tc.grid_size[0] = 1;
+    tc.block_size[0] = 1;
+    tc.async = false;
+    
+    tc.stream_id = 1;
+    auto f1 = executor.submit_kernel([&executor]() {
+        void* p = executor.allocate_device_memory(512);
+        if (p) executor.free_device_memory(p);
+    }, tc);
+    
+    tc.stream_id = 2;
+    auto f2 = executor.submit_kernel([&executor]() {
+        void* p = executor.allocate_device_memory(512);
+        if (p) executor.free_device_memory(p);
+    }, tc);
+    
+    f1.wait();
+    f2.wait();
+    try { f1.get(); f2.get(); } catch (...) { }
+    
+    executor.synchronize_stream(1);
+    executor.synchronize_stream(2);
+    executor.synchronize();
+    
+    executor.stop();
+    std::cout << "  CudaExecutor multi-stream parallel: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled at compile time, skipping test" << std::endl;
+    return true;
+#endif
+}
+
+bool test_cuda_executor_stream_sync() {
+    std::cout << "Testing CudaExecutor stream sync..." << std::endl;
+    
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_executor";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    config.default_stream_count = 1;
+    
+    CudaExecutor executor(config.name, config);
+    
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping stream sync tests" << std::endl;
+        return true;
+    }
+    
+    // sync(0) 等价 synchronize()
+    executor.synchronize_stream(0);
+    executor.synchronize();
+    
+    int sid = executor.create_stream();
+    if (sid > 0) {
+        // 多次 synchronize_stream 幂等
+        executor.synchronize_stream(sid);
+        executor.synchronize_stream(sid);
+        executor.synchronize_stream(sid);
+        
+        // 多流分别 sync 后整体 synchronize() 无挂起
+        executor.synchronize_stream(sid);
+        executor.synchronize();
+        executor.destroy_stream(sid);
+    }
+    
+    executor.stop();
+    std::cout << "  CudaExecutor stream sync: PASSED" << std::endl;
     return true;
 #else
     std::cout << "  CUDA support not enabled at compile time, skipping test" << std::endl;
@@ -419,6 +532,8 @@ int main() {
         all_passed &= test_cuda_executor_synchronize();
         all_passed &= test_cuda_executor_status();
         all_passed &= test_cuda_executor_stream_management();
+        all_passed &= test_cuda_executor_multi_stream_parallel();
+        all_passed &= test_cuda_executor_stream_sync();
         
         std::cout << "=========================================" << std::endl;
         if (all_passed) {

@@ -192,6 +192,39 @@ bool CudaExecutor::start() {
         return false;  // 已经在运行
     }
 
+#ifdef EXECUTOR_ENABLE_CUDA
+    if (!loader_->is_available()) {
+        is_running_.store(false);
+        return false;
+    }
+
+    const auto& funcs = loader_->get_functions();
+    if (funcs.cudaStreamCreate == nullptr || funcs.cudaStreamDestroy == nullptr) {
+        is_running_.store(false);
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(streams_mutex_);
+        if (streams_.empty() && config_.default_stream_count > 0) {
+            for (int i = 0; i < config_.default_stream_count; ++i) {
+                cudaStream_t s = create_one_stream();
+                if (s == nullptr) {
+                    for (cudaStream_t t : streams_) {
+                        if (t != nullptr) {
+                            funcs.cudaStreamDestroy(t);
+                        }
+                    }
+                    streams_.clear();
+                    is_running_.store(false);
+                    return false;
+                }
+                streams_.push_back(s);
+            }
+        }
+    }
+#endif
+
     return true;
 }
 
@@ -413,14 +446,8 @@ int CudaExecutor::create_stream() {
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
-    const auto& funcs = loader_->get_functions();
-    if (funcs.cudaStreamCreate == nullptr) {
-        return -1;
-    }
-
-    cudaStream_t stream = nullptr;
-    cudaError_t error = funcs.cudaStreamCreate(&stream);
-    if (!check_cuda_error(error, "cudaStreamCreate") || stream == nullptr) {
+    cudaStream_t stream = create_one_stream();
+    if (stream == nullptr) {
         return -1;
     }
 
@@ -554,7 +581,7 @@ GpuExecutorStatus CudaExecutor::get_status() const {
 }
 
 std::future<void> CudaExecutor::submit_kernel_impl(
-    std::function<void()> kernel_func,
+    std::function<void(void*)> kernel_func,
     const GpuTaskConfig& config) {
     
     auto promise = std::make_shared<std::promise<void>>();
@@ -566,11 +593,15 @@ std::future<void> CudaExecutor::submit_kernel_impl(
         return future;
     }
 
-    // 增加活跃kernel计数
+    void* stream_ptr = nullptr;
+#ifdef EXECUTOR_ENABLE_CUDA
+    cudaStream_t s = get_stream(config.stream_id);
+    stream_ptr = static_cast<void*>(s);
+#endif
+
     active_kernels_++;
 
-    // 在后台线程中执行kernel（基础版本，使用默认流）
-    std::thread([this, kernel_func = std::move(kernel_func), config, promise]() mutable {
+    std::thread([this, kernel_func = std::move(kernel_func), config, promise, stream_ptr]() mutable {
         auto start_time = std::chrono::high_resolution_clock::now();
         
         try {
@@ -578,22 +609,18 @@ std::future<void> CudaExecutor::submit_kernel_impl(
             if (loader_->is_available()) {
                 const auto& funcs = loader_->get_functions();
                 if (funcs.cudaSetDevice != nullptr) {
-                    // 设置当前设备
                     funcs.cudaSetDevice(device_id_);
                 }
-                
-                // 执行kernel函数
-                kernel_func();
-                
-                // 同步（确保kernel完成）
-                if (!config.async) {
-                    synchronize();
-                }
+            }
+#endif
+            kernel_func(stream_ptr);
+#ifdef EXECUTOR_ENABLE_CUDA
+            if (loader_->is_available() && !config.async) {
+                synchronize_stream(config.stream_id);
             }
 #endif
             promise->set_value();
             
-            // 更新统计信息
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
                 end_time - start_time).count();
@@ -613,6 +640,39 @@ std::future<void> CudaExecutor::submit_kernel_impl(
 #ifdef EXECUTOR_ENABLE_CUDA
 cudaStream_t CudaExecutor::get_default_stream() const {
     return default_stream_;  // nullptr 表示默认流
+}
+
+cudaStream_t CudaExecutor::get_stream(int stream_id) const {
+    if (stream_id == 0) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(streams_mutex_);
+    if (stream_id < 1 || static_cast<size_t>(stream_id) > streams_.size()) {
+        return nullptr;
+    }
+    return streams_[static_cast<size_t>(stream_id) - 1];
+}
+
+cudaStream_t CudaExecutor::create_one_stream() {
+    if (!loader_->is_available()) {
+        return nullptr;
+    }
+    const auto& funcs = loader_->get_functions();
+    if (funcs.cudaStreamCreate == nullptr) {
+        return nullptr;
+    }
+    if (funcs.cudaSetDevice != nullptr) {
+        cudaError_t err = funcs.cudaSetDevice(device_id_);
+        if (!check_cuda_error(err, "cudaSetDevice")) {
+            return nullptr;
+        }
+    }
+    cudaStream_t stream = nullptr;
+    cudaError_t error = funcs.cudaStreamCreate(&stream);
+    if (!check_cuda_error(error, "cudaStreamCreate") || stream == nullptr) {
+        return nullptr;
+    }
+    return stream;
 }
 #endif
 

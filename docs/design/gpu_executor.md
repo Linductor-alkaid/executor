@@ -329,24 +329,30 @@ public:
 protected:
     /**
      * @brief 提交 GPU kernel 实现（内部方法）
-     * 
-     * @param kernel_func GPU kernel 函数（类型擦除）
+     *
+     * kernel_func 接收流句柄 void*：nullptr 表示默认流，非空表示后端流（如 cudaStream_t）。
+     *
+     * @param kernel_func GPU kernel 函数（类型擦除，接收 void* 流句柄）
      * @param config GPU 任务配置
      * @return std::future<void> 任务执行结果的 future
      */
     virtual std::future<void> submit_kernel_impl(
-        std::function<void()> kernel_func,
+        std::function<void(void*)> kernel_func,
         const gpu::GpuTaskConfig& config) = 0;
 };
 
-// 模板方法实现
+// 模板方法实现：支持 void(void*) 与 void() 两种 kernel 签名
 template<typename KernelFunc>
 auto IGpuExecutor::submit_kernel(KernelFunc&& kernel, const gpu::GpuTaskConfig& config)
     -> std::future<void> {
-    // 类型擦除：将 kernel 函数包装为 std::function
-    auto kernel_func = [kernel = std::forward<KernelFunc>(kernel)]() mutable {
-        kernel();  // 调用实际的 kernel 函数
-    };
+    std::function<void(void*)> kernel_func;
+    if constexpr (std::is_invocable_v<KernelFunc, void*>) {
+        kernel_func = [k = std::forward<KernelFunc>(kernel)](void* stream) mutable { k(stream); };
+    } else {
+        kernel_func = [k = std::forward<KernelFunc>(kernel)](void* stream) mutable {
+            (void)stream; k();
+        };
+    }
     return submit_kernel_impl(std::move(kernel_func), config);
 }
 
@@ -630,7 +636,7 @@ public:
 
 protected:
     std::future<void> submit_kernel_impl(
-        std::function<void()> kernel_func,
+        std::function<void(void*)> kernel_func,
         const GpuTaskConfig& config) override;
 
 private:
@@ -761,6 +767,8 @@ private:
 
 ## 使用示例
 
+**流与 kernel 签名说明**：`GpuTaskConfig::stream_id` 指定执行流（0=默认流，1..N 为流池或 `create_stream` 返回的流）。kernel 可为 `void()` 或 `void(void*)`：后者接收流句柄，CUDA 下需 `static_cast<cudaStream_t>(stream)` 后传入 `<<<..., stream>>>`；`void()` 仍受支持，等价于默认流。
+
 ### 示例 1：基本 GPU 任务提交
 
 ```cpp
@@ -779,15 +787,16 @@ int main() {
     
     executor.register_gpu_executor("cuda0", gpu_config);
     
-    // 提交 GPU kernel 任务
+    // 提交 GPU kernel 任务（可选 task_config.stream_id 指定流）
     executor::gpu::GpuTaskConfig task_config;
     task_config.grid_size[0] = 1024;
     task_config.block_size[0] = 256;
+    task_config.stream_id = 1;  // 0=默认流，1..N=流池/create_stream 的流
     
     auto future = executor.submit_gpu("cuda0",
-        [](cudaStream_t stream) {
-            // CUDA kernel 调用
-            my_kernel<<<1024, 256, 0, stream>>>(...);
+        [](void* stream) {
+            auto s = static_cast<cudaStream_t>(stream);
+            my_kernel<<<1024, 256, 0, s>>>(...);
         },
         task_config
     );

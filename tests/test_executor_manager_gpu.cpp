@@ -128,15 +128,14 @@ public:
     }
 
     std::future<void> submit_kernel_impl(
-        std::function<void()> kernel_func,
+        std::function<void(void*)> kernel_func,
         const gpu::GpuTaskConfig& config) override {
         (void)config;
         auto promise = std::make_shared<std::promise<void>>();
         auto future = promise->get_future();
         
-        // 立即执行 kernel（Mock）
         if (kernel_func) {
-            kernel_func();
+            kernel_func(nullptr);
         }
         promise->set_value();
         

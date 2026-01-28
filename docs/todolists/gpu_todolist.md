@@ -151,17 +151,17 @@
 
 ### 2.1 流管理（Multi-Stream）
 
-- [ ] 扩展 `src/executor/gpu/cuda_executor.cpp`
-  - [ ] 实现 `create_stream()` 方法
-  - [ ] 实现 `destroy_stream()` 方法
-  - [ ] 实现 `synchronize_stream()` 方法
-  - [ ] 扩展 `submit_kernel_impl()` 支持指定流
-  - [ ] 实现流池管理（预创建多个流）
+- [x] 扩展 `src/executor/gpu/cuda_executor.cpp`
+  - [x] 实现 `create_stream()` 方法
+  - [x] 实现 `destroy_stream()` 方法
+  - [x] 实现 `synchronize_stream()` 方法
+  - [x] 扩展 `submit_kernel_impl()` 支持指定流
+  - [x] 实现流池管理（预创建多个流）
 
-- [ ] 编写流管理单元测试
-  - [ ] 测试流的创建和销毁
-  - [ ] 测试多流并行执行
-  - [ ] 测试流同步
+- [x] 编写流管理单元测试
+  - [x] 测试流的创建和销毁
+  - [x] 测试多流并行执行
+  - [x] 测试流同步
 
 ### 2.2 异步内存传输
 

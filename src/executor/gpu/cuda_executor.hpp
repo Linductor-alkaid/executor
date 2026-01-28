@@ -70,7 +70,7 @@ protected:
      * @brief 提交 GPU kernel 实现（内部方法）
      */
     std::future<void> submit_kernel_impl(
-        std::function<void()> kernel_func,
+        std::function<void(void*)> kernel_func,
         const GpuTaskConfig& config) override;
 
 private:
@@ -104,6 +104,23 @@ private:
      */
 #ifdef EXECUTOR_ENABLE_CUDA
     cudaStream_t get_default_stream() const;
+#endif
+
+    /**
+     * @brief 根据 stream_id 解析流句柄（0=默认流，1..N=streams_[id-1]）
+     * @param stream_id 流ID
+     * @return 流句柄，无效时返回 nullptr（表示默认流）
+     */
+#ifdef EXECUTOR_ENABLE_CUDA
+    cudaStream_t get_stream(int stream_id) const;
+#endif
+
+    /**
+     * @brief 创建单个流（不加锁，由调用方持有 streams_mutex_ 时使用）
+     * @return 新流句柄，失败返回 nullptr
+     */
+#ifdef EXECUTOR_ENABLE_CUDA
+    cudaStream_t create_one_stream();
 #endif
 
 private:

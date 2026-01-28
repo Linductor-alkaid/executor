@@ -332,13 +332,15 @@ public:
 protected:
     /**
      * @brief 提交 GPU kernel 实现（内部方法）
-     * 
-     * @param kernel_func GPU kernel 函数（类型擦除）
+     *
+     * kernel_func 接收流句柄 void*：nullptr 表示默认流，非空表示后端流（如 cudaStream_t）。
+     *
+     * @param kernel_func GPU kernel 函数（类型擦除，接收 void* 流句柄）
      * @param config GPU 任务配置
      * @return std::future<void> 任务执行结果的 future
      */
     virtual std::future<void> submit_kernel_impl(
-        std::function<void()> kernel_func,
+        std::function<void(void*)> kernel_func,
         const gpu::GpuTaskConfig& config) = 0;
 };
 
@@ -346,10 +348,17 @@ protected:
 template<typename KernelFunc>
 auto IGpuExecutor::submit_kernel(KernelFunc&& kernel, const gpu::GpuTaskConfig& config)
     -> std::future<void> {
-    // 类型擦除：将 kernel 函数包装为 std::function
-    auto kernel_func = [kernel = std::forward<KernelFunc>(kernel)]() mutable {
-        kernel();  // 调用实际的 kernel 函数
-    };
+    std::function<void(void*)> kernel_func;
+    if constexpr (std::is_invocable_v<KernelFunc, void*>) {
+        kernel_func = [kernel = std::forward<KernelFunc>(kernel)](void* stream) mutable {
+            kernel(stream);
+        };
+    } else {
+        kernel_func = [kernel = std::forward<KernelFunc>(kernel)](void* stream) mutable {
+            (void)stream;
+            kernel();
+        };
+    }
     return submit_kernel_impl(std::move(kernel_func), config);
 }
 
