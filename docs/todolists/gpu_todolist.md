@@ -237,16 +237,16 @@
 
 ### 2.6 异常处理
 
-- [ ] 扩展 `src/executor/gpu/cuda_executor.cpp`
-  - [ ] 实现 CUDA 错误检查（`cudaGetLastError`、`cudaDeviceSynchronize`）
-  - [ ] 实现错误码转换（CUDA 错误码 → 标准异常）
-  - [ ] 实现异常捕获和记录
-  - [ ] 集成到 `ExceptionHandler`
+- [x] 扩展 `src/executor/gpu/cuda_executor.cpp`
+  - [x] 实现 CUDA 错误检查（`cudaGetLastError`、`cudaDeviceSynchronize`）
+  - [x] 实现错误码转换（CUDA 错误码 → 标准异常）
+  - [x] 实现异常捕获和记录
+  - [x] 集成到 `ExceptionHandler`
 
-- [ ] 编写异常处理测试
-  - [ ] 测试 CUDA 错误处理
-  - [ ] 测试异常传播
-  - [ ] 测试错误日志记录
+- [x] 编写异常处理测试
+  - [x] 测试 CUDA 错误处理
+  - [x] 测试异常传播
+  - [x] 测试错误日志记录
 
 ### 2.7 任务队列优化
 

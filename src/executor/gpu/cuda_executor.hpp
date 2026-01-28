@@ -5,6 +5,8 @@
 #include "../../../include/executor/types.hpp"
 #include "cuda_loader.hpp"
 #include "gpu_memory_manager.hpp"
+#include "../util/exception_handler.hpp"
+#include <exception>
 #include <memory>
 #include <string>
 #include <atomic>
@@ -69,6 +71,13 @@ public:
     bool start() override;
     void stop() override;
     void wait_for_completion() override;
+
+    /**
+     * @brief 设置任务异常回调（与 CPU 执行器一致，用于监控/日志）
+     * @param callback 回调函数，参数为执行器名称和异常指针
+     */
+    void set_exception_callback(
+        std::function<void(const std::string&, std::exception_ptr)> callback);
 
 protected:
     /**
@@ -147,6 +156,16 @@ private:
      */
     void raw_free_device_memory(void* ptr);
 
+    /**
+     * @brief 将 CUDA 错误码转换为标准异常（用于 ExceptionHandler / future）
+     * @param error_code CUDA 错误码
+     * @param operation 操作名称
+     * @return 异常指针，可传递给 handle_task_exception 或 promise::set_exception
+     */
+#ifdef EXECUTOR_ENABLE_CUDA
+    std::exception_ptr make_cuda_exception_ptr(cudaError_t error_code, const char* operation) const;
+#endif
+
 private:
     std::string name_;                          // 执行器名称
     GpuExecutorConfig config_;                  // 配置
@@ -172,6 +191,8 @@ private:
     std::atomic<size_t> completed_kernels_{0}; // 已完成kernel数
     std::atomic<size_t> failed_kernels_{0};    // 失败kernel数
     std::atomic<int64_t> total_kernel_time_ns_{0}; // 总kernel执行时间（纳秒）
+
+    util::ExceptionHandler exception_handler_;  // 任务异常处理，与 CPU 执行器一致
 };
 
 } // namespace gpu

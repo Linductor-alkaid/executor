@@ -2,6 +2,7 @@
 #include "gpu_memory_manager.hpp"
 #include <chrono>
 #include <cstdio>
+#include <exception>
 #include <stdexcept>
 #include <thread>
 #include <functional>
@@ -188,13 +189,33 @@ bool CudaExecutor::initialize_device() {
 
 #ifdef EXECUTOR_ENABLE_CUDA
 bool CudaExecutor::check_cuda_error(cudaError_t error_code, const char* operation) const {
-    (void)operation;  // 暂时未使用，保留用于未来错误日志
     if (error_code != cudaSuccess) {
-        // 可以在这里记录错误日志
-        // 暂时不抛出异常，返回 false 表示失败
+        if (loader_->is_available()) {
+            const auto& funcs = loader_->get_functions();
+            if (funcs.cudaGetErrorString != nullptr) {
+                const char* msg = funcs.cudaGetErrorString(error_code);
+                std::fprintf(stderr, "CudaExecutor: %s failed: %s\n",
+                    operation, msg ? msg : "unknown");
+            }
+        }
         return false;
     }
     return true;
+}
+
+std::exception_ptr CudaExecutor::make_cuda_exception_ptr(cudaError_t error_code, const char* operation) const {
+    std::string msg = std::string(operation) + " failed";
+    if (loader_->is_available()) {
+        const auto& funcs = loader_->get_functions();
+        if (funcs.cudaGetErrorString != nullptr) {
+            const char* errStr = funcs.cudaGetErrorString(error_code);
+            if (errStr && errStr[0] != '\0') {
+                msg += ": ";
+                msg += errStr;
+            }
+        }
+    }
+    return std::make_exception_ptr(std::runtime_error(msg));
 }
 #else
 bool CudaExecutor::check_cuda_error(int error_code, const char* operation) const {
@@ -282,6 +303,11 @@ void CudaExecutor::stop() {
     
     // 等待所有任务完成
     wait_for_completion();
+}
+
+void CudaExecutor::set_exception_callback(
+    std::function<void(const std::string&, std::exception_ptr)> callback) {
+    exception_handler_.set_exception_callback(std::move(callback));
 }
 
 void CudaExecutor::wait_for_completion() {
@@ -854,16 +880,33 @@ std::future<void> CudaExecutor::submit_kernel_impl(
         try {
 #ifdef EXECUTOR_ENABLE_CUDA
             if (!ensure_device_context()) {
-                promise->set_exception(std::make_exception_ptr(
-                    std::runtime_error("CudaExecutor: ensure_device_context failed")));
+                auto eptr = std::make_exception_ptr(
+                    std::runtime_error("CudaExecutor: ensure_device_context failed"));
+                exception_handler_.handle_task_exception(name_, eptr);
+                promise->set_exception(eptr);
+                failed_kernels_++;
                 active_kernels_--;
                 return;
             }
 #endif
             kernel_func(stream_ptr);
 #ifdef EXECUTOR_ENABLE_CUDA
-            if (loader_->is_available() && !config.async) {
-                synchronize_stream(config.stream_id);
+            if (loader_->is_available()) {
+                const auto& funcs = loader_->get_functions();
+                if (funcs.cudaGetLastError != nullptr) {
+                    cudaError_t err = funcs.cudaGetLastError();
+                    if (err != cudaSuccess) {
+                        std::exception_ptr eptr = make_cuda_exception_ptr(err, "cudaGetLastError (after kernel)");
+                        exception_handler_.handle_task_exception(name_, eptr);
+                        promise->set_exception(eptr);
+                        failed_kernels_++;
+                        active_kernels_--;
+                        return;
+                    }
+                }
+                if (!config.async) {
+                    synchronize_stream(config.stream_id);
+                }
             }
 #endif
             promise->set_value();
@@ -874,6 +917,7 @@ std::future<void> CudaExecutor::submit_kernel_impl(
             total_kernel_time_ns_ += duration;
             completed_kernels_++;
         } catch (...) {
+            exception_handler_.handle_task_exception(name_, std::current_exception());
             promise->set_exception(std::current_exception());
             failed_kernels_++;
         }

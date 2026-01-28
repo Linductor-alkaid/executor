@@ -42,6 +42,9 @@ bool test_cuda_executor_status();
 bool test_cuda_executor_stream_management();
 bool test_cuda_executor_async_copy_overlap();
 bool test_cuda_executor_stream_callback();
+bool test_cuda_exception_propagation();
+bool test_cuda_error_handling();
+bool test_cuda_exception_callback();
 
 // ========== CUDA 执行器基本功能测试 ==========
 
@@ -678,6 +681,120 @@ bool test_cuda_executor_stream_callback() {
 #endif
 }
 
+// ========== 2.6 异常处理测试 ==========
+
+bool test_cuda_exception_propagation() {
+    std::cout << "Testing CudaExecutor exception propagation..." << std::endl;
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_exception";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    CudaExecutor executor(config.name, config);
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping" << std::endl;
+        return true;
+    }
+    GpuTaskConfig task_config;
+    task_config.async = false;
+    auto future = executor.submit_kernel([](void*) {
+        throw std::runtime_error("test host exception");
+    }, task_config);
+    bool got_exception = false;
+    try {
+        future.get();
+    } catch (const std::runtime_error& e) {
+        got_exception = (std::strcmp(e.what(), "test host exception") == 0);
+    } catch (...) {
+        got_exception = false;
+    }
+    TEST_ASSERT(got_exception, "future.get() should throw the host exception");
+    auto status = executor.get_status();
+    TEST_ASSERT(status.failed_kernels >= 1u, "failed_kernels should be incremented");
+    executor.stop();
+    std::cout << "  CudaExecutor exception propagation: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled, skipping" << std::endl;
+    return true;
+#endif
+}
+
+bool test_cuda_error_handling() {
+    std::cout << "Testing CudaExecutor CUDA error handling..." << std::endl;
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_error";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    CudaExecutor executor(config.name, config);
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping" << std::endl;
+        return true;
+    }
+    GpuTaskConfig task_config;
+    task_config.async = false;
+    // Kernel that triggers a CUDA error: allocate an unreasonably large size so cudaMalloc fails
+    auto future = executor.submit_kernel([&executor](void*) {
+        (void)executor.allocate_device_memory(static_cast<size_t>(-1));
+    }, task_config);
+    bool got_exception = false;
+    try {
+        future.get();
+    } catch (const std::exception&) {
+        got_exception = true;
+    } catch (...) {
+        got_exception = true;
+    }
+    TEST_ASSERT(got_exception, "future.get() should throw after CUDA error (cudaGetLastError)");
+    auto status = executor.get_status();
+    TEST_ASSERT(status.failed_kernels >= 1u, "failed_kernels should be incremented after CUDA error");
+    executor.stop();
+    std::cout << "  CudaExecutor CUDA error handling: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled, skipping" << std::endl;
+    return true;
+#endif
+}
+
+bool test_cuda_exception_callback() {
+    std::cout << "Testing CudaExecutor exception callback..." << std::endl;
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_callback";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    CudaExecutor executor(config.name, config);
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping" << std::endl;
+        return true;
+    }
+    std::atomic<bool> callback_invoked{false};
+    std::string captured_name;
+    executor.set_exception_callback([&callback_invoked, &captured_name](
+        const std::string& executor_name, std::exception_ptr eptr) {
+        callback_invoked.store(true);
+        captured_name = executor_name;
+        (void)eptr;
+    });
+    GpuTaskConfig task_config;
+    task_config.async = false;
+    auto future = executor.submit_kernel([](void*) {
+        throw std::runtime_error("callback test");
+    }, task_config);
+    try { future.get(); } catch (...) {}
+    TEST_ASSERT(callback_invoked.load(), "ExceptionHandler callback should have been invoked");
+    TEST_ASSERT(captured_name == "test_cuda_callback", "Callback should receive correct executor name");
+    executor.stop();
+    std::cout << "  CudaExecutor exception callback: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled, skipping" << std::endl;
+    return true;
+#endif
+}
+
 // ========== 主函数 ==========
 
 // 全局初始化函数，在main之前执行
@@ -724,6 +841,9 @@ int main() {
         all_passed &= test_cuda_executor_stream_sync();
         all_passed &= test_cuda_executor_async_copy_overlap();
         all_passed &= test_cuda_executor_stream_callback();
+        all_passed &= test_cuda_exception_propagation();
+        all_passed &= test_cuda_error_handling();
+        all_passed &= test_cuda_exception_callback();
         
         std::cout << "=========================================" << std::endl;
         if (all_passed) {
