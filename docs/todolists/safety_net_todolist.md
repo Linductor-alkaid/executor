@@ -50,22 +50,22 @@
 
 ## 阶段 3：文档更新
 
-- [ ] 更新 [API.md](../API.md) 的“初始化与关闭”一节
-  - [ ] 说明：**若不调用 `initialize(config)`，首次提交任务时会使用默认配置自动初始化；**需要自定义线程数、队列容量等时，请在首次提交前显式调用 `initialize(config)`。
-  - [ ] 说明：**使用单例时，若未显式调用 `shutdown()`，进程退出时会自动关闭所有执行器；**若需在退出前等待未完成任务完成，请在业务逻辑中显式调用 `shutdown(true)`。
-  - [ ] 可选：在“注意事项”中补充懒初始化后不可再通过 `initialize()` 更换配置、atexit 使用 `shutdown(false)` 不等待任务、避免在静态析构中使用 Executor 等
+- [x] 更新 [API.md](../API.md) 的“初始化与关闭”一节
+  - [x] 说明：**若不调用 `initialize(config)`，首次提交任务时会使用默认配置自动初始化；**需要自定义线程数、队列容量等时，请在首次提交前显式调用 `initialize(config)`。
+  - [x] 说明：**使用单例时，若未显式调用 `shutdown()`，进程退出时会自动关闭所有执行器；**若需在退出前等待未完成任务完成，请在业务逻辑中显式调用 `shutdown(true)`。
+  - [x] 可选：在“注意事项”中补充懒初始化后不可再通过 `initialize()` 更换配置、atexit 使用 `shutdown(false)` 不等待任务、避免在静态析构中使用 Executor 等
 
-- [ ] 可选：在 [README.md](../../README.md) 的“基本用法”中简要提及“可不显式 initialize/shutdown，库会兜底”，并仍推荐显式调用
+- [x] 可选：在 [README.md](../../README.md) 的“基本用法”中简要提及“可不显式 initialize/shutdown，库会兜底”，并仍推荐显式调用
 
 ---
 
 ## 阶段 4：测试
 
-- [ ] **懒初始化**：不调用 `initialize()`，直接 `Executor::instance().submit(...)`，断言任务执行成功且不抛异常
-- [ ] **懒初始化线程安全**：多线程同时首次调用 `submit`，断言只初始化一次、任务均执行成功
-- [ ] **显式初始化优先**：先 `initialize(custom_config)` 再 `submit`，断言使用的线程数/配置与 custom_config 一致（如通过 `get_async_executor_status()` 或等价接口验证）
-- [ ] **退出时关闭（单例）**：使用单例、不调用 `shutdown()`，在 atexit 或退出前通过测试钩子/mock 断言 shutdown 被调用；或进程退出后无泄漏（如 valgrind/AddressSanitizer）
-- [ ] **实例模式不注册 atexit**：仅使用实例模式 `Executor ex; ex.submit(...);`，不触发单例，断言 atexit 未注册或进程行为正常（如 atexit 回调调用次数或单例未创建）
+- [x] **懒初始化**：不调用 `initialize()`，直接 `Executor::instance().submit(...)`，断言任务执行成功且不抛异常
+- [x] **懒初始化线程安全**：多线程同时首次调用 `submit`，断言只初始化一次、任务均执行成功
+- [x] **显式初始化优先**：先 `initialize(custom_config)` 再 `submit`，断言使用的线程数/配置与 custom_config 一致（如通过 `get_async_executor_status()` 或等价接口验证）
+- [x] **退出时关闭（单例）**：使用单例、不调用 `shutdown()`，在 atexit 或退出前通过测试钩子/mock 断言 shutdown 被调用；或进程退出后无泄漏（如 valgrind/AddressSanitizer）
+- [x] **实例模式不注册 atexit**：仅使用实例模式 `Executor ex; ex.submit(...);`，不触发单例，断言 atexit 未注册或进程行为正常（如 atexit 回调调用次数或单例未创建）
 
 ---
 
