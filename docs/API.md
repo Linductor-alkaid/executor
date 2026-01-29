@@ -33,8 +33,11 @@ void shutdown(bool wait_for_tasks = true);      // 关闭所有执行器
 void wait_for_completion();                     // 等待已提交的异步任务完成
 ```
 
-- 使用前必须先 `initialize()`；否则 `submit` 等会抛 `std::runtime_error`。
+- **懒初始化**：若不调用 `initialize(config)`，首次提交任务时会使用默认配置自动初始化（不抛异常）。需要自定义线程数、队列容量等时，请在首次提交前显式调用 `initialize(config)`。
+- **退出时自动关闭（单例）**：使用单例时，若未显式调用 `shutdown()`，进程退出时会自动关闭所有执行器。若需在退出前等待未完成任务完成，请在业务逻辑中显式调用 `shutdown(true)`。
 - `shutdown(true)` 会等待队列中任务完成后再退出。
+
+**注意事项**：懒初始化后不可再通过 `initialize()` 更换配置（已初始化则返回 false）。atexit 使用 `shutdown(false)`，不等待未完成任务。避免在静态析构中使用 Executor。
 
 ---
 

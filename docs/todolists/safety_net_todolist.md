@@ -8,25 +8,25 @@
 
 ### 1.1 ExecutorManager 改动
 
-- [ ] 在 `include/executor/executor_manager.hpp` 中增加成员
-  - [ ] 添加“默认初始化用”的 `std::once_flag`（如 `default_init_once_`）
-  - [ ] 可选：添加“是否已显式初始化”的标记（若需区分显式/懒初始化，当前设计可不区分）
+- [x] 在 `include/executor/executor_manager.hpp` 中增加成员
+  - [x] 添加“默认初始化用”的 `std::once_flag`（如 `default_init_once_`）
+  - [x] 可选：添加“是否已显式初始化”的标记（若需区分显式/懒初始化，当前设计可不区分）
 
-- [ ] 在 `src/executor/executor_manager.cpp` 中实现懒初始化
-  - [ ] 在 `get_default_async_executor()` 中：若 `default_async_executor_` 为空，则 `std::call_once(default_init_once_, [this]{ initialize_async_executor(default_config); })`，再返回 `default_async_executor_.get()`
-  - [ ] 使用默认 `ExecutorConfig`（与 `config.hpp` 中结构体默认值一致：min_threads=4, max_threads=16, queue_capacity=1000 等）
-  - [ ] 保证线程安全：多线程同时首次调用 `get_default_async_executor()` 时只初始化一次
+- [x] 在 `src/executor/executor_manager.cpp` 中实现懒初始化
+  - [x] 在 `get_default_async_executor()` 中：若 `default_async_executor_` 为空，则 `std::call_once(default_init_once_, [this]{ initialize_async_executor(default_config); })`，再返回 `default_async_executor_.get()`
+  - [x] 使用默认 `ExecutorConfig`（与 `config.hpp` 中结构体默认值一致：min_threads=4, max_threads=16, queue_capacity=1000 等）
+  - [x] 保证线程安全：多线程同时首次调用 `get_default_async_executor()` 时只初始化一次
 
 ### 1.2 Executor Facade 行为
 
-- [ ] 确认 `Executor::submit`、`submit_priority`、`submit_delayed`、`submit_periodic` 均通过 `manager_->get_default_async_executor()` 获取执行器
-  - [ ] 若当前实现中“未初始化则抛异常”的逻辑在 Executor 层，改为：获取指针后若仍为 nullptr（如已 shutdown）再抛异常或按设计文档处理；否则依赖 Manager 懒初始化后返回非空指针，不再因“未 initialize”抛异常
-  - [ ] 定时器线程内部通过 `get_default_async_executor()` 获取执行器，确认其会自然受益于懒初始化
+- [x] 确认 `Executor::submit`、`submit_priority`、`submit_delayed`、`submit_periodic` 均通过 `manager_->get_default_async_executor()` 获取执行器
+  - [x] 若当前实现中“未初始化则抛异常”的逻辑在 Executor 层，改为：获取指针后若仍为 nullptr（如已 shutdown）再抛异常或按设计文档处理；否则依赖 Manager 懒初始化后返回非空指针，不再因“未 initialize”抛异常
+  - [x] 定时器线程内部通过 `get_default_async_executor()` 获取执行器，确认其会自然受益于懒初始化
 
 ### 1.3 边界行为
 
-- [ ] 懒初始化后用户再调用 `initialize(other_config)` 保持现有语义：`initialize_async_executor` 返回 false（已初始化则不再初始化），无需改代码，仅需文档说明
-  - [ ] 确认 `ExecutorManager::initialize_async_executor` 在“已存在 default_async_executor_”时返回 false
+- [x] 懒初始化后用户再调用 `initialize(other_config)` 保持现有语义：`initialize_async_executor` 返回 false（已初始化则不再初始化），无需改代码，仅需文档说明
+  - [x] 确认 `ExecutorManager::initialize_async_executor` 在“已存在 default_async_executor_”时返回 false
 
 ---
 
@@ -34,17 +34,17 @@
 
 ### 2.1 atexit 注册与回调
 
-- [ ] 在 `ExecutorManager::instance()` 的 `std::call_once` 初始化块中，在 `new ExecutorManager()` 之后
-  - [ ] 调用 `std::atexit(&ExecutorManager::atexit_shutdown)`（或注册一静态/自由函数，在其中调用 `ExecutorManager::instance().shutdown(false)`）
-  - [ ] 仅单例创建时注册一次，实例模式的 `ExecutorManager` 不经过 `instance()`，故不会注册 atexit
+- [x] 在 `ExecutorManager::instance()` 的 `std::call_once` 初始化块中，在 `new ExecutorManager()` 之后
+  - [x] 调用 `std::atexit(&ExecutorManager::atexit_shutdown)`（或注册一静态/自由函数，在其中调用 `ExecutorManager::instance().shutdown(false)`）
+  - [x] 仅单例创建时注册一次，实例模式的 `ExecutorManager` 不经过 `instance()`，故不会注册 atexit
 
-- [ ] 实现 `ExecutorManager::atexit_shutdown()`（或等价回调）
-  - [ ] 内部调用 `ExecutorManager::instance().shutdown(false)`（不等待未完成任务）
-  - [ ] 确保回调不抛异常：在回调内 try-catch 吞掉异常，或确认 `shutdown(false)` 在正常使用下不抛，避免 `std::terminate`
+- [x] 实现 `ExecutorManager::atexit_shutdown()`（或等价回调）
+  - [x] 内部调用 `ExecutorManager::instance().shutdown(false)`（不等待未完成任务）
+  - [x] 确保回调不抛异常：在回调内 try-catch 吞掉异常，或确认 `shutdown(false)` 在正常使用下不抛，避免 `std::terminate`
 
 ### 2.2 头文件与声明
 
-- [ ] 在 `include/executor/executor_manager.hpp` 中声明 `atexit_shutdown` 为静态成员（若采用成员形式），或在一 .cpp 内实现自由函数并仅通过 atexit 注册使用
+- [x] 在 `include/executor/executor_manager.hpp` 中声明 `atexit_shutdown` 为静态成员（若采用成员形式），或在一 .cpp 内实现自由函数并仅通过 atexit 注册使用
 
 ---
 

@@ -176,6 +176,12 @@ private:
     // 默认异步执行器（线程池）
     std::unique_ptr<IAsyncExecutor> default_async_executor_;
 
+    // 已关闭标记：shutdown 后不再懒初始化，get_default_async_executor() 直接返回 nullptr
+    bool default_async_shutdown_ = false;
+
+    // 懒初始化用：保证多线程首次调用 get_default_async_executor() 时只初始化一次
+    std::once_flag default_init_once_;
+
     // 实时执行器注册表
     std::unordered_map<std::string, std::unique_ptr<IRealtimeExecutor>> realtime_executors_;
 
@@ -190,6 +196,9 @@ private:
 
     // 统计收集器（任务监控）
     std::unique_ptr<monitor::StatisticsCollector> statistics_collector_;
+
+    // 退出时自动关闭：atexit 回调（仅单例创建时注册，无参无返回、不抛异常）
+    static void atexit_shutdown();
 
     // 单例实例（线程安全初始化）
     static ExecutorManager* instance_;

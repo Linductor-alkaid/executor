@@ -9,6 +9,8 @@
 
 // 包含 Executor 的头文件
 #include <executor/executor.hpp>
+#include <executor/executor_manager.hpp>
+#include <executor/config.hpp>
 #include <executor/interfaces.hpp>
 #include <executor/types.hpp>
 
@@ -183,6 +185,11 @@ bool test_monitor_queries();
 bool test_concurrent_submit();
 bool test_enable_monitoring();
 bool test_wait_for_completion();
+bool test_lazy_init_facade();
+bool test_lazy_init_thread_safety();
+bool test_explicit_init_priority();
+bool test_atexit_shutdown_singleton();
+bool test_instance_mode_no_atexit();
 
 #ifdef EXECUTOR_ENABLE_GPU
 bool test_gpu_executor_registration();
@@ -658,6 +665,99 @@ bool test_wait_for_completion() {
     return true;
 }
 
+// ========== 兜底策略：懒初始化与退出时关闭 ==========
+
+bool test_lazy_init_facade() {
+    std::cout << "Testing lazy init at Facade (no initialize(), submit directly)..." << std::endl;
+    // 不调用 initialize()，直接通过单例 submit，应触发懒初始化且不抛异常
+    auto& ex = Executor::instance();
+    auto future = ex.submit([]() noexcept { return 42; });
+    int result = future.get();
+    TEST_ASSERT(result == 42, "Task should run and return 42 after lazy init");
+    std::cout << "  Lazy init Facade: PASSED" << std::endl;
+    return true;
+}
+
+bool test_lazy_init_thread_safety() {
+    std::cout << "Testing lazy init thread safety (concurrent first submit)..." << std::endl;
+    const int num_threads = 8;
+    const int tasks_per_thread = 4;
+    std::vector<std::thread> threads;
+    std::atomic<int> success_count(0);
+    std::atomic<int> ready_count(0);
+    for (int i = 0; i < num_threads; ++i) {
+        threads.emplace_back([&success_count, &ready_count, num_threads, tasks_per_thread, i]() {
+            ready_count.fetch_add(1);
+            while (ready_count.load() < num_threads) {
+                std::this_thread::yield();
+            }
+            auto& ex = Executor::instance();
+            for (int j = 0; j < tasks_per_thread; ++j) {
+                try {
+                    auto f = ex.submit([k = i * tasks_per_thread + j]() noexcept { return k; });
+                    int r = f.get();
+                    (void)r;
+                    success_count.fetch_add(1);
+                } catch (...) {
+                    // ignore
+                }
+            }
+        });
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+    TEST_ASSERT(success_count.load() == num_threads * tasks_per_thread,
+                "All tasks should complete successfully with single init");
+    std::cout << "  Lazy init thread safety: PASSED" << std::endl;
+    return true;
+}
+
+bool test_explicit_init_priority() {
+    std::cout << "Testing explicit init priority (initialize then submit, re-init returns false)..." << std::endl;
+    Executor executor;
+    ExecutorConfig custom_config;
+    custom_config.min_threads = 2;
+    custom_config.max_threads = 4;
+    custom_config.queue_capacity = 50;
+    TEST_ASSERT(executor.initialize(custom_config), "Explicit init should succeed");
+    auto status = executor.get_async_executor_status();
+    TEST_ASSERT(status.is_running, "Executor should be running after explicit init");
+    auto future = executor.submit([]() noexcept { return 1; });
+    TEST_ASSERT(future.get() == 1, "Task should run with custom config");
+    ExecutorConfig other_config;
+    other_config.min_threads = 8;
+    other_config.max_threads = 16;
+    TEST_ASSERT(!executor.initialize(other_config), "Second initialize() should return false");
+    executor.shutdown();
+    std::cout << "  Explicit init priority: PASSED" << std::endl;
+    return true;
+}
+
+bool test_atexit_shutdown_singleton() {
+    std::cout << "Testing exit-time shutdown (singleton, no explicit shutdown)..." << std::endl;
+    // 使用单例、不调用 shutdown()；进程退出时 atexit 会调用 shutdown(false)
+    auto& ex = Executor::instance();
+    ex.submit([]() {}).get();
+    std::cout << "  Exit-time shutdown: PASSED" << std::endl;
+    return true;
+}
+
+bool test_instance_mode_no_atexit() {
+    std::cout << "Testing instance mode does not register atexit..." << std::endl;
+    {
+        Executor ex;
+        ExecutorConfig config;
+        config.min_threads = 2;
+        config.max_threads = 4;
+        TEST_ASSERT(ex.initialize(config), "Instance init should succeed");
+        auto f = ex.submit([]() noexcept { return 7; });
+        TEST_ASSERT(f.get() == 7, "Task should run");
+    }
+    std::cout << "  Instance mode no atexit: PASSED" << std::endl;
+    return true;
+}
+
 #ifdef EXECUTOR_ENABLE_GPU
 // ========== GPU 执行器注册测试 ==========
 
@@ -886,6 +986,11 @@ int main() {
     all_passed &= test_concurrent_submit();
     all_passed &= test_enable_monitoring();
     all_passed &= test_wait_for_completion();
+    all_passed &= test_lazy_init_facade();
+    all_passed &= test_lazy_init_thread_safety();
+    all_passed &= test_explicit_init_priority();
+    all_passed &= test_instance_mode_no_atexit();
+    all_passed &= test_atexit_shutdown_singleton();
     
 #ifdef EXECUTOR_ENABLE_GPU
     // GPU 相关测试

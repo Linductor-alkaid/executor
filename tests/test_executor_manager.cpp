@@ -222,16 +222,24 @@ bool test_async_executor_task_submission() {
     return true;
 }
 
-bool test_async_executor_uninitialized() {
-    std::cout << "Testing async executor uninitialized access..." << std::endl;
+bool test_async_executor_lazy_init() {
+    std::cout << "Testing async executor lazy initialization..." << std::endl;
     
     ExecutorManager manager;
     
-    // 未初始化时获取执行器应该返回 nullptr
+    // 未显式调用 initialize() 时，首次 get_default_async_executor() 触发懒初始化并返回非空
     IAsyncExecutor* executor = manager.get_default_async_executor();
-    TEST_ASSERT(executor == nullptr, "Uninitialized executor should return nullptr");
+    TEST_ASSERT(executor != nullptr, "Lazy init: get_default_async_executor() should return non-null");
     
-    std::cout << "  Async executor uninitialized access: PASSED" << std::endl;
+    // 提交任务验证执行器可用
+    std::atomic<int> done{0};
+    executor->submit([&done]() { done = 1; });
+    while (done.load() == 0) {
+        std::this_thread::yield();
+    }
+    TEST_ASSERT(done.load() == 1, "Task should run after lazy init");
+    
+    std::cout << "  Async executor lazy initialization: PASSED" << std::endl;
     return true;
 }
 
@@ -541,7 +549,7 @@ int main() {
     // 异步执行器管理测试
     all_passed &= test_async_executor_initialization();
     all_passed &= test_async_executor_task_submission();
-    all_passed &= test_async_executor_uninitialized();
+    all_passed &= test_async_executor_lazy_init();
     
     // 实时执行器管理测试
     all_passed &= test_realtime_executor_registration();

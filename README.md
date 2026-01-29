@@ -77,6 +77,8 @@ ctest --test-dir build
 
 ### 基本用法
 
+可不显式调用 `initialize`/`shutdown`，库会兜底；仍推荐在需要自定义配置或退出时显式调用。
+
 ```cpp
 #include <executor/executor.hpp>
 

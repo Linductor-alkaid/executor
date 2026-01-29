@@ -4,6 +4,7 @@
 #include "executor/monitor/statistics_collector.hpp"
 #include "executor/interfaces.hpp"
 #include "executor/config.hpp"
+#include <cstdlib>
 #include <mutex>
 #include <algorithm>
 
@@ -21,8 +22,18 @@ std::once_flag ExecutorManager::once_flag_;
 ExecutorManager& ExecutorManager::instance() {
     std::call_once(once_flag_, []() {
         instance_ = new ExecutorManager();
+        std::atexit(&ExecutorManager::atexit_shutdown);
     });
     return *instance_;
+}
+
+// 退出时自动关闭：atexit 回调，仅单例创建时注册；不等待未完成任务，不抛异常
+void ExecutorManager::atexit_shutdown() {
+    try {
+        ExecutorManager::instance().shutdown(false);
+    } catch (...) {
+        // 吞掉异常，避免 atexit 回调抛异常导致 std::terminate
+    }
 }
 
 // 构造函数（实例化模式）
@@ -71,7 +82,18 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
 }
 
 // 获取默认异步执行器（线程池）
+// 若尚未初始化，则使用默认配置懒初始化一次（线程安全由 std::call_once 保证）
+// shutdown 后不再懒初始化，直接返回 nullptr
 IAsyncExecutor* ExecutorManager::get_default_async_executor() {
+    if (default_async_shutdown_) {
+        return nullptr;
+    }
+    if (default_async_executor_ == nullptr) {
+        std::call_once(default_init_once_, [this] {
+            ExecutorConfig default_config{};
+            initialize_async_executor(default_config);
+        });
+    }
     return default_async_executor_.get();
 }
 
@@ -284,6 +306,7 @@ void ExecutorManager::shutdown(bool wait_for_tasks) {
             default_async_executor_->wait_for_completion();
         }
         default_async_executor_.reset();
+        default_async_shutdown_ = true;
     }
 }
 
