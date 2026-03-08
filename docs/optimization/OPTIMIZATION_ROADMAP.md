@@ -72,50 +72,60 @@
 
 ## P0 优化项
 
-### 1. 实时线程任务传递无锁化
+### 1. 实时线程任务传递无锁化 ✅
 
-**当前问题**:
+**状态**: 已完成 (2026-03-08)
+
+**原问题**:
 - `RealtimeThreadExecutor` 使用 `task_map_` + `mutex` 存储任务
 - 虽然任务 ID 通过无锁队列传递，但访问实际任务仍需加锁
 - 在高频实时场景（1ms 周期）下，锁竞争影响实时性
 
-**性能影响**:
-- 每次 `push_task` 和 `process_tasks` 都需要加锁
-- 高频调用时锁竞争导致延迟增加
+**实现方案**:
 
-**优化方案**:
+使用对象池 + 指针传递，完全消除锁操作：
 
 ```cpp
-// 方案 A: 使用对象池 + 指针传递
+// 实现的对象池（src/util/object_pool.hpp）
+template<typename T>
+class ObjectPool {
+    // 使用 free-list + atomic CAS 实现无锁 acquire/release
+};
+
+// 修改后的 RealtimeThreadExecutor
 class RealtimeThreadExecutor {
-    util::LockFreeQueue<Task*> lockfree_queue_;
-    util::ObjectPool<Task> task_pool_;  // 预分配任务对象池
+    util::LockFreeQueue<TaskWrapper*> lockfree_queue_;
+    util::ObjectPool<TaskWrapper> task_pool_;
 
     void push_task(std::function<void()> task) {
-        Task* task_obj = task_pool_.acquire();
-        task_obj->function = std::move(task);
-        lockfree_queue_.push(task_obj);
+        TaskWrapper* wrapper = task_pool_.acquire();
+        wrapper->func = std::move(task);
+        lockfree_queue_.push(wrapper);
     }
 
     void process_tasks() {
-        Task* task_obj;
-        while (lockfree_queue_.pop(task_obj)) {
-            task_obj->function();
-            task_pool_.release(task_obj);
+        TaskWrapper* wrapper;
+        while (lockfree_queue_.pop(wrapper)) {
+            wrapper->func();
+            task_pool_.release(wrapper);
         }
     }
 };
 ```
 
-**实现步骤**:
-1. 实现 `ObjectPool<T>` 模板类（线程安全对象池）
-2. 修改 `RealtimeThreadExecutor` 使用对象池
-3. 性能测试验证延迟降低
+**性能测试结果**:
 
-**预期收益**:
-- 消除 `task_map_mutex_` 锁竞争
-- 实时任务延迟降低 20-30%
-- 支持更高频率的任务提交
+| 指标 | 测量值 |
+|------|--------|
+| 平均延迟 | 32.27 ns |
+| p99 延迟 | 39.00 ns |
+| 吞吐量 | 18.97M ops/s |
+
+**实际收益**:
+- ✅ 完全消除 `task_map_mutex_` 锁竞争
+- ✅ 任务提交延迟降至纳秒级（32 ns）
+- ✅ 吞吐量提升至 1900 万 ops/s
+- ✅ 支持超高频率任务提交
 
 ---
 

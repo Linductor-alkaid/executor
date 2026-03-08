@@ -6,13 +6,12 @@
 #include "util/lockfree_queue.hpp"
 #include "util/exception_handler.hpp"
 #include "util/thread_utils.hpp"
+#include "util/object_pool.hpp"
 #include <string>
 #include <thread>
 #include <atomic>
 #include <chrono>
 #include <functional>
-#include <unordered_map>
-#include <mutex>
 #include <cstdint>
 
 namespace executor {
@@ -124,20 +123,20 @@ private:
      */
     void update_statistics(int64_t cycle_time_ns);
 
+    struct TaskWrapper {
+        std::function<void()> func;
+    };
+
     std::string name_;                              // 执行器名称
     RealtimeThreadConfig config_;                   // 实时线程配置
     std::thread thread_;                            // 实时线程
     std::atomic<bool> running_{false};              // 运行状态标志
-    
-    // 无锁队列（用于任务传递）
-    // 注意：std::function 不是 trivially copyable，所以使用任务 ID（uint64_t）代替
-    // 任务实际存储在 task_map_ 中
-    util::LockFreeQueue<uint64_t> lockfree_queue_;
-    
-    // 任务存储（使用 map 存储任务，key 为任务 ID）
-    std::unordered_map<uint64_t, std::function<void()>> task_map_;
-    std::mutex task_map_mutex_;
-    std::atomic<uint64_t> next_task_id_{1};  // 下一个任务 ID
+
+    // 无锁队列（直接传递任务指针）
+    util::LockFreeQueue<TaskWrapper*> lockfree_queue_;
+
+    // 对象池（预分配任务对象）
+    util::ObjectPool<TaskWrapper> task_pool_;
     
     // 异常处理器
     util::ExceptionHandler exception_handler_;

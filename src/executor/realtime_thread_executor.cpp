@@ -1,8 +1,6 @@
 #include "realtime_thread_executor.hpp"
 #include <stdexcept>
 #include <algorithm>
-#include <mutex>
-#include <unordered_map>
 #ifdef _WIN32
 #include <windows.h>
 #include <mmsystem.h>
@@ -14,7 +12,8 @@ namespace executor {
 RealtimeThreadExecutor::RealtimeThreadExecutor(const std::string& name, const RealtimeThreadConfig& config)
     : name_(name)
     , config_(config)
-    , lockfree_queue_(1024)  // 默认队列容量为 1024
+    , lockfree_queue_(1024)
+    , task_pool_(1024)
 {
     // 验证配置
     if (config_.cycle_period_ns <= 0) {
@@ -115,22 +114,18 @@ std::string RealtimeThreadExecutor::get_name() const {
 
 void RealtimeThreadExecutor::push_task(std::function<void()> task) {
     if (task) {
-        // 生成任务 ID
-        uint64_t task_id = next_task_id_.fetch_add(1, std::memory_order_relaxed);
-        
-        // 将任务存储到 task_map_ 中
-        {
-            std::lock_guard<std::mutex> lock(task_map_mutex_);
-            task_map_[task_id] = std::move(task);
+        // 从对象池获取任务对象
+        TaskWrapper* task_wrapper = task_pool_.acquire();
+        if (task_wrapper) {
+            task_wrapper->func = std::move(task);
+
+            // 推送到无锁队列
+            if (!lockfree_queue_.push(task_wrapper)) {
+                // 队列满，释放回对象池
+                task_pool_.release(task_wrapper);
+            }
         }
-        
-        // 尝试推送到无锁队列（推送任务 ID）
-        // 如果队列满，任务会被丢弃（可以根据需要调整策略）
-        if (!lockfree_queue_.push(task_id)) {
-            // 队列满，从 task_map_ 中移除任务
-            std::lock_guard<std::mutex> lock(task_map_mutex_);
-            task_map_.erase(task_id);
-        }
+        // 如果对象池耗尽，任务被丢弃
     }
 }
 
@@ -200,31 +195,20 @@ void RealtimeThreadExecutor::cycle_loop() {
 }
 
 void RealtimeThreadExecutor::process_tasks() {
-    uint64_t task_id = 0;
-    
+    TaskWrapper* task_wrapper = nullptr;
+
     // 从无锁队列中弹出所有任务并执行
-    // 注意：这里会处理队列中的所有任务，直到队列为空
-    while (lockfree_queue_.pop(task_id)) {
-        // 从 task_map_ 中获取任务
-        std::function<void()> task;
-        {
-            std::lock_guard<std::mutex> lock(task_map_mutex_);
-            auto it = task_map_.find(task_id);
-            if (it != task_map_.end()) {
-                task = std::move(it->second);
-                task_map_.erase(it);
-            }
-        }
-        
-        // 执行任务
-        if (task) {
+    while (lockfree_queue_.pop(task_wrapper)) {
+        if (task_wrapper && task_wrapper->func) {
             try {
-                task();
+                task_wrapper->func();
             } catch (...) {
-                // 捕获任务执行中的异常，不影响其他任务和周期执行
                 exception_handler_.handle_task_exception(name_, std::current_exception());
             }
         }
+
+        // 释放回对象池
+        task_pool_.release(task_wrapper);
     }
 }
 
