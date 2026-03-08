@@ -106,6 +106,12 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "benchmark"
             TIMEOUT 120
         )
+    # 优化基线基准测试（测量优化路线图中各优化目标的当前性能）
+    elseif(TEST_NAME STREQUAL "benchmark_optimization_baseline")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "benchmark;optimization"
+            TIMEOUT 120
+        )
     # 默认：单元测试
     else()
         set_tests_properties(${TEST_NAME} PROPERTIES
