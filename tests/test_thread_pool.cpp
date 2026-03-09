@@ -40,7 +40,7 @@ bool test_priority_scheduler_basic() {
     task1.task_id = "task_1";
     task1.priority = TaskPriority::NORMAL;
     task1.submit_time_ns = 1000;
-    task1.function = []() {};
+    task1.function = []() noexcept {};
     
     // 测试enqueue
     scheduler.enqueue(task1);
@@ -67,25 +67,25 @@ bool test_priority_scheduler_priority_order() {
     low_task.task_id = "low_task";
     low_task.priority = TaskPriority::LOW;
     low_task.submit_time_ns = 1000;
-    low_task.function = []() {};
+    low_task.function = []() noexcept {};
     
     Task normal_task;
     normal_task.task_id = "normal_task";
     normal_task.priority = TaskPriority::NORMAL;
     normal_task.submit_time_ns = 2000;
-    normal_task.function = []() {};
+    normal_task.function = []() noexcept {};
     
     Task high_task;
     high_task.task_id = "high_task";
     high_task.priority = TaskPriority::HIGH;
     high_task.submit_time_ns = 3000;
-    high_task.function = []() {};
+    high_task.function = []() noexcept {};
     
     Task critical_task;
     critical_task.task_id = "critical_task";
     critical_task.priority = TaskPriority::CRITICAL;
     critical_task.submit_time_ns = 4000;
-    critical_task.function = []() {};
+    critical_task.function = []() noexcept {};
     
     // 按低优先级到高优先级顺序提交
     scheduler.enqueue(low_task);
@@ -123,19 +123,19 @@ bool test_priority_scheduler_same_priority_fifo() {
     task1.task_id = "task_1";
     task1.priority = TaskPriority::NORMAL;
     task1.submit_time_ns = 1000;  // 更早
-    task1.function = []() {};
+    task1.function = []() noexcept {};
     
     Task task2;
     task2.task_id = "task_2";
     task2.priority = TaskPriority::NORMAL;
     task2.submit_time_ns = 2000;  // 更晚
-    task2.function = []() {};
+    task2.function = []() noexcept {};
     
     Task task3;
     task3.task_id = "task_3";
     task3.priority = TaskPriority::NORMAL;
     task3.submit_time_ns = 3000;  // 最晚
-    task3.function = []() {};
+    task3.function = []() noexcept {};
     
     // 按时间顺序提交
     scheduler.enqueue(task1);
@@ -168,7 +168,7 @@ bool test_priority_scheduler_clear() {
         task.task_id = "task_" + std::to_string(i);
         task.priority = static_cast<TaskPriority>(i % 4);
         task.submit_time_ns = i * 1000;
-        task.function = []() {};
+        task.function = []() noexcept {};
         scheduler.enqueue(task);
     }
     
@@ -203,7 +203,7 @@ bool test_priority_scheduler_concurrent() {
                 task.task_id = "task_" + std::to_string(i) + "_" + std::to_string(j);
                 task.priority = static_cast<TaskPriority>(j % 4);
                 task.submit_time_ns = j * 1000;
-                task.function = []() {};
+                task.function = []() noexcept {};
                 scheduler.enqueue(task);
                 enqueue_count.fetch_add(1);
             }
