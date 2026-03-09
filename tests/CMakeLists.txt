@@ -2,7 +2,11 @@
 # 配置测试框架和测试可执行文件
 
 # 查找 Google Test
-find_package(GTest REQUIRED)
+find_package(GTest)
+if(NOT GTest_FOUND)
+    message(STATUS "GTest not found. Skipping tests.")
+    return()
+endif()
 
 # 收集测试源文件
 file(GLOB TEST_SOURCES "*.cpp")
