@@ -506,13 +506,20 @@ bool test_realtime_executor_concurrent_push_task() {
     for (auto& t : threads) {
         t.join();
     }
-    
-    // 等待任务执行
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    
+
+    // 等待任务执行，使用轮询而不是固定等待
+    const int expected_count = num_threads * tasks_per_thread;
+    int count = 0;
+    for (int i = 0; i < 50; ++i) {  // 最多等待500ms
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        count = task_count.load();
+        if (count == expected_count) {
+            break;
+        }
+    }
+
     // 检查所有任务是否都执行了
-    int count = task_count.load();
-    TEST_ASSERT(count == num_threads * tasks_per_thread, 
+    TEST_ASSERT(count == expected_count,
                 "All tasks should be executed");
     
     executor.stop();

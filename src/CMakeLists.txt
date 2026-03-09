@@ -8,9 +8,18 @@ file(GLOB_RECURSE EXECUTOR_SOURCES
     "executor/*.c"
 )
 
-# 如果未启用CUDA，排除GPU相关源文件
-if(NOT EXECUTOR_CUDA_ENABLED)
+# 如果未启用任何GPU后端，排除GPU相关源文件
+if(NOT EXECUTOR_CUDA_ENABLED AND NOT EXECUTOR_OPENCL_ENABLED)
     list(FILTER EXECUTOR_SOURCES EXCLUDE REGEX ".*gpu.*")
+else()
+    # 如果未启用CUDA，排除CUDA特定文件
+    if(NOT EXECUTOR_CUDA_ENABLED)
+        list(FILTER EXECUTOR_SOURCES EXCLUDE REGEX ".*cuda.*")
+    endif()
+    # 如果未启用OpenCL，排除OpenCL特定文件
+    if(NOT EXECUTOR_OPENCL_ENABLED)
+        list(FILTER EXECUTOR_SOURCES EXCLUDE REGEX ".*opencl.*")
+    endif()
 endif()
 
 # 收集头文件（用于 IDE 显示）
@@ -72,9 +81,24 @@ if(EXECUTOR_CUDA_ENABLED)
                 ${CUDAToolkit_INCLUDE_DIRS}
         )
     endif()
-    
+
     # 不链接CUDA库，使用动态加载
     # CudaLoader会在运行时动态搜索和加载CUDA DLL
+endif()
+
+# OpenCL 支持（如果启用）
+# 注意：使用动态加载，不链接OpenCL库，只包含头文件用于类型定义
+if(EXECUTOR_OPENCL_ENABLED)
+    # 添加 OpenCL 包含目录（仅用于类型定义，不链接库）
+    if(OpenCL_INCLUDE_DIRS)
+        target_include_directories(executor
+            PRIVATE
+                ${OpenCL_INCLUDE_DIRS}
+        )
+    endif()
+
+    # 不链接OpenCL库，使用动态加载
+    # OpenCLLoader会在运行时动态搜索和加载OpenCL库
 endif()
 
 # 平台特定的链接库

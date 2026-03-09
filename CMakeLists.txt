@@ -14,6 +14,7 @@ option(EXECUTOR_BUILD_SHARED "Build shared library" OFF)
 # GPU 支持选项
 option(EXECUTOR_ENABLE_GPU "Enable GPU support" ON)
 option(EXECUTOR_ENABLE_CUDA "Enable CUDA support" ON)
+option(EXECUTOR_ENABLE_OPENCL "Enable OpenCL support" OFF)
 
 # 包含 CMake 模块
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
@@ -54,8 +55,7 @@ if(EXECUTOR_ENABLE_GPU)
                 message(STATUS "CUDA Toolkit Root: ${CUDA_TOOLKIT_ROOT_DIR}")
             endif()
             set(EXECUTOR_CUDA_ENABLED ON)
-            # 定义编译宏
-            add_definitions(-DEXECUTOR_ENABLE_GPU -DEXECUTOR_ENABLE_CUDA)
+            add_definitions(-DEXECUTOR_ENABLE_CUDA)
         else()
             message(WARNING "CUDA support requested but CUDA not found. Disabling CUDA support.")
             set(EXECUTOR_CUDA_ENABLED OFF)
@@ -64,8 +64,24 @@ if(EXECUTOR_ENABLE_GPU)
     else()
         set(EXECUTOR_CUDA_ENABLED OFF)
     endif()
-    
-    # 如果启用了 GPU 支持（即使 CUDA 未找到，也定义宏以支持其他后端）
+
+    # OpenCL 支持检测
+    if(EXECUTOR_ENABLE_OPENCL)
+        find_package(OpenCL QUIET)
+        if(OpenCL_FOUND)
+            message(STATUS "OpenCL found: Version ${OpenCL_VERSION_STRING}")
+            set(EXECUTOR_OPENCL_ENABLED ON)
+            add_definitions(-DEXECUTOR_ENABLE_OPENCL)
+        else()
+            message(WARNING "OpenCL support requested but OpenCL not found. Disabling OpenCL support.")
+            set(EXECUTOR_OPENCL_ENABLED OFF)
+            set(EXECUTOR_ENABLE_OPENCL OFF)
+        endif()
+    else()
+        set(EXECUTOR_OPENCL_ENABLED OFF)
+    endif()
+
+    # 如果启用了 GPU 支持（即使 CUDA/OpenCL 未找到，也定义宏以支持其他后端）
     if(EXECUTOR_ENABLE_GPU)
         add_definitions(-DEXECUTOR_ENABLE_GPU)
     endif()

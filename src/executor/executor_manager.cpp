@@ -10,6 +10,9 @@
 
 #ifdef EXECUTOR_ENABLE_GPU
 #include "executor/gpu/cuda_executor.hpp"
+#ifdef EXECUTOR_ENABLE_OPENCL
+#include "executor/gpu/opencl_executor.hpp"
+#endif
 #endif
 
 namespace executor {
@@ -208,8 +211,14 @@ std::unique_ptr<IGpuExecutor> ExecutorManager::create_gpu_executor(
 #else
             return nullptr;  // CUDA 支持未启用
 #endif
+        } else if (config.backend == gpu::GpuBackend::OPENCL) {
+#ifdef EXECUTOR_ENABLE_OPENCL
+            return std::make_unique<gpu::OpenCLExecutor>(config.name, config);
+#else
+            return nullptr;  // OpenCL 支持未启用
+#endif
         }
-        // 其他后端（OpenCL、SYCL）待后续实现
+        // 其他后端（SYCL）待后续实现
         return nullptr;
     } catch (const std::exception&) {
         // 创建失败（如配置无效），返回 nullptr

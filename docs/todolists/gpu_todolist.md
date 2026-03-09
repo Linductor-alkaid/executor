@@ -266,31 +266,46 @@
 
 ### 3.1 OpenCL 执行器实现
 
-- [ ] 创建 `src/executor/gpu/opencl_executor.hpp`
-  - [ ] 定义 `OpenCLExecutor` 类（继承 `IGpuExecutor`）
-  - [ ] 声明 OpenCL 相关成员变量
+- [x] 创建 `src/executor/gpu/opencl_loader.hpp`
+  - [x] 定义 `OpenCLLoader` 类（单例模式）
+  - [x] 定义 OpenCL 函数指针类型
+  - [x] 声明动态加载接口
 
-- [ ] 创建 `src/executor/gpu/opencl_executor.cpp`
-  - [ ] 实现 OpenCL 平台和设备选择
-  - [ ] 实现 OpenCL 上下文创建
-  - [ ] 实现 OpenCL 命令队列管理
-  - [ ] 实现 `submit_kernel_impl()`（使用 OpenCL）
-  - [ ] 实现内存管理（OpenCL buffer）
-  - [ ] 实现流管理（OpenCL command queue）
-  - [ ] 实现同步操作
+- [x] 创建 `src/executor/gpu/opencl_loader.cpp`
+  - [x] 实现 DLL 搜索逻辑（Windows/Linux）
+  - [x] 实现动态库加载
+  - [x] 实现函数指针获取
 
-- [ ] 扩展 CMake 构建系统
-  - [ ] 添加 `EXECUTOR_ENABLE_OPENCL` 选项
-  - [ ] 添加 OpenCL 库查找逻辑
-  - [ ] 添加条件编译逻辑
+- [x] 创建 `src/executor/gpu/opencl_executor.hpp`
+  - [x] 定义 `OpenCLExecutor` 类（继承 `IGpuExecutor`）
+  - [x] 声明 OpenCL 相关成员变量
 
-- [ ] 编写 OpenCL 执行器单元测试
-  - [ ] 测试执行器创建和销毁
-  - [ ] 测试 kernel 提交
-  - [ ] 测试内存管理
+- [x] 创建 `src/executor/gpu/opencl_executor.cpp`
+  - [x] 实现 OpenCL 平台和设备选择
+  - [x] 实现 OpenCL 上下文创建
+  - [x] 实现 OpenCL 命令队列管理
+  - [x] 实现 `submit_kernel_impl()`（使用 OpenCL）
+  - [x] 实现内存管理（OpenCL buffer）
+  - [x] 实现流管理（OpenCL command queue）
+  - [x] 实现同步操作
 
-- [ ] 创建 `examples/gpu_opencl.cpp`
-  - [ ] 实现 OpenCL 执行器使用示例
+- [x] 扩展 CMake 构建系统
+  - [x] 添加 `EXECUTOR_ENABLE_OPENCL` 选项
+  - [x] 添加 OpenCL 库查找逻辑
+  - [x] 添加条件编译逻辑
+
+- [x] 编写 OpenCL 执行器单元测试
+  - [x] 测试执行器创建和销毁
+  - [x] 测试 kernel 提交
+  - [x] 测试内存管理
+
+- [x] 创建 `examples/gpu_opencl.cpp`
+  - [x] 实现 OpenCL 执行器使用示例
+
+- [x] 创建 OpenCL 测试环境搭建文档
+  - [x] Linux 环境配置说明
+  - [x] Windows 环境配置说明
+  - [x] 常见问题排查
 
 ### 3.2 SYCL 执行器实现
 
