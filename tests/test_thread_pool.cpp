@@ -378,7 +378,7 @@ bool test_thread_pool_exception_handling() {
     pool.initialize(config);
     
     // 提交抛出异常的任务
-    auto future = pool.submit([]() noexcept {
+    auto future = pool.submit([]() {
         throw std::runtime_error("Test exception");
         return 42;
     });
