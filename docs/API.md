@@ -212,12 +212,54 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 
 ### 7.4 配置与类型
 
-- **GpuExecutorConfig**：`name`、`backend`（如 CUDA）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`
+- **GpuExecutorConfig**：`name`、`backend`（如 CUDA/OpenCL）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`
 - **GpuTaskConfig**：`grid_size`、`block_size`、`shared_memory_bytes`、`stream_id`、`async`；可选 `priority`
-- **GpuDeviceInfo**：设备名称、后端、设备 ID、总/空闲内存、计算能力等
+- **GpuDeviceInfo**：设备名称、后端、设备 ID、厂商、总/空闲内存、计算能力等
 - **GpuExecutorStatus**：名称、运行状态、活跃/完成/失败 kernel 数、队列大小、平均 kernel 时间、内存使用等
 
-多 GPU 设备间 P2P 拷贝（`copy_from_peer`）为实验性功能。示例见 [examples/gpu_basic.cpp](../examples/gpu_basic.cpp)、[examples/gpu_multi_device.cpp](../examples/gpu_multi_device.cpp)。
+多 GPU 设备间 P2P 拷贝（`copy_from_peer`）为实验性功能。示例见 [examples/gpu_basic.cpp](../examples/gpu_basic.cpp)、[examples/gpu_multi_device.cpp](../examples/gpu_multi_device.cpp)、[examples/gpu_opencl.cpp](../examples/gpu_opencl.cpp)。
+
+### 7.5 GPU 设备查询 API
+
+在创建 GPU 执行器前，可查询系统可用设备及推荐后端：
+
+```cpp
+#include <executor/gpu/device_query.hpp>
+
+// 枚举所有 CUDA 设备
+std::vector<gpu::GpuDeviceInfo> enumerate_cuda_devices();
+
+// 枚举所有 OpenCL 设备
+std::vector<gpu::GpuDeviceInfo> enumerate_opencl_devices();
+
+// 枚举所有 GPU 设备（CUDA + OpenCL）
+std::vector<gpu::GpuDeviceInfo> enumerate_all_devices();
+
+// 获取推荐后端（NVIDIA GPU 优先 CUDA，AMD/Intel GPU 使用 OpenCL）
+gpu::GpuBackend get_recommended_backend(int device_id = 0);
+```
+
+**使用示例**：
+
+```cpp
+// 查询所有设备
+auto devices = executor::gpu::enumerate_all_devices();
+for (const auto& dev : devices) {
+    std::cout << "Device " << dev.device_id << ": "
+              << dev.name << " (" << dev.vendor << ")\n"
+              << "  Backend: " << (dev.backend == executor::gpu::GpuBackend::CUDA ? "CUDA" : "OpenCL") << "\n"
+              << "  Memory: " << (dev.total_memory_bytes / 1024 / 1024) << " MB\n";
+}
+
+// 自动选择推荐后端
+auto backend = executor::gpu::get_recommended_backend(0);
+executor::gpu::GpuExecutorConfig config;
+config.backend = backend;
+config.device_id = 0;
+exec.register_gpu_executor("gpu0", config);
+```
+
+命令行工具：`gpu_device_query` 示例程序可直接查询系统 GPU 设备。
 
 ---
 

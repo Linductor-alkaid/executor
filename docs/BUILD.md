@@ -20,6 +20,9 @@
 | `EXECUTOR_BUILD_EXAMPLES` | `OFF` | 是否构建示例 |
 | `EXECUTOR_BUILD_SHARED` | `OFF` | 是否构建动态库（`OFF` 时构建静态库） |
 | `EXECUTOR_ENABLE_COVERAGE` | `OFF` | 是否启用代码覆盖率（gcov/lcov，见 [COVERAGE.md](COVERAGE.md)） |
+| `EXECUTOR_ENABLE_GPU` | `ON` | 是否启用 GPU 支持 |
+| `EXECUTOR_ENABLE_CUDA` | `ON` | 是否启用 CUDA 支持（需 `EXECUTOR_ENABLE_GPU=ON`） |
+| `EXECUTOR_ENABLE_OPENCL` | `OFF` | 是否启用 OpenCL 支持（需 `EXECUTOR_ENABLE_GPU=ON`） |
 
 ---
 
@@ -53,7 +56,31 @@ cmake -B build -DEXECUTOR_BUILD_TESTS=OFF
 cmake --build build
 ```
 
-### 3.5 指定安装前缀（安装时使用）
+### 3.5 启用 GPU 支持
+
+```bash
+# 启用 CUDA（NVIDIA GPU）
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_CUDA=ON
+cmake --build build
+
+# 启用 OpenCL（Intel/AMD/NVIDIA GPU）
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_OPENCL=ON
+cmake --build build
+
+# 同时启用 CUDA 和 OpenCL
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_CUDA=ON -DEXECUTOR_ENABLE_OPENCL=ON
+cmake --build build
+```
+
+查询系统 GPU 设备：
+
+```bash
+./build/examples/gpu_device_query
+```
+
+GPU 环境配置详见 [setup/opencl_setup.md](setup/opencl_setup.md)。
+
+### 3.6 指定安装前缀（安装时使用）
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local

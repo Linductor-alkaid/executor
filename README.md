@@ -2,34 +2,34 @@
 
 [![CI](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml) [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](https://isocpp.org/) [![CMake](https://img.shields.io/badge/CMake-3.16%2B-064F8C?logo=cmake)](https://cmake.org/) [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-1793D1)](https://github.com)
 
-> 轻量级 C++ 任务执行与线程管理库，提供统一的线程池与专用实时线程管理，支持任务提交、优先级调度、实时周期任务及基础监控；可选 GPU（CUDA）执行器，与 CPU 执行器统一管理。
+> 轻量级 C++ 任务执行与线程管理库，提供统一的线程池与专用实时线程管理，支持任务提交、优先级调度、实时周期任务及基础监控；可选 GPU（CUDA/OpenCL）执行器，与 CPU 执行器统一管理。
 
 ---
 
 ## 特性
 
-- **混合执行模式**  
+- **混合执行模式**
   线程池（普通并发任务）+ 专用实时线程（高实时性任务，如 CAN 通信、传感器采集）
 
-- **统一 API**  
+- **统一 API**
   `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic` 及实时任务注册
 
-- **可选 GPU（CUDA）**  
-  GPU 执行器接口与 CUDA 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载 CUDA，无 GPU 时安全降级
+- **可选 GPU（CUDA/OpenCL）**
+  GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端
 
-- **可配置**  
+- **可配置**
   线程数、队列容量、优先级、CPU 亲和性、工作窃取、监控开关等
 
-- **单例 / 实例化**  
+- **单例 / 实例化**
   支持进程内共享或按项目隔离的独立实例（RAII 生命周期）
 
-- **可选监控**  
+- **可选监控**
   任务统计、执行器状态查询；可选 `ICycleManager` 集成以精确控制实时周期
 
-- **最小依赖**  
-  仅依赖 C++ 标准库与平台特定 API（Linux: `pthread`、`rt`；Windows: Win32 API），无第三方必需依赖；GPU 为可选模块（CUDA 头文件 + 运行时动态加载）
+- **最小依赖**
+  仅依赖 C++ 标准库与平台特定 API（Linux: `pthread`、`rt`；Windows: Win32 API），无第三方必需依赖；GPU 为可选模块（CUDA/OpenCL 头文件 + 运行时动态加载）
 
-- **跨平台支持**  
+- **跨平台支持**
   支持 Linux 和 Windows，自动适配平台特性（如 Windows 高精度定时器）
 
 ## 依赖与要求
@@ -39,7 +39,7 @@
 | **C++ 标准** | C++20 |
 | **构建系统** | CMake 3.16+ |
 | **平台** | **Linux**：`pthread`、`rt`（实时扩展）<br>**Windows**：Visual Studio 2019+ / MSVC 14.0+，Win32 API |
-| **GPU（可选）** | 启用 `EXECUTOR_ENABLE_GPU` 时需 CUDA Toolkit（头文件），运行时动态加载 CUDA 库，无静态链接 |
+| **GPU（可选）** | 启用 `EXECUTOR_ENABLE_GPU` 时：<br>- CUDA：需 CUDA Toolkit（头文件），运行时动态加载<br>- OpenCL：需 OpenCL 头文件，运行时动态加载<br>无静态链接，GPU 不可用时安全降级 |
 
 ### 平台特定说明
 
@@ -62,11 +62,25 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-启用 GPU（CUDA）支持时（默认开启，可关闭）：
+启用 GPU 支持时：
 
 ```bash
+# 启用 CUDA（NVIDIA GPU）
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_CUDA=ON
+
+# 启用 OpenCL（Intel/AMD/NVIDIA GPU）
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_OPENCL=ON
+
+# 同时启用 CUDA 和 OpenCL
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_CUDA=ON -DEXECUTOR_ENABLE_OPENCL=ON
+
 cmake --build build
+```
+
+查询系统 GPU 设备：
+
+```bash
+./build/examples/gpu_device_query
 ```
 
 ### 运行测试

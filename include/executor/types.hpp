@@ -107,6 +107,7 @@ struct GpuDeviceInfo {
     std::string name;                             // 设备名称
     GpuBackend backend;                            // 后端类型
     int device_id = 0;                             // 设备ID
+    std::string vendor;                            // 厂商（NVIDIA/AMD/Intel）
     size_t total_memory_bytes = 0;                // 总内存（字节）
     size_t free_memory_bytes = 0;                 // 空闲内存（字节）
     int compute_capability_major = 0;              // 计算能力主版本（CUDA）

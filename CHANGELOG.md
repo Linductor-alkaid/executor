@@ -4,6 +4,24 @@
 
 ---
 
+## [0.2.1] - 2026-03-09
+
+### 新增
+
+- **OpenCL 执行器**：实现 `OpenCLExecutor`，支持跨平台异构计算（Intel/AMD/NVIDIA GPU）
+- **OpenCL 动态加载**：运行时加载 OpenCL 库，无静态链接，OpenCL 不可用时安全降级
+- **GPU 设备查询 API**：新增 `enumerate_cuda_devices()`、`enumerate_opencl_devices()`、`enumerate_all_devices()`、`get_recommended_backend()` 函数，用户可查询系统可用 GPU 设备及推荐后端
+- **设备信息增强**：`GpuDeviceInfo` 新增 `vendor` 字段，标识 GPU 厂商（NVIDIA/AMD/Intel）
+- **构建与示例**：`EXECUTOR_ENABLE_OPENCL` 选项；示例 `gpu_opencl`、`gpu_device_query`
+
+### 文档
+
+- **OpenCL 环境搭建指南**：[docs/setup/opencl_setup.md](docs/setup/opencl_setup.md)，包含 Linux/Windows 环境配置、常见问题排查
+
+详细设计见 [docs/design/gpu_executor.md](docs/design/gpu_executor.md)。
+
+---
+
 ## [0.2.0] - 2026-01-29
 
 ### 新增

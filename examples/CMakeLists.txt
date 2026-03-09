@@ -8,8 +8,7 @@
 file(GLOB EXAMPLE_SOURCES "*.cpp")
 
 # 从通用列表中排除 GPU 示例（仅在启用 GPU 时单独添加）
-list(FILTER EXAMPLE_SOURCES EXCLUDE REGEX "gpu_basic\\.cpp$")
-list(FILTER EXAMPLE_SOURCES EXCLUDE REGEX "gpu_multi_device\\.cpp$")
+list(FILTER EXAMPLE_SOURCES EXCLUDE REGEX "gpu_.*\\.cpp$")
 
 # 如果没有示例文件，创建一个占位符说明
 if(NOT EXAMPLE_SOURCES)
@@ -27,10 +26,25 @@ foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
     target_link_libraries(${EXAMPLE_NAME} PRIVATE executor)
 endforeach()
 
-# GPU 示例：仅在启用 GPU 且找到 CUDA 时构建
-if(EXECUTOR_ENABLE_GPU AND EXECUTOR_CUDA_ENABLED)
-    add_executable(gpu_basic gpu_basic.cpp)
-    target_link_libraries(gpu_basic PRIVATE executor)
-    add_executable(gpu_multi_device gpu_multi_device.cpp)
-    target_link_libraries(gpu_multi_device PRIVATE executor)
+# GPU 示例：仅在启用 GPU 时构建
+if(EXECUTOR_ENABLE_GPU)
+    # 设备查询示例（CUDA或OpenCL任一可用即可）
+    if(EXECUTOR_CUDA_ENABLED OR EXECUTOR_OPENCL_ENABLED)
+        add_executable(gpu_device_query gpu_device_query.cpp)
+        target_link_libraries(gpu_device_query PRIVATE executor)
+    endif()
+
+    # CUDA 特定示例
+    if(EXECUTOR_CUDA_ENABLED)
+        add_executable(gpu_basic gpu_basic.cpp)
+        target_link_libraries(gpu_basic PRIVATE executor)
+        add_executable(gpu_multi_device gpu_multi_device.cpp)
+        target_link_libraries(gpu_multi_device PRIVATE executor)
+    endif()
+
+    # OpenCL 特定示例
+    if(EXECUTOR_OPENCL_ENABLED)
+        add_executable(gpu_opencl gpu_opencl.cpp)
+        target_link_libraries(gpu_opencl PRIVATE executor)
+    endif()
 endif()
