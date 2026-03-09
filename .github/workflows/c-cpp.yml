@@ -82,7 +82,11 @@ jobs:
     - name: 安装依赖
       run: |
         sudo apt-get update
-        sudo apt-get install -y cmake ninja-build g++-11 lcov
+        sudo apt-get install -y cmake ninja-build g++-11 lcov libgtest-dev
+        cd /usr/src/gtest
+        sudo cmake .
+        sudo make
+        sudo cp lib/*.a /usr/lib
 
     - name: 配置 CMake (启用覆盖率)
       run: |
