@@ -378,7 +378,7 @@ bool test_thread_pool_exception_handling() {
     pool.initialize(config);
     
     // 提交抛出异常的任务
-    auto future = pool.submit([]() {
+    auto future = pool.submit([]() noexcept {
         throw std::runtime_error("Test exception");
         return 42;
     });
@@ -417,7 +417,7 @@ bool test_thread_pool_status() {
     // 提交一些任务
     std::vector<std::future<void>> futures;
     for (int i = 0; i < 10; ++i) {
-        futures.push_back(pool.submit([]() {
+        futures.push_back(pool.submit([]() noexcept {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }));
     }
@@ -456,7 +456,7 @@ bool test_thread_pool_shutdown() {
     // 提交一些任务
     std::vector<std::future<int>> futures;
     for (int i = 0; i < 5; ++i) {
-        futures.push_back(pool.submit([i]() {
+        futures.push_back(pool.submit([i]() noexcept {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             return i;
         }));
@@ -492,7 +492,7 @@ bool test_thread_pool_shutdown_no_wait() {
     // 提交一些长时间运行的任务
     std::vector<std::future<void>> futures;
     for (int i = 0; i < 5; ++i) {
-        futures.push_back(pool.submit([]() {
+        futures.push_back(pool.submit([]() noexcept {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }));
     }
@@ -520,7 +520,7 @@ bool test_thread_pool_submit_after_shutdown() {
     // 关闭后提交任务应该抛出异常
     bool exception_caught = false;
     try {
-        auto future = pool.submit([]() {
+        auto future = pool.submit([]() noexcept {
             return 42;
         });
         future.get();
@@ -548,7 +548,7 @@ bool test_thread_pool_wait_for_completion() {
     
     // 提交多个任务
     for (int i = 0; i < num_tasks; ++i) {
-        pool.submit([&]() {
+        pool.submit([&]() noexcept {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             completed.fetch_add(1);
         });
