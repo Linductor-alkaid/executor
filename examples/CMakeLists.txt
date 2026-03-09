@@ -40,6 +40,8 @@ if(EXECUTOR_ENABLE_GPU)
         target_link_libraries(gpu_basic PRIVATE executor)
         add_executable(gpu_multi_device gpu_multi_device.cpp)
         target_link_libraries(gpu_multi_device PRIVATE executor)
+        add_executable(gpu_unified_memory gpu_unified_memory.cpp)
+        target_link_libraries(gpu_unified_memory PRIVATE executor)
     endif()
 
     # OpenCL 特定示例

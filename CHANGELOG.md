@@ -12,7 +12,8 @@
 - **OpenCL 动态加载**：运行时加载 OpenCL 库，无静态链接，OpenCL 不可用时安全降级
 - **GPU 设备查询 API**：新增 `enumerate_cuda_devices()`、`enumerate_opencl_devices()`、`enumerate_all_devices()`、`get_recommended_backend()` 函数，用户可查询系统可用 GPU 设备及推荐后端
 - **设备信息增强**：`GpuDeviceInfo` 新增 `vendor` 字段，标识 GPU 厂商（NVIDIA/AMD/Intel）
-- **构建与示例**：`EXECUTOR_ENABLE_OPENCL` 选项；示例 `gpu_opencl`、`gpu_device_query`
+- **统一内存支持**：CUDA 执行器支持统一内存（Unified Memory），新增 `allocate_unified_memory()`、`free_unified_memory()`、`prefetch_memory()` 方法；配置选项 `enable_unified_memory`；CPU 与 GPU 可共享内存无需显式传输
+- **构建与示例**：`EXECUTOR_ENABLE_OPENCL` 选项；示例 `gpu_opencl`、`gpu_device_query`、`gpu_unified_memory`
 
 ### 文档
 

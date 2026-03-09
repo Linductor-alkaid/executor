@@ -298,6 +298,50 @@ public:
     virtual bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) = 0;
 
     /**
+     * @brief 分配统一内存（Unified Memory）
+     *
+     * 统一内存可被 CPU 和 GPU 同时访问，无需显式传输。
+     * 需要硬件和驱动支持（CUDA 6.0+）。
+     *
+     * @param size 内存大小（字节）
+     * @return 统一内存指针，失败或不支持返回 nullptr
+     */
+    virtual void* allocate_unified_memory(size_t size) {
+        (void)size;
+        return nullptr;  // 默认不支持
+    }
+
+    /**
+     * @brief 释放统一内存
+     *
+     * @param ptr 统一内存指针
+     */
+    virtual void free_unified_memory(void* ptr) {
+        (void)ptr;
+        // 默认不支持，什么也不做
+    }
+
+    /**
+     * @brief 预取内存到指定设备
+     *
+     * 将统一内存预取到指定设备，优化访问性能。
+     * device_id = cudaCpuDeviceId (-1) 表示预取到主机。
+     *
+     * @param ptr 统一内存指针
+     * @param size 预取大小（字节）
+     * @param device_id 目标设备ID（-1 表示主机）
+     * @param stream_id 流ID（0=默认流）
+     * @return 是否成功
+     */
+    virtual bool prefetch_memory(const void* ptr, size_t size, int device_id, int stream_id = 0) {
+        (void)ptr;
+        (void)size;
+        (void)device_id;
+        (void)stream_id;
+        return false;  // 默认不支持
+    }
+
+    /**
      * @brief 同步所有操作
      * 
      * 等待所有已提交的 GPU 操作完成

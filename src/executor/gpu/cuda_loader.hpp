@@ -67,6 +67,8 @@ using CudaDeviceCanAccessPeerFunc = cudaError_t (*)(int*, int, int);
 using CudaDeviceEnablePeerAccessFunc = cudaError_t (*)(int, unsigned int);
 using CudaGetLastErrorFunc = cudaError_t (*)();
 using CudaGetErrorStringFunc = const char* (*)(cudaError_t);
+using CudaMallocManagedFunc = cudaError_t (*)(void**, size_t, unsigned int);
+using CudaMemPrefetchAsyncFunc = cudaError_t (*)(const void*, size_t, int, cudaStream_t);
 
 /**
  * @brief CUDA函数指针集合
@@ -91,6 +93,8 @@ struct CudaFunctionPointers {
     CudaDeviceEnablePeerAccessFunc cudaDeviceEnablePeerAccess = nullptr;
     CudaGetLastErrorFunc cudaGetLastError = nullptr;
     CudaGetErrorStringFunc cudaGetErrorString = nullptr;
+    CudaMallocManagedFunc cudaMallocManaged = nullptr;        // Unified Memory (可选)
+    CudaMemPrefetchAsyncFunc cudaMemPrefetchAsync = nullptr;  // Unified Memory (可选)
 
     /**
      * @brief 检查所有函数指针是否已加载
@@ -119,6 +123,14 @@ struct CudaFunctionPointers {
                cudaMemcpyPeerAsync != nullptr &&
                cudaDeviceCanAccessPeer != nullptr &&
                cudaDeviceEnablePeerAccess != nullptr;
+    }
+
+    /**
+     * @brief 检查统一内存相关函数是否已加载
+     */
+    bool is_unified_memory_available() const {
+        return cudaMallocManaged != nullptr &&
+               cudaMemPrefetchAsync != nullptr;
     }
 };
 

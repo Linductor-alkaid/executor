@@ -447,6 +447,105 @@ void CudaExecutor::free_device_memory(void* ptr) {
 #endif
 }
 
+void* CudaExecutor::allocate_unified_memory(size_t size) {
+    if (!is_available_ || !is_running_.load() || !loader_->is_available()) {
+        return nullptr;
+    }
+
+    if (!config_.enable_unified_memory) {
+        return nullptr;  // 未启用统一内存
+    }
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    if (!ensure_device_context()) {
+        return nullptr;
+    }
+    const auto& funcs = loader_->get_functions();
+    if (!funcs.is_unified_memory_available() || funcs.cudaMallocManaged == nullptr) {
+        return nullptr;  // 不支持统一内存
+    }
+
+    void* ptr = nullptr;
+    cudaError_t error = funcs.cudaMallocManaged(&ptr, size, cudaMemAttachGlobal);
+    if (!check_cuda_error(error, "cudaMallocManaged") || ptr == nullptr) {
+        return nullptr;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        allocated_memory_[ptr] = size;
+    }
+
+    return ptr;
+#else
+    (void)size;
+    return nullptr;
+#endif
+}
+
+void CudaExecutor::free_unified_memory(void* ptr) {
+    if (!is_available_ || ptr == nullptr || !loader_->is_available()) {
+        return;
+    }
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    if (!ensure_device_context()) {
+        return;
+    }
+    const auto& funcs = loader_->get_functions();
+    if (funcs.cudaFree == nullptr) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        if (allocated_memory_.find(ptr) == allocated_memory_.end()) {
+            return;
+        }
+        allocated_memory_.erase(ptr);
+    }
+
+    cudaError_t error = funcs.cudaFree(ptr);
+    check_cuda_error(error, "cudaFree");
+#else
+    (void)ptr;
+#endif
+}
+
+bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, int stream_id) {
+    if (!is_available_ || !is_running_.load() || ptr == nullptr || !loader_->is_available()) {
+        return false;
+    }
+
+    if (!config_.enable_unified_memory) {
+        return false;  // 未启用统一内存
+    }
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    if (!ensure_device_context()) {
+        return false;
+    }
+    const auto& funcs = loader_->get_functions();
+    if (!funcs.is_unified_memory_available() || funcs.cudaMemPrefetchAsync == nullptr) {
+        return false;  // 不支持内存预取
+    }
+
+    cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
+    if (stream_id != 0 && stream == nullptr) {
+        return false;  // 无效 stream_id
+    }
+
+    cudaError_t error = funcs.cudaMemPrefetchAsync(ptr, size, device_id, stream);
+    return check_cuda_error(error, "cudaMemPrefetchAsync");
+#else
+    (void)ptr;
+    (void)size;
+    (void)device_id;
+    (void)stream_id;
+    return false;
+#endif
+}
+
 bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
     if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
         return false;

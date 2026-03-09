@@ -262,6 +262,12 @@ bool CudaLoader::load_functions() {
     functions_.cudaGetErrorString = reinterpret_cast<CudaGetErrorStringFunc>(
         get_function_pointer("cudaGetErrorString"));
 
+    // Unified Memory 可选：CUDA 6.0+
+    functions_.cudaMallocManaged = reinterpret_cast<CudaMallocManagedFunc>(
+        get_function_pointer("cudaMallocManaged"));
+    functions_.cudaMemPrefetchAsync = reinterpret_cast<CudaMemPrefetchAsyncFunc>(
+        get_function_pointer("cudaMemPrefetchAsync"));
+
     return functions_.is_complete();
 }
 

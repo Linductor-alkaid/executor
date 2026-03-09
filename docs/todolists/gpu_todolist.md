@@ -330,16 +330,16 @@
 
 ### 3.3 统一内存支持（Unified Memory）
 
-- [ ] 扩展 `src/executor/gpu/cuda_executor.cpp`
-  - [ ] 实现统一内存分配（`cudaMallocManaged`）
-  - [ ] 实现统一内存管理接口
-  - [ ] 实现内存预取（`cudaMemPrefetchAsync`）
-  - [ ] 添加统一内存配置选项
+- [x] 扩展 `src/executor/gpu/cuda_executor.cpp`
+  - [x] 实现统一内存分配（`cudaMallocManaged`）
+  - [x] 实现统一内存管理接口
+  - [x] 实现内存预取（`cudaMemPrefetchAsync`）
+  - [x] 添加统一内存配置选项
 
-- [ ] 编写统一内存测试
-  - [ ] 测试统一内存分配
-  - [ ] 测试内存预取
-  - [ ] 性能对比测试（统一内存 vs 显式传输）
+- [x] 编写统一内存测试
+  - [x] 测试统一内存分配
+  - [x] 测试内存预取
+  - [x] 性能对比测试（统一内存 vs 显式传输）
 
 ### 3.4 智能调度（CPU/GPU 自动选择）
 

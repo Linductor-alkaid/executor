@@ -57,6 +57,9 @@ public:
     // 实现 IGpuExecutor 接口
     void* allocate_device_memory(size_t size) override;
     void free_device_memory(void* ptr) override;
+    void* allocate_unified_memory(size_t size) override;
+    void free_unified_memory(void* ptr) override;
+    bool prefetch_memory(const void* ptr, size_t size, int device_id, int stream_id = 0) override;
     bool copy_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
     bool copy_to_host(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
     bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
