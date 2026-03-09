@@ -15,6 +15,7 @@ file(GLOB TEST_SOURCES "*.cpp")
 if(NOT EXECUTOR_CUDA_ENABLED)
     list(FILTER TEST_SOURCES EXCLUDE REGEX ".*cuda.*")
     list(FILTER TEST_SOURCES EXCLUDE REGEX ".*gpu_memory_manager.*")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX ".*unified_memory.*")
 endif()
 
 # 如果未启用OpenCL，排除OpenCL相关测试
