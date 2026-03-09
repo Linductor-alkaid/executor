@@ -264,15 +264,15 @@ bool test_thread_pool_submit_basic() {
     pool.initialize(config);
     
     // 提交简单任务
-    auto future = pool.submit([]() {
+    auto future = pool.submit([]() noexcept {
         return 42;
     });
-    
+
     int result = future.get();
     TEST_ASSERT(result == 42, "Task result should be 42");
-    
+
     // 提交带参数的任务
-    auto future2 = pool.submit([](int a, int b) {
+    auto future2 = pool.submit([](int a, int b) noexcept {
         return a + b;
     }, 10, 20);
     
