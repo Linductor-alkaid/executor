@@ -349,7 +349,7 @@ bool test_thread_pool_concurrent_submit() {
     
     // 并发提交多个任务
     for (int i = 0; i < num_tasks; ++i) {
-        auto future = pool.submit([&, i]() {
+        auto future = pool.submit([&, i]() noexcept {
             completed_count.fetch_add(1);
         });
         futures.push_back(std::move(future));
