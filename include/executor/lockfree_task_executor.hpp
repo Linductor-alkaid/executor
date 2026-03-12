@@ -1,0 +1,93 @@
+#pragma once
+
+#include <functional>
+#include <thread>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+
+namespace executor {
+
+// Forward declaration
+namespace util {
+template<typename T> class LockFreeQueue;
+template<typename T> class ObjectPool;
+}
+
+/**
+ * @brief 无锁任务执行器
+ *
+ * 封装无锁队列和消费者线程，提供高性能任务提交接口。
+ * 适用于单生产者单消费者场景，避免锁竞争。
+ *
+ * 使用场景：
+ * - 高频日志收集
+ * - 异步事件处理
+ * - 性能敏感路径的任务分发
+ */
+class LockFreeTaskExecutor {
+public:
+    /**
+     * @brief 构造函数
+     * @param queue_capacity 队列容量（必须是2的幂，如果不是会自动调整）
+     */
+    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024);
+
+    /**
+     * @brief 析构函数（自动停止）
+     */
+    ~LockFreeTaskExecutor();
+
+    // 禁止拷贝和移动
+    LockFreeTaskExecutor(const LockFreeTaskExecutor&) = delete;
+    LockFreeTaskExecutor& operator=(const LockFreeTaskExecutor&) = delete;
+
+    /**
+     * @brief 启动消费者线程
+     * @return 成功返回true，已启动返回false
+     */
+    bool start();
+
+    /**
+     * @brief 停止消费者线程并等待
+     */
+    void stop();
+
+    /**
+     * @brief 检查是否正在运行
+     */
+    bool is_running() const;
+
+    /**
+     * @brief 提交任务到无锁队列
+     * @param task 任务函数
+     * @return 成功返回true，队列满返回false
+     */
+    bool push_task(std::function<void()> task);
+
+    /**
+     * @brief 获取队列中待处理任务数（近似值）
+     */
+    size_t pending_count() const;
+
+    /**
+     * @brief 获取已处理任务总数
+     */
+    uint64_t processed_count() const;
+
+private:
+    struct TaskWrapper {
+        std::function<void()> func;
+    };
+
+    void worker_thread();
+
+    util::LockFreeQueue<TaskWrapper*>* queue_;
+    util::ObjectPool<TaskWrapper>* task_pool_;
+
+    std::thread worker_;
+    std::atomic<bool> running_{false};
+    std::atomic<uint64_t> processed_count_{0};
+};
+
+} // namespace executor

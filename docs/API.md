@@ -108,7 +108,91 @@ std::vector<std::string> get_realtime_task_list() const;
 
 ---
 
-## 5. 监控 API
+## 5. 无锁任务执行器 API
+
+### 5.1 概述
+
+`LockFreeTaskExecutor` 是高性能的无锁任务执行器，适用于单生产者单消费者（SPSC）场景。通过无锁队列避免互斥锁开销，提供极低延迟（p50 ~29ns）和高吞吐（~800万 ops/s）。
+
+**适用场景**：
+- 高频日志收集
+- 实时事件处理
+- 传感器数据采集
+- 性能敏感的异步任务分发
+
+**限制**：
+- 仅支持单生产者单消费者
+- 固定队列容量，满时提交失败
+- 仅支持 `std::function<void()>` 任务
+
+### 5.2 包含头文件
+
+```cpp
+#include <executor/lockfree_task_executor.hpp>
+```
+
+### 5.3 基本用法
+
+```cpp
+// 创建执行器（队列容量1024）
+executor::LockFreeTaskExecutor exec(1024);
+
+// 启动消费者线程
+exec.start();
+
+// 提交任务
+bool success = exec.push_task([]() {
+    // 任务逻辑
+});
+
+if (!success) {
+    // 队列满，处理背压
+}
+
+// 停止执行器（会处理剩余任务）
+exec.stop();
+```
+
+### 5.4 API 接口
+
+```cpp
+class LockFreeTaskExecutor {
+public:
+    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024);
+    ~LockFreeTaskExecutor();
+
+    bool start();                                    // 启动消费者线程
+    void stop();                                     // 停止并等待
+    bool is_running() const;                         // 检查运行状态
+
+    bool push_task(std::function<void()> task);      // 提交任务
+
+    size_t pending_count() const;                    // 队列中待处理任务数
+    uint64_t processed_count() const;                // 已处理任务总数
+};
+```
+
+### 5.5 性能特性
+
+| 指标 | 值 |
+|------|-----|
+| 平均延迟 | ~97 ns |
+| p50 延迟 | ~29 ns |
+| p99 延迟 | ~1013 ns |
+| 吞吐量 | ~800万 ops/s |
+
+### 5.6 使用建议
+
+- **队列容量**：建议 1024-8192，根据任务频率调整
+- **任务粒度**：适合轻量级任务（微秒级执行时间）
+- **背压处理**：队列满时需要重试或丢弃策略
+- **生命周期**：确保在生产者之前创建，之后销毁
+
+详细示例见 [examples/lockfree_task_executor_example.cpp](../examples/lockfree_task_executor_example.cpp)。
+
+---
+
+## 6. 监控 API
 
 ```cpp
 void enable_monitoring(bool enable);
@@ -127,7 +211,7 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
 ---
 
-## 6. 配置与类型
+## 7. 配置与类型
 
 ### 6.1 ExecutorConfig（初始化线程池）
 
@@ -173,7 +257,7 @@ enum class TaskPriority { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 };
 
 ---
 
-## 7. GPU 执行器 API（可选，需 EXECUTOR_ENABLE_GPU）
+## 8. GPU 执行器 API（可选，需 EXECUTOR_ENABLE_GPU）
 
 GPU 执行器与 CPU 执行器接口分离，通过 `Executor` 注册与提交 GPU kernel，详见 [GPU 执行器设计](design/gpu_executor.md)。
 
@@ -263,7 +347,7 @@ exec.register_gpu_executor("gpu0", config);
 
 ---
 
-## 8. ICycleManager 接口（可选周期管理器）
+## 9. ICycleManager 接口（可选周期管理器）
 
 `ICycleManager` 是可选接口，用于为实时线程提供更精确的周期控制和监控。若不提供，executor 使用内置的简单周期实现（基于 `std::this_thread::sleep_until`）。
 
@@ -441,7 +525,7 @@ exec.stop_realtime_task("can_channel_0");
 
 ---
 
-## 9. 底层接口（可选）
+## 10. 底层接口（可选）
 
 - **IAsyncExecutor**：异步执行器抽象（线程池实现），提供 `submit`、`submit_priority`、`get_status`、`start`、`stop`、`wait_for_completion`。
 - **IRealtimeExecutor**：实时执行器抽象，提供 `start`、`stop`、`push_task`、`get_status`。
@@ -449,7 +533,7 @@ exec.stop_realtime_task("can_channel_0");
 
 ---
 
-## 10. 使用模式简述
+## 11. 使用模式简述
 
 - **单例**：`Executor::instance()` + `initialize`，同一进程内多模块共享线程池。
 - **实例化**：`Executor ex; ex.initialize(config);`，独立实例，RAII 析构时释放执行器，适合多项目/多模块隔离。
