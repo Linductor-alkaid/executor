@@ -39,6 +39,13 @@ public:
         size_t pos;
         while (true) {
             pos = enqueue_pos_.load(std::memory_order_relaxed);
+
+            // 检查队列是否已满（保留一个空槽位）
+            size_t deq = dequeue_pos_.load(std::memory_order_acquire);
+            if (pos - deq >= capacity_ - 1) {
+                return false;
+            }
+
             size_t index = pos & mask_;
             size_t seq = sequences_[index].load(std::memory_order_acquire);
             intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
