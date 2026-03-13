@@ -130,6 +130,12 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "benchmark;optimization"
             TIMEOUT 120
         )
+    # 批量提交基准测试（benchmark_batch_* 系列）
+    elseif(TEST_NAME MATCHES "^benchmark_batch_.*")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "benchmark;batch"
+            TIMEOUT 120
+        )
     # 默认：单元测试
     else()
         set_tests_properties(${TEST_NAME} PROPERTIES
