@@ -66,8 +66,8 @@ public:
         // 成功预留位置，写入数据
         buffer_[current_write] = item;
 
-        // 确保数据写入对消费者可见
-        std::atomic_thread_fence(std::memory_order_release);
+        // 使用 seq_cst 栅栏确保数据写入全局可见
+        std::atomic_thread_fence(std::memory_order_seq_cst);
 
         return true;
     }
