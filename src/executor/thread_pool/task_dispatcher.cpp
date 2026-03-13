@@ -108,6 +108,12 @@ size_t TaskDispatcher::dispatch_batch(size_t max_tasks) {
 
         size_t pushed = local_queues_[w].push_batch(tmp.get(), indices.size());
         total_dispatched += pushed;
+
+        // 将未能推送的任务放回调度器
+        for (size_t j = pushed; j < indices.size(); ++j) {
+            scheduler_.enqueue(tmp[j]);
+        }
+
         load_updates.emplace_back(w, local_queues_[w].size(), 0);
     }
 
