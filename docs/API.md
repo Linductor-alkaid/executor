@@ -112,18 +112,25 @@ std::vector<std::string> get_realtime_task_list() const;
 
 ### 5.1 概述
 
-`LockFreeTaskExecutor` 是高性能的无锁任务执行器，适用于单生产者单消费者（SPSC）场景。通过无锁队列避免互斥锁开销，提供极低延迟（p50 ~29ns）和高吞吐（~800万 ops/s）。
+`LockFreeTaskExecutor` 是高性能的无锁任务执行器，支持 **MPSC（多生产者单消费者）** 模式。通过无锁队列和 CAS 操作避免互斥锁开销，提供极低延迟和高吞吐。
 
 **适用场景**：
-- 高频日志收集
-- 实时事件处理
-- 传感器数据采集
+- 高频日志收集（多线程写入日志）
+- 实时事件处理（多个事件源）
+- 传感器数据采集（多传感器并发）
+- 多线程环境下的任务聚合
 - 性能敏感的异步任务分发
 
+**技术特性**：
+- 支持多个线程并发调用 `push_task()`
+- 单个消费者线程处理任务
+- 使用 CAS (Compare-And-Swap) 保证线程安全
+- 完全向后兼容单生产者场景
+
 **限制**：
-- 仅支持单生产者单消费者
 - 固定队列容量，满时提交失败
 - 仅支持 `std::function<void()>` 任务
+- 单消费者（不支持多消费者）
 
 ### 5.2 包含头文件
 
@@ -132,6 +139,8 @@ std::vector<std::string> get_realtime_task_list() const;
 ```
 
 ### 5.3 基本用法
+
+#### 单生产者场景（SPSC）
 
 ```cpp
 // 创建执行器（队列容量1024）
@@ -153,6 +162,32 @@ if (!success) {
 exec.stop();
 ```
 
+#### 多生产者场景（MPSC）
+
+```cpp
+executor::LockFreeTaskExecutor exec(4096);
+exec.start();
+
+// 多个线程可以安全地并发提交任务
+std::vector<std::thread> producers;
+for (int i = 0; i < 4; ++i) {
+    producers.emplace_back([&exec, i]() {
+        for (int j = 0; j < 1000; ++j) {
+            exec.push_task([i, j]() {
+                // 处理任务
+                std::cout << "Thread " << i << " task " << j << "\n";
+            });
+        }
+    });
+}
+
+for (auto& t : producers) {
+    t.join();
+}
+
+exec.stop();
+```
+
 ### 5.4 API 接口
 
 ```cpp
@@ -165,28 +200,296 @@ public:
     void stop();                                     // 停止并等待
     bool is_running() const;                         // 检查运行状态
 
-    bool push_task(std::function<void()> task);      // 提交任务
+    bool push_task(std::function<void()> task);      // 提交任务（线程安全）
 
-    size_t pending_count() const;                    // 队列中待处理任务数
+    size_t pending_count() const;                    // 队列中待处理任务数（近似值）
     uint64_t processed_count() const;                // 已处理任务总数
 };
 ```
 
 ### 5.5 性能特性
 
+#### 单生产者性能（SPSC）
+
 | 指标 | 值 |
 |------|-----|
-| 平均延迟 | ~97 ns |
-| p50 延迟 | ~29 ns |
-| p99 延迟 | ~1013 ns |
-| 吞吐量 | ~800万 ops/s |
+| 平均延迟 | 284 ns |
+| P50 延迟 | 171 ns |
+| P99 延迟 | 1,276 ns |
+| 吞吐量 | 762万 ops/s |
 
-### 5.6 使用建议
+#### 多生产者性能（MPSC）
 
-- **队列容量**：建议 1024-8192，根据任务频率调整
-- **任务粒度**：适合轻量级任务（微秒级执行时间）
-- **背压处理**：队列满时需要重试或丢弃策略
-- **生命周期**：确保在生产者之前创建，之后销毁
+| 生产者数 | 总吞吐量 | 单生产者吞吐量 | 效率 |
+|---------|---------|---------------|------|
+| 1       | 762万/s | 762万/s       | 100% |
+| 2       | 528万/s | 264万/s       | 35%  |
+| 4       | 360万/s | 90万/s        | 12%  |
+| 8       | 281万/s | 35万/s        | 5%   |
+
+**性能说明**：
+- 单生产者性能接近理论最优（仅 3% CAS 开销）
+- 2个生产者性能下降可控（35% 效率）
+- 4+ 生产者因 CAS 竞争导致效率显著下降
+
+### 5.6 最佳实践
+
+#### ✅ 推荐做法
+
+**1. 选择合适的生产者数量**
+```cpp
+// 推荐：1-2 个生产者
+executor::LockFreeTaskExecutor exec(4096);
+
+// ✅ 单生产者：最佳性能
+std::thread producer([&]() {
+    exec.push_task([]() { /* ... */ });
+});
+
+// ✅ 2个生产者：性能良好
+std::thread p1([&]() { exec.push_task([]() { /* ... */ }); });
+std::thread p2([&]() { exec.push_task([]() { /* ... */ }); });
+```
+
+**2. 合理设置队列容量**
+```cpp
+// 根据任务频率和处理速度设置
+// 低频场景：1024-2048
+executor::LockFreeTaskExecutor low_freq(1024);
+
+// 高频场景：4096-16384
+executor::LockFreeTaskExecutor high_freq(8192);
+
+// 容量必须是 2 的幂（会自动调整）
+```
+
+**3. 正确处理队列满的情况**
+```cpp
+bool success = exec.push_task([]() { /* ... */ });
+if (!success) {
+    // 策略1：重试（适合关键任务）
+    while (!exec.push_task([]() { /* ... */ })) {
+        std::this_thread::yield();
+    }
+
+    // 策略2：丢弃（适合日志等非关键任务）
+    // 直接忽略
+
+    // 策略3：降级（适合有备选方案的场景）
+    // 使用其他执行器或同步执行
+}
+```
+
+**4. 避免在 lambda 中捕获悬空引用**
+```cpp
+std::atomic<int> counter{0};
+
+// ❌ 错误：捕获局部变量引用
+{
+    int local_var = 42;
+    exec.push_task([&local_var]() {
+        // local_var 可能已被销毁！
+        std::cout << local_var << "\n";
+    });
+}
+
+// ✅ 正确：捕获值或使用全局/静态变量
+exec.push_task([value = 42]() {
+    std::cout << value << "\n";
+});
+
+// ✅ 正确：捕获 shared_ptr
+auto data = std::make_shared<int>(42);
+exec.push_task([data]() {
+    std::cout << *data << "\n";
+});
+
+// ✅ 正确：使用原子变量
+exec.push_task([&counter]() {
+    counter.fetch_add(1);
+});
+```
+
+**5. 确保正确的生命周期管理**
+```cpp
+// ✅ 正确：执行器在生产者之前创建，之后销毁
+{
+    executor::LockFreeTaskExecutor exec(1024);
+    exec.start();
+
+    std::thread producer([&]() {
+        exec.push_task([]() { /* ... */ });
+    });
+
+    producer.join();
+    exec.stop();  // 会处理剩余任务
+}  // 执行器在这里销毁
+```
+
+#### ⚠️ 注意事项
+
+**1. 避免过多生产者**
+```cpp
+// ❌ 不推荐：4+ 生产者效率低
+std::vector<std::thread> producers;
+for (int i = 0; i < 16; ++i) {  // 效率仅 1-2%
+    producers.emplace_back([&]() {
+        exec.push_task([]() { /* ... */ });
+    });
+}
+
+// ✅ 推荐：使用线程池或批量提交
+ThreadPool pool(16);
+pool.submit([&]() {
+    // 单个线程批量提交
+    for (int i = 0; i < 1000; ++i) {
+        exec.push_task([]() { /* ... */ });
+    }
+});
+```
+
+**2. 避免在任务中执行耗时操作**
+```cpp
+// ❌ 错误：阻塞消费者线程
+exec.push_task([]() {
+    std::this_thread::sleep_for(std::chrono::seconds(1));  // 阻塞！
+    // 或者执行 I/O、网络请求等耗时操作
+});
+
+// ✅ 正确：任务应该是轻量级的
+exec.push_task([]() {
+    // 快速处理，微秒级
+    process_data();
+});
+
+// ✅ 正确：耗时操作使用其他执行器
+exec.push_task([&async_exec]() {
+    async_exec.submit([]() {
+        // 在其他线程执行耗时操作
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    });
+});
+```
+
+**3. 注意 `pending_count()` 的近似性**
+```cpp
+// ⚠️ 注意：pending_count() 返回近似值
+size_t count = exec.pending_count();
+// 在多生产者场景下，实际值可能略有不同
+// 不要依赖精确值做关键决策
+```
+
+**4. 避免在析构函数中提交任务**
+```cpp
+class MyClass {
+    executor::LockFreeTaskExecutor& exec_;
+public:
+    ~MyClass() {
+        // ❌ 危险：析构时提交任务可能导致问题
+        exec_.push_task([this]() {
+            // this 可能已被销毁！
+        });
+    }
+};
+```
+
+### 5.7 异常行为和故障排查
+
+#### 常见问题
+
+**1. 段错误（Segmentation Fault）**
+
+**原因**：Lambda 捕获了悬空引用
+```cpp
+// ❌ 问题代码
+void bad_example() {
+    executor::LockFreeTaskExecutor exec(1024);
+    exec.start();
+
+    int local = 42;
+    exec.push_task([&local]() {
+        std::cout << local << "\n";  // local 可能已销毁
+    });
+
+    // 函数返回，local 被销毁
+}
+```
+
+**解决方案**：
+```cpp
+// ✅ 方案1：按值捕获
+exec.push_task([local]() {
+    std::cout << local << "\n";
+});
+
+// ✅ 方案2：使用 shared_ptr
+auto data = std::make_shared<int>(42);
+exec.push_task([data]() {
+    std::cout << *data << "\n";
+});
+```
+
+**2. 任务丢失**
+
+**原因**：队列满时未处理失败情况
+```cpp
+// ❌ 问题代码
+exec.push_task([]() { /* ... */ });  // 忽略返回值
+```
+
+**解决方案**：
+```cpp
+// ✅ 检查返回值
+if (!exec.push_task([]() { /* ... */ })) {
+    // 处理失败：重试、丢弃或降级
+}
+```
+
+**3. 性能下降**
+
+**原因**：生产者过多导致 CAS 竞争
+```cpp
+// ❌ 问题代码：16个生产者，效率仅 1%
+for (int i = 0; i < 16; ++i) {
+    threads.emplace_back([&]() {
+        exec.push_task([]() { /* ... */ });
+    });
+}
+```
+
+**解决方案**：
+```cpp
+// ✅ 减少生产者数量到 1-2 个
+for (int i = 0; i < 2; ++i) {
+    threads.emplace_back([&]() {
+        exec.push_task([]() { /* ... */ });
+    });
+}
+```
+
+**4. 死锁或挂起**
+
+**原因**：在任务中等待执行器停止
+```cpp
+// ❌ 问题代码
+exec.push_task([&exec]() {
+    exec.stop();  // 死锁！消费者线程等待自己
+});
+```
+
+**解决方案**：
+```cpp
+// ✅ 在外部停止
+exec.stop();
+```
+
+### 5.8 性能调优建议
+
+1. **队列容量**：根据峰值任务频率设置，避免频繁队列满
+2. **生产者数量**：优先使用 1-2 个生产者
+3. **任务粒度**：保持任务轻量级（< 10 微秒）
+4. **内存对齐**：队列容量设为 2 的幂以优化性能
+5. **CPU 亲和性**：考虑将消费者线程绑定到特定 CPU 核心
 
 详细示例见 [examples/lockfree_task_executor_example.cpp](../examples/lockfree_task_executor_example.cpp)。
 

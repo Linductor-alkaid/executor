@@ -10,11 +10,11 @@ namespace executor {
 namespace util {
 
 /**
- * @brief 无锁队列（SPSC - 单生产者单消费者）
- * 
- * 使用环形缓冲区实现，适用于单生产者单消费者场景。
- * 使用 std::atomic 和内存序保证线程安全。
- * 
+ * @brief 无锁队列（MPSC - 多生产者单消费者）
+ *
+ * 使用环形缓冲区实现，支持多个生产者并发写入，单个消费者读取。
+ * 使用 CAS (Compare-And-Swap) 操作保证多生产者场景下的线程安全。
+ *
  * @tparam T 队列元素类型，必须是可平凡复制的（trivially copyable）
  */
 template<typename T>
@@ -36,25 +36,36 @@ public:
     }
 
     /**
-     * @brief 推入元素到队列
+     * @brief 推入元素到队列（支持多生产者并发调用）
      * @param item 要推入的元素
      * @return 成功返回true，队列满时返回false
      */
     bool push(const T& item) {
-        const size_t current_write = write_pos_.load(std::memory_order_relaxed);
-        const size_t next_write = (current_write + 1) & mask_;
-        const size_t current_read = read_pos_.load(std::memory_order_acquire);
+        size_t current_write, next_write;
+        size_t current_read;
 
-        // 检查队列是否满
-        if (next_write == current_read) {
-            return false;
-        }
+        do {
+            current_write = write_pos_.load(std::memory_order_relaxed);
+            next_write = (current_write + 1) & mask_;
+            current_read = read_pos_.load(std::memory_order_acquire);
 
-        // 写入数据
+            // 检查队列是否满
+            if (next_write == current_read) {
+                return false;
+            }
+
+            // 使用 CAS 原子性地预留写入位置
+            // 如果失败，说明其他线程抢先了，需要重试
+        } while (!write_pos_.compare_exchange_weak(
+            current_write,
+            next_write,
+            std::memory_order_release,  // 成功时的内存序
+            std::memory_order_relaxed   // 失败时的内存序
+        ));
+
+        // 成功预留位置，写入数据
         buffer_[current_write] = item;
 
-        // 更新写位置（使用release语义确保数据写入完成）
-        write_pos_.store(next_write, std::memory_order_release);
         return true;
     }
 

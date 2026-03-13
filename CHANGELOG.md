@@ -4,6 +4,37 @@
 
 ---
 
+## [0.2.2] - 2026-03-13
+
+### 新增
+
+- **无锁任务执行器**：新增 `LockFreeTaskExecutor` 类，提供高性能无锁任务执行能力
+  - 支持 MPSC（多生产者单消费者）模式，使用 CAS 操作保证线程安全
+  - 单生产者性能：762万 ops/s，P50 延迟 171ns
+  - 2生产者性能：528万 ops/s，效率 35%
+  - 完全向后兼容单生产者场景（仅 3% 性能损失）
+  - 适用场景：高频日志收集、实时事件处理、多线程任务聚合
+- **API 接口**：`start()`、`stop()`、`push_task()`、`is_running()`、`pending_count()`、`processed_count()`
+- **使用示例**：`examples/lockfree_task_executor_example.cpp` 演示基本用法、日志收集、事件处理
+
+### 测试
+
+- **并发安全性测试**：`test_lockfree_mpsc` 包含 6 项测试
+  - 多生产者并发提交、高竞争正确性、队列满处理
+  - 数据竞争检测、动态生产者、压力测试（32生产者）
+- **性能基准测试**：
+  - `benchmark_lockfree_task_executor`：基础延迟和吞吐量测试
+  - `benchmark_lockfree_mpsc`：简化吞吐量测试
+  - `benchmark_lockfree_mpsc_full`：完整性能评估（延迟/吞吐量/背压/可扩展性）
+
+### 文档
+
+- **API 手册更新**：[docs/API.md](docs/API.md) 新增第5节"无锁任务执行器 API"
+- **设计文档**：[docs/design/lockfree_user_api.md](docs/design/lockfree_user_api.md) 详细设计方案和使用指南
+- **性能基线**：[docs/performance/lockfree_task_executor_baseline.md](docs/performance/lockfree_task_executor_baseline.md) 性能测试结果和分析
+
+---
+
 ## [0.2.1] - 2026-03-09
 
 ### 新增

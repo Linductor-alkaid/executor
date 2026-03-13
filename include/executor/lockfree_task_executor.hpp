@@ -18,12 +18,13 @@ template<typename T> class ObjectPool;
  * @brief 无锁任务执行器
  *
  * 封装无锁队列和消费者线程，提供高性能任务提交接口。
- * 适用于单生产者单消费者场景，避免锁竞争。
+ * 支持多个线程并发调用 push_task()，单个消费者线程处理任务（MPSC模式）。
  *
  * 使用场景：
  * - 高频日志收集
  * - 异步事件处理
  * - 性能敏感路径的任务分发
+ * - 多线程环境下的任务聚合
  */
 class LockFreeTaskExecutor {
 public:
@@ -59,7 +60,7 @@ public:
     bool is_running() const;
 
     /**
-     * @brief 提交任务到无锁队列
+     * @brief 提交任务到无锁队列（线程安全，支持多线程并发调用）
      * @param task 任务函数
      * @return 成功返回true，队列满返回false
      */
