@@ -240,37 +240,38 @@ ThreadPoolStatus ThreadPool::get_status() const {
 }
 
 void ThreadPool::shutdown(bool wait_for_tasks) {
+    // 检查是否已经关闭
+    if (stop_.load()) {
+        return;
+    }
+
+    // 如果需要等待任务完成，先等待（此时 stop_ 仍为 false，工作线程继续运行）
+    if (wait_for_tasks) {
+        wait_for_completion();
+    }
+
+    // 设置停止标志
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        
-        if (stop_.load()) {
-            return;  // 已经关闭
-        }
-        
         stop_.store(true);
     }
-    
+
     // 停止监控线程
     resize_monitor_stop_.store(true);
     if (resize_monitor_thread_.joinable()) {
         resize_monitor_thread_.join();
     }
-    
+
     // 唤醒所有等待的线程
     condition_.notify_all();
-    
-    // 如果需要等待任务完成
-    if (wait_for_tasks) {
-        wait_for_completion();
-    }
-    
+
     // 等待所有工作线程退出
     for (auto& worker : workers_) {
         if (worker.joinable()) {
             worker.join();
         }
     }
-    
+
     workers_.clear();
     worker_ids_.clear();
     local_queues_.clear();
