@@ -316,9 +316,11 @@ void Executor::timer_thread_func() {
                 }
 
                 if (now >= periodic_task.next_execute_time) {
-                    periodic_task.task();
-                    periodic_task.next_execute_time =
-                        now + std::chrono::milliseconds(periodic_task.period_ms);
+                    if (!periodic_task.cancelled) {
+                        periodic_task.task();
+                        periodic_task.next_execute_time =
+                            now + std::chrono::milliseconds(periodic_task.period_ms);
+                    }
                 }
 
                 if (periodic_task.next_execute_time < next_wake)
