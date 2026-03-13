@@ -93,6 +93,15 @@ public:
         -> std::future<typename std::invoke_result<F, Args...>::type>;
 
     /**
+     * @brief 批量提交任务
+     *
+     * 批量提交多个任务，一次获取锁，减少锁竞争开销。
+     *
+     * @param tasks 任务列表
+     */
+    void submit_batch(std::vector<std::function<void()>> tasks);
+
+    /**
      * @brief 获取线程池状态
      * 
      * @return 线程池状态信息

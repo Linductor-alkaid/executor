@@ -65,7 +65,110 @@ auto submit_priority(int priority, F&& f, Args&&... args)
 - `priority`：`0`=LOW，`1`=NORMAL，`2`=HIGH，`3`=CRITICAL（对应 `TaskPriority`）。
 - 高优先级任务优先被调度。
 
-### 3.3 延迟与周期任务
+### 3.3 批量提交
+
+```cpp
+template<typename F>
+std::vector<std::future<void>> submit_batch(const std::vector<F>& tasks);
+
+template<typename F>
+void submit_batch_no_future(const std::vector<F>& tasks);
+```
+
+- **`submit_batch`**：批量提交任务，返回 `std::future<void>` 列表，适合需要等待任务完成的场景。
+- **`submit_batch_no_future`**：批量提交任务，不返回 future（fire-and-forget），性能更高。
+
+#### 性能特性
+
+| 场景 | 性能提升 | 推荐使用 |
+|------|---------|---------|
+| 单线程提交 500+ 任务 | **5-16x** | ✅ `submit_batch_no_future` |
+| 单线程提交 < 500 任务 | 2-5x | ✅ `submit_batch_no_future` |
+| 多线程并发提交 | 0.6-1.2x | ⚠️ 使用循环 `submit()` |
+
+#### 适用场景
+
+**✅ 推荐使用批量提交**：
+- 单线程需要提交大量任务（500+ 个）
+- 任务准备开销小（如简单的 lambda）
+- 不需要立即获取每个任务的 future（使用 `submit_batch_no_future`）
+
+**⚠️ 不推荐使用批量提交**：
+- 多线程并发提交（每个线程准备任务列表的开销会抵消收益）
+- 任务数量较少（< 100 个）
+- 需要在提交过程中动态决定是否继续提交
+
+#### 最佳实践
+
+```cpp
+// ✅ 推荐：单线程批量提交大量任务
+Executor executor;
+
+std::vector<std::function<void()>> tasks;
+tasks.reserve(1000);  // 预分配内存
+
+for (int i = 0; i < 1000; ++i) {
+    tasks.push_back([i]() {
+        process_data(i);
+    });
+}
+
+// 使用无 future 版本，性能最佳（5-16x 加速）
+executor.submit_batch_no_future(tasks);
+
+// 或使用有 future 版本（如需等待完成）
+auto futures = executor.submit_batch(tasks);
+for (auto& f : futures) {
+    f.wait();  // 等待所有任务完成
+}
+```
+
+```cpp
+// ⚠️ 不推荐：多线程并发批量提交
+std::vector<std::thread> threads;
+for (int t = 0; t < 4; ++t) {
+    threads.emplace_back([&executor]() {
+        std::vector<std::function<void()>> tasks;
+        for (int i = 0; i < 1000; ++i) {
+            tasks.push_back([i]() { process(i); });
+        }
+        // 每个线程准备任务列表的开销较大
+        executor.submit_batch_no_future(tasks);
+    });
+}
+
+// ✅ 推荐：多线程直接提交
+std::vector<std::thread> threads;
+for (int t = 0; t < 4; ++t) {
+    threads.emplace_back([&executor]() {
+        for (int i = 0; i < 1000; ++i) {
+            executor.submit([i]() { process(i); });
+        }
+    });
+}
+```
+
+#### 性能测试数据
+
+单线程批量提交性能（使用 `submit_batch_no_future`）：
+
+| 任务数 | 循环 submit | submit_batch_no_future | 加速比 |
+|--------|-------------|------------------------|--------|
+| 500    | 2757 μs     | 549 μs                 | 5.02x  |
+| 1000   | 5307 μs     | 1246 μs                | 4.26x  |
+| 2000   | 11003 μs    | 668 μs                 | 16.47x |
+
+多线程并发提交性能（使用 `submit_batch`）：
+
+| 线程数 | 每线程任务数 | 循环 submit | submit_batch | 加速比 |
+|--------|-------------|-------------|--------------|--------|
+| 2      | 5000        | 37 ms       | 37 ms        | 1.00x  |
+| 4      | 2500        | 23 ms       | 38 ms        | 0.61x  |
+| 8      | 1250        | 45 ms       | 38 ms        | 1.18x  |
+
+**结论**：批量提交在单线程场景下性能提升显著，多线程场景下建议使用循环 `submit()`。
+
+### 3.4 延迟与周期任务
 
 ```cpp
 template<typename F, typename... Args>

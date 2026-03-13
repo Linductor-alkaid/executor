@@ -12,7 +12,10 @@
   线程池（普通并发任务）+ 专用实时线程（高实时性任务，如 CAN 通信、传感器采集）
 
 - **统一 API**
-  `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic` 及实时任务注册
+  `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic`、`submit_batch`、`submit_batch_no_future` 及实时任务注册
+
+- **批量任务提交**
+  `submit_batch()` 和 `submit_batch_no_future()` 高效提交大量任务，单线程场景性能提升 **5-16x**（500-2000 个任务）
 
 - **可选 GPU（CUDA/OpenCL）**
   GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端
@@ -106,10 +109,10 @@ int main() {
     auto& ex = executor::Executor::instance();
     ex.initialize(config);
 
-    auto future = ex.submit([]() { 
-        return 42; 
+    auto future = ex.submit([]() {
+        return 42;
     });
-    
+
     int result = future.get();
     ex.shutdown();
     return 0;

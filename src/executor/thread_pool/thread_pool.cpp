@@ -473,18 +473,57 @@ void ThreadPool::resize_monitor_thread() {
 
 void ThreadPool::create_worker_thread(size_t worker_id) {
     workers_.emplace_back(&ThreadPool::worker_thread, this, worker_id);
-    
+
     // 设置线程优先级
     if (config_.thread_priority != 0) {
-        util::set_thread_priority(workers_.back().native_handle(), 
+        util::set_thread_priority(workers_.back().native_handle(),
                                  config_.thread_priority);
     }
-    
+
     // 设置CPU亲和性
     if (!config_.cpu_affinity.empty()) {
         int cpu_id = config_.cpu_affinity[worker_id % config_.cpu_affinity.size()];
         util::set_cpu_affinity(workers_.back().native_handle(), {cpu_id});
     }
+}
+
+void ThreadPool::submit_batch(std::vector<std::function<void()>> tasks) {
+    if (tasks.empty()) {
+        return;
+    }
+
+    // 一次获取锁，批量提交所有任务
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (stop_.load()) {
+        return;  // 线程池已停止，忽略任务
+    }
+
+    size_t batch_size = tasks.size();
+
+    // 批量创建并入队任务
+    for (auto& task_func : tasks) {
+        Task executor_task;
+        executor_task.task_id = generate_task_id();
+        executor_task.priority = TaskPriority::NORMAL;
+        executor_task.function = std::move(task_func);
+        executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+        executor_task.timeout_ms = config_.task_timeout_ms;
+
+        scheduler_.enqueue(executor_task);
+    }
+
+    total_tasks_.fetch_add(batch_size, std::memory_order_relaxed);
+
+    // 批量分发
+    if (dispatcher_) {
+        dispatcher_->dispatch_batch(batch_size);
+    }
+
+    // 唤醒所有等待的工作线程
+    condition_.notify_all();
 }
 
 } // namespace executor

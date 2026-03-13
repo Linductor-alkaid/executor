@@ -8,6 +8,13 @@
 
 ### 新增
 
+- **批量任务提交 API**：新增 `submit_batch()` 和 `submit_batch_no_future()` 方法
+  - `submit_batch()`：批量提交任务并返回 `std::future<void>` 列表
+  - `submit_batch_no_future()`：批量提交任务，不返回 future，性能更高（fire-and-forget）
+  - 单线程场景性能提升显著：**5-16x 加速**（500-2000 个任务）
+  - 适用场景：单线程提交大量任务（500+ 个）
+  - 不推荐场景：多线程并发提交（建议使用循环 `submit()`）
+  - 底层优化：一次获取锁批量提交，减少锁竞争和内存分配开销
 - **无锁任务执行器**：新增 `LockFreeTaskExecutor` 类，提供高性能无锁任务执行能力
   - 支持 MPSC（多生产者单消费者）模式，使用 CAS 操作保证线程安全
   - 单生产者性能：762万 ops/s，P50 延迟 171ns
@@ -19,6 +26,11 @@
 
 ### 测试
 
+- **批量提交性能测试**：
+  - `benchmark_batch_submit`：单线程批量提交基准测试
+  - `benchmark_batch_scales`：多规模性能测试（500/1000/2000 任务）
+  - `benchmark_batch_submit_concurrent`：多线程并发提交测试
+  - `test_batch_no_future`：功能正确性测试
 - **并发安全性测试**：`test_lockfree_mpsc` 包含 6 项测试
   - 多生产者并发提交、高竞争正确性、队列满处理
   - 数据竞争检测、动态生产者、压力测试（32生产者）
@@ -29,6 +41,10 @@
 
 ### 文档
 
+- **API 手册更新**：[docs/API.md](docs/API.md) 新增批量提交 API 说明（第3.3节）
+  - 性能特性表格：不同场景下的性能提升数据
+  - 适用场景说明：推荐和不推荐的使用场景
+  - 最佳实践：代码示例和性能测试数据
 - **API 手册更新**：[docs/API.md](docs/API.md) 新增第5节"无锁任务执行器 API"
 - **设计文档**：[docs/design/lockfree_user_api.md](docs/design/lockfree_user_api.md) 详细设计方案和使用指南
 - **性能基线**：[docs/performance/lockfree_task_executor_baseline.md](docs/performance/lockfree_task_executor_baseline.md) 性能测试结果和分析

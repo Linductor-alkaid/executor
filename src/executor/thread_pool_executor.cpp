@@ -63,4 +63,9 @@ void ThreadPoolExecutor::submit_priority_impl(int priority, std::function<void()
     thread_pool_.submit_priority(priority, std::move(task));
 }
 
+void ThreadPoolExecutor::submit_batch_impl(std::vector<std::function<void()>> tasks) {
+    // 调用 ThreadPool 的批量提交方法（一次获取锁）
+    thread_pool_.submit_batch(std::move(tasks));
+}
+
 } // namespace executor

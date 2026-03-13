@@ -66,6 +66,9 @@ public:
         // 成功预留位置，写入数据
         buffer_[current_write] = item;
 
+        // 确保数据写入对消费者可见
+        std::atomic_thread_fence(std::memory_order_release);
+
         return true;
     }
 
@@ -82,6 +85,9 @@ public:
         if (current_read == current_write) {
             return false;
         }
+
+        // 确保能看到生产者写入的数据
+        std::atomic_thread_fence(std::memory_order_acquire);
 
         // 读取数据
         item = buffer_[current_read];

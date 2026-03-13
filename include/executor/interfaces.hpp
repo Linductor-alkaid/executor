@@ -71,7 +71,7 @@ public:
 
     /**
      * @brief 提交优先级任务（返回Future）
-     * 
+     *
      * @tparam F 可调用对象类型
      * @tparam Args 参数类型
      * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
@@ -83,14 +83,64 @@ public:
     auto submit_priority(int priority, F&& f, Args&&... args)
         -> std::future<typename std::invoke_result<F, Args...>::type> {
         using return_type = typename std::invoke_result<F, Args...>::type;
-        
+
         auto task = std::make_shared<std::packaged_task<return_type()>>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
         );
-        
+
         std::future<return_type> result = task->get_future();
         submit_priority_impl(priority, [task]() { (*task)(); });
         return result;
+    }
+
+    /**
+     * @brief 批量提交任务
+     *
+     * 批量提交多个任务，内部优化减少锁竞争。
+     *
+     * @tparam F 可调用对象类型
+     * @param tasks 任务列表
+     * @return std::vector<std::future<void>> 任务执行结果的 future 列表
+     */
+    template<typename F>
+    std::vector<std::future<void>> submit_batch(const std::vector<F>& tasks) {
+        std::vector<std::function<void()>> task_wrappers;
+        std::vector<std::future<void>> futures;
+
+        task_wrappers.reserve(tasks.size());
+        futures.reserve(tasks.size());
+
+        // 准备所有任务和 future
+        for (const auto& task : tasks) {
+            auto packaged = std::make_shared<std::packaged_task<void()>>(task);
+            futures.push_back(packaged->get_future());
+            task_wrappers.push_back([packaged]() { (*packaged)(); });
+        }
+
+        // 批量提交（减少锁竞争）
+        submit_batch_impl(std::move(task_wrappers));
+
+        return futures;
+    }
+
+    /**
+     * @brief 批量提交任务（无 future 版本）
+     *
+     * 批量提交多个任务，不返回 future，性能更高。
+     *
+     * @tparam F 可调用对象类型
+     * @param tasks 任务列表
+     */
+    template<typename F>
+    void submit_batch_no_future(const std::vector<F>& tasks) {
+        std::vector<std::function<void()>> task_wrappers;
+        task_wrappers.reserve(tasks.size());
+
+        for (const auto& task : tasks) {
+            task_wrappers.push_back(task);
+        }
+
+        submit_batch_impl(std::move(task_wrappers));
     }
 
 protected:
@@ -108,6 +158,17 @@ protected:
     virtual void submit_priority_impl(int /*priority*/, std::function<void()> task) {
         // 默认实现：忽略优先级，使用普通提交
         submit_impl(std::move(task));
+    }
+
+    /**
+     * @brief 批量提交任务实现（内部方法）
+     * @param tasks 任务列表
+     */
+    virtual void submit_batch_impl(std::vector<std::function<void()>> tasks) {
+        // 默认实现：逐个提交
+        for (auto& task : tasks) {
+            submit_impl(std::move(task));
+        }
     }
 };
 
