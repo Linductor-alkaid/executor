@@ -27,8 +27,8 @@ int main() {
     auto end1 = steady_clock::now();
     auto us1 = duration_cast<microseconds>(end1 - start1).count();
 
-    std::this_thread::sleep_for(milliseconds(500));  // 增加等待时间
-    executor1.shutdown();
+    executor1.wait_for_completion();
+    executor1.shutdown(false);
 
     std::cout << "  耗时: " << us1 << " μs\n";
     std::cout << "  计数: " << counter1.load() << "\n\n";
@@ -48,8 +48,8 @@ int main() {
     auto end2 = steady_clock::now();
     auto us2 = duration_cast<microseconds>(end2 - start2).count();
 
-    std::this_thread::sleep_for(milliseconds(500));  // 增加等待时间
-    executor2.shutdown();
+    executor2.wait_for_completion();
+    executor2.shutdown(false);
 
     std::cout << "  耗时: " << us2 << " μs\n";
     std::cout << "  计数: " << counter2.load() << "\n\n";

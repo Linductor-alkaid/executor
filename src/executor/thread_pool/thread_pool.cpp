@@ -282,35 +282,35 @@ void ThreadPool::wait_for_completion() {
     // 1. 全局调度器 + 所有本地队列为空（没有待执行的任务）
     // 2. 没有活跃线程（没有正在执行的任务）
     // 3. 所有已提交的任务都已完成（total == completed + failed）
-    
-    const int max_iterations = 10000;  // 最多等待100秒（10000 * 10ms）
+
+    const int max_iterations = 30000;  // 最多等待300秒（30000 * 10ms）
     int iterations = 0;
-    
+
     while (iterations < max_iterations) {
         // 先不加锁读取原子变量（避免长时间持锁）
-        size_t total = total_tasks_.load(std::memory_order_relaxed);
-        size_t completed = completed_tasks_.load(std::memory_order_relaxed);
-        size_t failed = failed_tasks_.load(std::memory_order_relaxed);
-        size_t active = active_threads_.load(std::memory_order_relaxed);
-        
+        size_t total = total_tasks_.load(std::memory_order_acquire);
+        size_t completed = completed_tasks_.load(std::memory_order_acquire);
+        size_t failed = failed_tasks_.load(std::memory_order_acquire);
+        size_t active = active_threads_.load(std::memory_order_acquire);
+
         // 如果任务计数不匹配或仍有活跃线程，需要检查队列
         if (total != completed + failed || active > 0) {
             std::unique_lock<std::mutex> lock(mutex_);
             bool scheduler_empty = scheduler_.empty();
-            
+
             // 检查所有本地队列是否为空
             size_t local_queue_total = 0;
             for (const auto& queue : local_queues_) {
                 local_queue_total += queue.size();
             }
             bool all_queues_empty = scheduler_empty && (local_queue_total == 0);
-            
+
             // 重新读取（因为可能已经变化）
-            total = total_tasks_.load(std::memory_order_relaxed);
-            completed = completed_tasks_.load(std::memory_order_relaxed);
-            failed = failed_tasks_.load(std::memory_order_relaxed);
-            active = active_threads_.load(std::memory_order_relaxed);
-            
+            total = total_tasks_.load(std::memory_order_acquire);
+            completed = completed_tasks_.load(std::memory_order_acquire);
+            failed = failed_tasks_.load(std::memory_order_acquire);
+            active = active_threads_.load(std::memory_order_acquire);
+
             if (all_queues_empty && active == 0 && total == completed + failed) {
                 break;
             }
@@ -319,20 +319,20 @@ void ThreadPool::wait_for_completion() {
             // 任务计数匹配且没有活跃线程，再检查一次队列（需要加锁）
             std::unique_lock<std::mutex> lock(mutex_);
             bool scheduler_empty = scheduler_.empty();
-            
+
             // 检查所有本地队列是否为空
             size_t local_queue_total = 0;
             for (const auto& queue : local_queues_) {
                 local_queue_total += queue.size();
             }
             bool all_queues_empty = scheduler_empty && (local_queue_total == 0);
-            
+
             if (all_queues_empty && active == 0 && total == completed + failed) {
                 break;
             }
             lock.unlock();
         }
-        
+
         // 短暂等待后重试
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         ++iterations;

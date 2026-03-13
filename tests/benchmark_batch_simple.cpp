@@ -24,8 +24,8 @@ void test_loop_submit(int num_tasks) {
     }
     auto end = steady_clock::now();
 
-    std::this_thread::sleep_for(milliseconds(50));
-    executor.shutdown();
+    executor.wait_for_completion();
+    executor.shutdown(false);
 
     auto duration_us = duration_cast<microseconds>(end - start).count();
     double throughput = num_tasks * 1000000.0 / duration_us;
@@ -53,8 +53,8 @@ void test_batch_with_future(int num_tasks) {
     auto futures = executor.submit_batch(tasks);
     auto end = steady_clock::now();
 
-    std::this_thread::sleep_for(milliseconds(50));
-    executor.shutdown();
+    executor.wait_for_completion();
+    executor.shutdown(false);
 
     auto duration_us = duration_cast<microseconds>(end - start).count();
     double throughput = num_tasks * 1000000.0 / duration_us;
@@ -82,8 +82,8 @@ void test_batch_no_future(int num_tasks) {
     executor.submit_batch_no_future(tasks);
     auto end = steady_clock::now();
 
-    std::this_thread::sleep_for(milliseconds(50));
-    executor.shutdown();
+    executor.wait_for_completion();
+    executor.shutdown(false);
 
     auto duration_us = duration_cast<microseconds>(end - start).count();
     double throughput = num_tasks * 1000000.0 / duration_us;

@@ -55,8 +55,8 @@ BenchmarkResult benchmark_loop_submit(int num_threads, int tasks_per_thread) {
     auto end_time = steady_clock::now();
     double duration_ms = duration_cast<milliseconds>(end_time - start_time).count();
 
-    std::this_thread::sleep_for(milliseconds(50));
-    executor.shutdown();
+    executor.wait_for_completion();
+    executor.shutdown(false);
 
     int total_tasks = num_threads * tasks_per_thread;
     double throughput = total_tasks * 1000.0 / duration_ms;
@@ -99,8 +99,8 @@ BenchmarkResult benchmark_batch_with_future(int num_threads, int tasks_per_threa
     auto end_time = steady_clock::now();
     double duration_ms = duration_cast<milliseconds>(end_time - start_time).count();
 
-    std::this_thread::sleep_for(milliseconds(50));
-    executor.shutdown();
+    executor.wait_for_completion();
+    executor.shutdown(false);
 
     int total_tasks = num_threads * tasks_per_thread;
     double throughput = total_tasks * 1000.0 / duration_ms;
@@ -144,8 +144,8 @@ BenchmarkResult benchmark_batch_no_future(int num_threads, int tasks_per_thread,
     auto end_time = steady_clock::now();
     double duration_ms = duration_cast<milliseconds>(end_time - start_time).count();
 
-    std::this_thread::sleep_for(milliseconds(50));
-    executor.shutdown();
+    executor.wait_for_completion();
+    executor.shutdown(false);
 
     int total_tasks = num_threads * tasks_per_thread;
     double throughput = total_tasks * 1000.0 / duration_ms;
