@@ -54,7 +54,10 @@ public:
                 return false;
             }
 
-            // 使用 CAS 原子性地预留写入位置
+            // 先写入数据到预期位置
+            buffer_[current_write] = item;
+
+            // 使用 CAS 原子性地提交写入位置
             // 如果失败，说明其他线程抢先了，需要重试
         } while (!write_pos_.compare_exchange_weak(
             current_write,
@@ -62,12 +65,6 @@ public:
             std::memory_order_release,  // 成功时的内存序
             std::memory_order_relaxed   // 失败时的内存序
         ));
-
-        // 成功预留位置，写入数据
-        buffer_[current_write] = item;
-
-        // 确保数据写入对消费者可见
-        std::atomic_thread_fence(std::memory_order_release);
 
         return true;
     }
