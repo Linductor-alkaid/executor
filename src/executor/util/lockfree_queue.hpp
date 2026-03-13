@@ -79,7 +79,7 @@ public:
      */
     bool pop(T& item) {
         const size_t current_read = read_pos_.load(std::memory_order_relaxed);
-        const size_t current_write = write_pos_.load(std::memory_order_acquire);
+        const size_t current_write = write_pos_.load(std::memory_order_seq_cst);
 
         // 检查队列是否空
         if (current_read == current_write) {
