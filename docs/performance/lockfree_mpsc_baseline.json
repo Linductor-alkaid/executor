@@ -1,0 +1,90 @@
+{
+  "benchmark": "lockfree_mpsc",
+  "timestamp": "1773629414",
+  "results": [
+    {
+      "num_producers": 1,
+      "total_pushes": 12927812,
+      "failed_pushes": 0,
+      "failure_rate": 0,
+      "throughput": 1.29278e+07,
+      "duration_ms": 1000,
+      "latency_ns": {
+        "avg": 73,
+        "p50": 52,
+        "p95": 89,
+        "p99": 362
+      }
+    },
+    {
+      "num_producers": 2,
+      "total_pushes": 4606213,
+      "failed_pushes": 1,
+      "failure_rate": 2.17098e-05,
+      "throughput": 4.60621e+06,
+      "duration_ms": 1000,
+      "latency_ns": {
+        "avg": 434,
+        "p50": 422,
+        "p95": 732,
+        "p99": 934
+      }
+    },
+    {
+      "num_producers": 4,
+      "total_pushes": 5292539,
+      "failed_pushes": 1109086,
+      "failure_rate": 17.3251,
+      "throughput": 5.29254e+06,
+      "duration_ms": 1000,
+      "latency_ns": {
+        "avg": 683,
+        "p50": 564,
+        "p95": 1486,
+        "p99": 2447
+      }
+    },
+    {
+      "num_producers": 8,
+      "total_pushes": 2930202,
+      "failed_pushes": 11790294,
+      "failure_rate": 80.0944,
+      "throughput": 2.9302e+06,
+      "duration_ms": 1000,
+      "latency_ns": {
+        "avg": 615,
+        "p50": 464,
+        "p95": 1370,
+        "p99": 2422
+      }
+    },
+    {
+      "num_producers": 16,
+      "total_pushes": 1681870,
+      "failed_pushes": 24186885,
+      "failure_rate": 93.4985,
+      "throughput": 1.68187e+06,
+      "duration_ms": 1000,
+      "latency_ns": {
+        "avg": 631,
+        "p50": 495,
+        "p95": 1108,
+        "p99": 1877
+      }
+    },
+    {
+      "num_producers": 32,
+      "total_pushes": 1752617,
+      "failed_pushes": 19012784,
+      "failure_rate": 91.5599,
+      "throughput": 1.75087e+06,
+      "duration_ms": 1001,
+      "latency_ns": {
+        "avg": 654,
+        "p50": 535,
+        "p95": 1122,
+        "p99": 1808
+      }
+    }
+  ]
+}
