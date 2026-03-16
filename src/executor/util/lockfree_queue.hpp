@@ -118,8 +118,8 @@ private:
     const size_t mask_;
     std::vector<T> buffer_;
     std::vector<std::atomic<size_t>> sequences_;
-    std::atomic<size_t> enqueue_pos_;
-    std::atomic<size_t> dequeue_pos_;
+    alignas(64) std::atomic<size_t> enqueue_pos_;
+    alignas(64) std::atomic<size_t> dequeue_pos_;
 };
 
 } // namespace util
