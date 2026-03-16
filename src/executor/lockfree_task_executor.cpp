@@ -56,6 +56,38 @@ bool LockFreeTaskExecutor::push_task(std::function<void()> task) {
     return true;
 }
 
+bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, size_t count, size_t& pushed) {
+    pushed = 0;
+    if (count == 0) return true;
+
+    std::vector<TaskWrapper*> wrappers(count);
+    for (size_t i = 0; i < count; ++i) {
+        wrappers[i] = task_pool_->acquire();
+        if (!wrappers[i]) {
+            for (size_t j = 0; j < i; ++j) {
+                task_pool_->release(wrappers[j]);
+            }
+            return false;
+        }
+        wrappers[i]->func = tasks[i];
+    }
+
+    if (!queue_->push_batch(wrappers.data(), count, pushed)) {
+        for (size_t i = 0; i < count; ++i) {
+            task_pool_->release(wrappers[i]);
+        }
+        return false;
+    }
+
+    if (pushed < count) {
+        for (size_t i = pushed; i < count; ++i) {
+            task_pool_->release(wrappers[i]);
+        }
+    }
+
+    return true;
+}
+
 size_t LockFreeTaskExecutor::pending_count() const {
     return queue_->size();
 }
@@ -65,32 +97,37 @@ uint64_t LockFreeTaskExecutor::processed_count() const {
 }
 
 void LockFreeTaskExecutor::worker_thread() {
+    constexpr size_t BATCH_SIZE = 32;
+    std::vector<TaskWrapper*> batch(BATCH_SIZE);
+
     while (running_.load(std::memory_order_acquire)) {
-        TaskWrapper* wrapper = nullptr;
+        size_t popped = queue_->pop_batch(batch.data(), BATCH_SIZE);
 
-        if (queue_->pop(wrapper)) {
-            try {
-                wrapper->func();
-            } catch (...) {
-                // 忽略异常，继续处理
+        if (popped > 0) {
+            for (size_t i = 0; i < popped; ++i) {
+                try {
+                    batch[i]->func();
+                } catch (...) {
+                }
+                task_pool_->release(batch[i]);
             }
-
-            task_pool_->release(wrapper);
-            processed_count_.fetch_add(1, std::memory_order_relaxed);
+            processed_count_.fetch_add(popped, std::memory_order_relaxed);
         } else {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
     }
 
     // 处理剩余任务
-    TaskWrapper* wrapper = nullptr;
-    while (queue_->pop(wrapper)) {
-        try {
-            wrapper->func();
-        } catch (...) {
+    size_t popped;
+    while ((popped = queue_->pop_batch(batch.data(), BATCH_SIZE)) > 0) {
+        for (size_t i = 0; i < popped; ++i) {
+            try {
+                batch[i]->func();
+            } catch (...) {
+            }
+            task_pool_->release(batch[i]);
         }
-        task_pool_->release(wrapper);
-        processed_count_.fetch_add(1, std::memory_order_relaxed);
+        processed_count_.fetch_add(popped, std::memory_order_relaxed);
     }
 }
 

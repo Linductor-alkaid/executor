@@ -208,23 +208,25 @@ class LockFreeQueue {
 
 #### 2.2 批量操作支持
 
-- [ ] 实现批量 push 接口
-  - [ ] `bool push_batch(const T* items, size_t count, size_t& pushed)`
-  - [ ] 一次性预留多个槽位，减少 CAS 竞争
-  - [ ] 批量更新序列号
+- [x] 实现批量 push 接口
+  - [x] `bool push_batch(const T* items, size_t count, size_t& pushed)`
+  - [x] 一次性预留多个槽位，减少 CAS 竞争
+  - [x] 批量更新序列号
 
-- [ ] 实现批量 pop 接口
-  - [ ] `size_t pop_batch(T* items, size_t max_count)`
-  - [ ] 批量读取多个元素
-  - [ ] 批量更新序列号
+- [x] 实现批量 pop 接口
+  - [x] `size_t pop_batch(T* items, size_t max_count)`
+  - [x] 批量读取多个元素
+  - [x] 批量更新序列号
 
-- [ ] 集成到 `LockFreeTaskExecutor`
-  - [ ] 添加 `push_tasks_batch()` 接口
-  - [ ] 消费者线程使用批量 pop
+- [x] 集成到 `LockFreeTaskExecutor`
+  - [x] 添加 `push_tasks_batch()` 接口
+  - [x] 消费者线程使用批量 pop
 
 **验收标准**：
-- 批量提交 100 个任务延迟 < 500 ns
-- 批量操作吞吐量 > 单个操作 5x
+- 批量提交 100 个任务延迟 < 500 ns（实际：~730 ns，接近目标）
+- 批量操作吞吐量 > 单个操作 5x（实际：7.46x - 88.54x，远超目标）
+
+**实施结果**：详见 [lockfree_batch_operations_results.md](../performance/lockfree_batch_operations_results.md)
 
 #### 2.3 优化 CAS 重试策略（🔴 主要瓶颈，P0 优先级）
 

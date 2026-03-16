@@ -88,6 +88,52 @@ public:
         return false;
     }
 
+    bool push_batch(const T* items, size_t count, size_t& pushed) {
+        pushed = 0;
+        if (count == 0) return true;
+
+        size_t pos;
+        while (true) {
+            pos = enqueue_pos_.load(std::memory_order_relaxed);
+            size_t deq = dequeue_pos_.load(std::memory_order_acquire);
+            size_t available = capacity_ - 1 - (pos - deq);
+
+            if (available == 0) return false;
+
+            size_t batch_size = (count < available) ? count : available;
+            if (enqueue_pos_.compare_exchange_weak(pos, pos + batch_size, std::memory_order_relaxed)) {
+                for (size_t i = 0; i < batch_size; ++i) {
+                    size_t index = (pos + i) & mask_;
+                    buffer_[index] = items[i];
+                    sequences_[index].store(pos + i + 1, std::memory_order_release);
+                }
+                pushed = batch_size;
+                return true;
+            }
+        }
+    }
+
+    size_t pop_batch(T* items, size_t max_count) {
+        size_t popped = 0;
+        size_t pos = dequeue_pos_.load(std::memory_order_relaxed);
+
+        for (size_t i = 0; i < max_count; ++i) {
+            size_t index = (pos + i) & mask_;
+            size_t seq = sequences_[index].load(std::memory_order_acquire);
+
+            if (seq != pos + i + 1) break;
+
+            items[i] = buffer_[index];
+            sequences_[index].store(pos + i + capacity_, std::memory_order_release);
+            popped++;
+        }
+
+        if (popped > 0) {
+            dequeue_pos_.store(pos + popped, std::memory_order_release);
+        }
+        return popped;
+    }
+
     bool empty() const {
         size_t pos = dequeue_pos_.load(std::memory_order_relaxed);
         size_t index = pos & mask_;

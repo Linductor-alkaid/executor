@@ -67,6 +67,15 @@ public:
     bool push_task(std::function<void()> task);
 
     /**
+     * @brief 批量提交任务
+     * @param tasks 任务数组
+     * @param count 任务数量
+     * @param pushed 实际提交的任务数量（输出参数）
+     * @return 成功返回true，队列满返回false
+     */
+    bool push_tasks_batch(const std::function<void()>* tasks, size_t count, size_t& pushed);
+
+    /**
      * @brief 获取队列中待处理任务数（近似值）
      */
     size_t pending_count() const;
