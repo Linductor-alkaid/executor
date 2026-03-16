@@ -5,8 +5,8 @@
 
 namespace executor {
 
-LockFreeTaskExecutor::LockFreeTaskExecutor(size_t queue_capacity, size_t backoff_multiplier)
-    : queue_(new util::LockFreeQueue<TaskWrapper*>(queue_capacity, backoff_multiplier))
+LockFreeTaskExecutor::LockFreeTaskExecutor(size_t queue_capacity, size_t backoff_multiplier, bool enable_stats)
+    : queue_(new util::LockFreeQueue<TaskWrapper*>(queue_capacity, backoff_multiplier, enable_stats))
     , task_pool_(new util::ObjectPool<TaskWrapper>(queue_capacity)) {
 }
 
@@ -94,6 +94,23 @@ size_t LockFreeTaskExecutor::pending_count() const {
 
 uint64_t LockFreeTaskExecutor::processed_count() const {
     return processed_count_.load(std::memory_order_relaxed);
+}
+
+LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
+    auto raw = queue_->get_stats();
+    QueueStats result;
+    result.total_pushes = raw.total_pushes;
+    result.failed_pushes = raw.failed_pushes;
+    result.total_pops = raw.total_pops;
+    result.empty_pops = raw.empty_pops;
+    result.batch_pushes = raw.batch_pushes;
+    result.batch_pops = raw.batch_pops;
+    result.current_size = raw.current_size;
+    result.peak_size = raw.peak_size;
+    result.success_rate = raw.total_pushes > 0
+        ? static_cast<double>(raw.total_pushes - raw.failed_pushes) / static_cast<double>(raw.total_pushes)
+        : 0.0;
+    return result;
 }
 
 void LockFreeTaskExecutor::worker_thread() {

@@ -66,9 +66,19 @@ public:
     void set_enabled(bool enabled);
     bool is_enabled() const;
 
+    /**
+     * @brief 设置采样率（0.0-1.0）
+     * @param rate 采样率，0.01 表示 1% 采样
+     */
+    void set_sampling_rate(double rate);
+    double get_sampling_rate() const;
+
 private:
+    bool should_sample() const;
     mutable std::mutex mutex_;
     std::atomic<bool> enabled_{true};
+    std::atomic<uint32_t> sampling_rate_{100};  // 百分比，100=100%，1=1%
+    mutable std::atomic<uint64_t> sample_counter_{0};
 
     /// task_id -> task_type，用于 complete/timeout 时查找
     std::unordered_map<std::string, std::string> task_id_to_type_;

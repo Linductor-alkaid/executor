@@ -17,6 +17,20 @@ namespace executor {
 namespace util {
 
 /**
+ * @brief 无锁队列性能统计
+ */
+struct LockFreeQueueStats {
+    uint64_t total_pushes = 0;
+    uint64_t failed_pushes = 0;
+    uint64_t total_pops = 0;
+    uint64_t empty_pops = 0;
+    uint64_t batch_pushes = 0;
+    uint64_t batch_pops = 0;
+    uint64_t current_size = 0;
+    uint64_t peak_size = 0;
+};
+
+/**
  * @brief 无锁队列（MPSC - 多生产者单消费者）
  *
  * 使用序列号跟踪每个槽位状态，保证线程安全。
@@ -29,14 +43,15 @@ class LockFreeQueue {
                   "LockFreeQueue requires trivially copyable type");
 
 public:
-    explicit LockFreeQueue(size_t capacity, size_t backoff_multiplier = 1)
+    explicit LockFreeQueue(size_t capacity, size_t backoff_multiplier = 1, bool enable_stats = false)
         : capacity_(round_to_power_of_two(capacity))
         , mask_(capacity_ - 1)
         , buffer_(capacity_)
         , sequences_(capacity_)
         , enqueue_pos_(0)
         , dequeue_pos_(0)
-        , backoff_multiplier_(backoff_multiplier) {
+        , backoff_multiplier_(backoff_multiplier)
+        , stats_enabled_(enable_stats) {
         // 初始化序列号
         for (size_t i = 0; i < capacity_; ++i) {
             sequences_[i].store(i, std::memory_order_relaxed);
@@ -55,6 +70,7 @@ public:
             // 检查队列是否已满（保留一个空槽位）
             size_t deq = dequeue_pos_.load(std::memory_order_acquire);
             if (pos - deq >= capacity_ - 1) {
+                if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
 
@@ -69,6 +85,10 @@ public:
                     buffer_[index] = item;
                     // 更新序列号，标记数据已就绪
                     sequences_[index].store(pos + 1, std::memory_order_release);
+                    if (stats_enabled_) {
+                        stats_.total_pushes.fetch_add(1, std::memory_order_relaxed);
+                        update_peak_size();
+                    }
                     return true;
                 }
                 // CAS 失败，指数退避（应用退避倍数）
@@ -79,10 +99,12 @@ public:
                 backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
             } else if (diff < 0) {
                 // 队列满
+                if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
             // diff > 0: 其他线程正在操作，重试
         }
+        if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -97,9 +119,11 @@ public:
             item = buffer_[index];
             sequences_[index].store(pos + capacity_, std::memory_order_release);
             dequeue_pos_.store(pos + 1, std::memory_order_release);
+            if (stats_enabled_) stats_.total_pops.fetch_add(1, std::memory_order_relaxed);
             return true;
         }
         // 队列空
+        if (stats_enabled_) stats_.empty_pops.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -117,7 +141,10 @@ public:
             size_t deq = dequeue_pos_.load(std::memory_order_acquire);
             size_t available = capacity_ - 1 - (pos - deq);
 
-            if (available == 0) return false;
+            if (available == 0) {
+                if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
 
             size_t batch_size = (count < available) ? count : available;
             if (enqueue_pos_.compare_exchange_weak(pos, pos + batch_size, std::memory_order_relaxed)) {
@@ -127,6 +154,11 @@ public:
                     sequences_[index].store(pos + i + 1, std::memory_order_release);
                 }
                 pushed = batch_size;
+                if (stats_enabled_) {
+                    stats_.total_pushes.fetch_add(batch_size, std::memory_order_relaxed);
+                    stats_.batch_pushes.fetch_add(1, std::memory_order_relaxed);
+                    update_peak_size();
+                }
                 return true;
             }
             // CAS 失败，指数退避（应用退避倍数）
@@ -136,6 +168,7 @@ public:
             }
             backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
         }
+        if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -156,6 +189,12 @@ public:
 
         if (popped > 0) {
             dequeue_pos_.store(pos + popped, std::memory_order_release);
+            if (stats_enabled_) {
+                stats_.total_pops.fetch_add(popped, std::memory_order_relaxed);
+                stats_.batch_pops.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else if (stats_enabled_) {
+            stats_.empty_pops.fetch_add(1, std::memory_order_relaxed);
         }
         return popped;
     }
@@ -177,7 +216,34 @@ public:
         return capacity_;
     }
 
+    void enable_stats(bool enable) {
+        stats_enabled_ = enable;
+    }
+
+    LockFreeQueueStats get_stats() const {
+        if (!stats_enabled_) return {};
+        LockFreeQueueStats result;
+        result.total_pushes = stats_.total_pushes.load(std::memory_order_relaxed);
+        result.failed_pushes = stats_.failed_pushes.load(std::memory_order_relaxed);
+        result.total_pops = stats_.total_pops.load(std::memory_order_relaxed);
+        result.empty_pops = stats_.empty_pops.load(std::memory_order_relaxed);
+        result.batch_pushes = stats_.batch_pushes.load(std::memory_order_relaxed);
+        result.batch_pops = stats_.batch_pops.load(std::memory_order_relaxed);
+        result.current_size = size();
+        result.peak_size = stats_.peak_size.load(std::memory_order_relaxed);
+        return result;
+    }
+
 private:
+    void update_peak_size() {
+        size_t current = size();
+        uint64_t peak = stats_.peak_size.load(std::memory_order_relaxed);
+        while (current > peak) {
+            if (stats_.peak_size.compare_exchange_weak(peak, current, std::memory_order_relaxed)) {
+                break;
+            }
+        }
+    }
     static size_t round_to_power_of_two(size_t n) {
         if (n == 0) return 1;
         if ((n & (n - 1)) == 0) return n;
@@ -193,6 +259,18 @@ private:
     alignas(64) std::atomic<size_t> enqueue_pos_;
     alignas(64) std::atomic<size_t> dequeue_pos_;
     const size_t backoff_multiplier_;
+    bool stats_enabled_;
+
+    struct Stats {
+        alignas(64) std::atomic<uint64_t> total_pushes{0};
+        alignas(64) std::atomic<uint64_t> failed_pushes{0};
+        alignas(64) std::atomic<uint64_t> total_pops{0};
+        alignas(64) std::atomic<uint64_t> empty_pops{0};
+        alignas(64) std::atomic<uint64_t> batch_pushes{0};
+        alignas(64) std::atomic<uint64_t> batch_pops{0};
+        alignas(64) std::atomic<uint64_t> peak_size{0};
+    };
+    Stats stats_;
 };
 
 } // namespace util

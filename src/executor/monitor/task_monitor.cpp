@@ -7,7 +7,7 @@ namespace monitor {
 
 void TaskMonitor::record_task_start(const std::string& task_id,
                                     const std::string& task_type) {
-    if (!enabled_.load(std::memory_order_relaxed)) {
+    if (!enabled_.load(std::memory_order_relaxed) || !should_sample()) {
         return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
@@ -105,6 +105,24 @@ void TaskMonitor::set_enabled(bool enabled) {
 
 bool TaskMonitor::is_enabled() const {
     return enabled_.load(std::memory_order_relaxed);
+}
+
+void TaskMonitor::set_sampling_rate(double rate) {
+    uint32_t percent = static_cast<uint32_t>(rate * 100.0);
+    if (percent > 100) percent = 100;
+    sampling_rate_.store(percent, std::memory_order_relaxed);
+}
+
+double TaskMonitor::get_sampling_rate() const {
+    return sampling_rate_.load(std::memory_order_relaxed) / 100.0;
+}
+
+bool TaskMonitor::should_sample() const {
+    uint32_t rate = sampling_rate_.load(std::memory_order_relaxed);
+    if (rate >= 100) return true;
+    if (rate == 0) return false;
+    uint64_t count = sample_counter_.fetch_add(1, std::memory_order_relaxed);
+    return (count % 100) < rate;
 }
 
 }  // namespace monitor

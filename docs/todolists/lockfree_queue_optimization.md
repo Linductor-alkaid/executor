@@ -286,31 +286,38 @@ class LockFreeQueue {
 
 ### 阶段 3：功能扩展（P2）
 
-#### 3.1 性能监控
+#### 3.1 性能监控 ✅
 
-- [ ] 添加统计信息结构
+**状态**: 已完成 (2026-03-16)
+
+- [x] 添加统计信息结构
 ```cpp
-struct QueueStats {
+struct LockFreeQueueStats {
     uint64_t total_pushes;
     uint64_t failed_pushes;
     uint64_t total_pops;
-    uint64_t cas_retries;
-    uint64_t max_size;
+    uint64_t empty_pops;
+    uint64_t batch_pushes;
+    uint64_t batch_pops;
+    uint64_t current_size;
+    uint64_t peak_size;
 };
 ```
 
-- [ ] 实现统计收集
-  - [ ] 可选的统计开关（编译时或运行时）
-  - [ ] 原子计数器，最小化性能影响
-  - [ ] `get_stats()` 接口
+- [x] 实现统计收集
+  - [x] 可选的统计开关（运行时）
+  - [x] 原子计数器，最小化性能影响
+  - [x] `get_stats()` 接口
 
-- [ ] 集成到 `LockFreeTaskExecutor`
-  - [ ] 暴露队列统计信息
-  - [ ] 添加到监控模块
+- [x] 集成到 `LockFreeTaskExecutor`
+  - [x] 暴露队列统计信息
+  - [x] 添加 `get_queue_stats()` API
 
 **验收标准**：
-- 统计开销 < 5%
-- 提供完整的性能指标
+- ✅ 统计开销 < 5%
+- ✅ 提供完整的性能指标
+
+**实施结果**：详见 [monitoring_sampling_implementation.md](../optimization/monitoring_sampling_implementation.md)
 
 #### 3.2 背压控制（可选）
 

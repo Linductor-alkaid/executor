@@ -32,8 +32,9 @@ public:
      * @brief 构造函数
      * @param queue_capacity 队列容量（必须是2的幂，如果不是会自动调整）
      * @param backoff_multiplier CAS 退避倍数（默认2，适合中等竞争场景）
+     * @param enable_stats 是否启用性能统计（默认false）
      */
-    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024, size_t backoff_multiplier = 2);
+    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024, size_t backoff_multiplier = 2, bool enable_stats = false);
 
     /**
      * @brief 析构函数（自动停止）
@@ -85,6 +86,22 @@ public:
      * @brief 获取已处理任务总数
      */
     uint64_t processed_count() const;
+
+    /**
+     * @brief 获取队列性能统计
+     */
+    struct QueueStats {
+        uint64_t total_pushes;
+        uint64_t failed_pushes;
+        uint64_t total_pops;
+        uint64_t empty_pops;
+        uint64_t batch_pushes;
+        uint64_t batch_pops;
+        uint64_t current_size;
+        uint64_t peak_size;
+        double success_rate;
+    };
+    QueueStats get_queue_stats() const;
 
 private:
     struct TaskWrapper {

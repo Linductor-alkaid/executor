@@ -177,6 +177,10 @@ void Executor::enable_monitoring(bool enable) {
     manager_->enable_monitoring(enable);
 }
 
+void Executor::set_monitoring_sampling_rate(double rate) {
+    manager_->set_monitoring_sampling_rate(rate);
+}
+
 TaskStatistics Executor::get_task_statistics(const std::string& task_type) const {
     return manager_->get_task_statistics(task_type);
 }

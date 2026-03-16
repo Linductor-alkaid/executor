@@ -263,6 +263,12 @@ void ExecutorManager::enable_monitoring(bool enable) {
     }
 }
 
+void ExecutorManager::set_monitoring_sampling_rate(double rate) {
+    if (statistics_collector_) {
+        statistics_collector_->get_task_monitor().set_sampling_rate(rate);
+    }
+}
+
 TaskStatistics ExecutorManager::get_task_statistics(
     const std::string& task_type) const {
     return statistics_collector_

@@ -163,6 +163,12 @@ public:
     void enable_monitoring(bool enable);
 
     /**
+     * @brief 设置监控采样率
+     * @param rate 采样率 (0.0-1.0)
+     */
+    void set_monitoring_sampling_rate(double rate);
+
+    /**
      * @brief 按 task_type 获取任务统计
      */
     TaskStatistics get_task_statistics(const std::string& task_type) const;
