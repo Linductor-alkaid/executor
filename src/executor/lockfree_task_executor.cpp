@@ -5,8 +5,8 @@
 
 namespace executor {
 
-LockFreeTaskExecutor::LockFreeTaskExecutor(size_t queue_capacity)
-    : queue_(new util::LockFreeQueue<TaskWrapper*>(queue_capacity))
+LockFreeTaskExecutor::LockFreeTaskExecutor(size_t queue_capacity, size_t backoff_multiplier)
+    : queue_(new util::LockFreeQueue<TaskWrapper*>(queue_capacity, backoff_multiplier))
     , task_pool_(new util::ObjectPool<TaskWrapper>(queue_capacity)) {
 }
 

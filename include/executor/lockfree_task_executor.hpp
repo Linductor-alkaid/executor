@@ -31,8 +31,9 @@ public:
     /**
      * @brief 构造函数
      * @param queue_capacity 队列容量（必须是2的幂，如果不是会自动调整）
+     * @param backoff_multiplier CAS 退避倍数（默认2，适合中等竞争场景）
      */
-    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024);
+    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024, size_t backoff_multiplier = 2);
 
     /**
      * @brief 析构函数（自动停止）

@@ -6,6 +6,13 @@
 #include <type_traits>
 #include <memory>
 
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#include <emmintrin.h>
+#define PAUSE_INSTRUCTION() _mm_pause()
+#else
+#define PAUSE_INSTRUCTION() do {} while(0)
+#endif
+
 namespace executor {
 namespace util {
 
@@ -22,13 +29,14 @@ class LockFreeQueue {
                   "LockFreeQueue requires trivially copyable type");
 
 public:
-    explicit LockFreeQueue(size_t capacity)
+    explicit LockFreeQueue(size_t capacity, size_t backoff_multiplier = 1)
         : capacity_(round_to_power_of_two(capacity))
         , mask_(capacity_ - 1)
         , buffer_(capacity_)
         , sequences_(capacity_)
         , enqueue_pos_(0)
-        , dequeue_pos_(0) {
+        , dequeue_pos_(0)
+        , backoff_multiplier_(backoff_multiplier) {
         // 初始化序列号
         for (size_t i = 0; i < capacity_; ++i) {
             sequences_[i].store(i, std::memory_order_relaxed);
@@ -37,7 +45,11 @@ public:
 
     bool push(const T& item) {
         size_t pos;
-        while (true) {
+        size_t backoff = 1;
+        constexpr size_t MAX_BACKOFF = 16;
+        constexpr int MAX_RETRIES = 64;
+
+        for (int retry = 0; retry < MAX_RETRIES; ++retry) {
             pos = enqueue_pos_.load(std::memory_order_relaxed);
 
             // 检查队列是否已满（保留一个空槽位）
@@ -53,22 +65,25 @@ public:
             if (diff == 0) {
                 // 槽位可用，尝试预留
                 if (enqueue_pos_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
-                    break;
+                    // 写入数据
+                    buffer_[index] = item;
+                    // 更新序列号，标记数据已就绪
+                    sequences_[index].store(pos + 1, std::memory_order_release);
+                    return true;
                 }
+                // CAS 失败，指数退避（应用退避倍数）
+                size_t scaled_backoff = backoff * backoff_multiplier_;
+                for (size_t i = 0; i < scaled_backoff; ++i) {
+                    PAUSE_INSTRUCTION();
+                }
+                backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
             } else if (diff < 0) {
                 // 队列满
                 return false;
             }
             // diff > 0: 其他线程正在操作，重试
         }
-
-        // 写入数据
-        size_t index = pos & mask_;
-        buffer_[index] = item;
-
-        // 更新序列号，标记数据已就绪
-        sequences_[index].store(pos + 1, std::memory_order_release);
-        return true;
+        return false;
     }
 
     bool pop(T& item) {
@@ -93,7 +108,11 @@ public:
         if (count == 0) return true;
 
         size_t pos;
-        while (true) {
+        size_t backoff = 1;
+        constexpr size_t MAX_BACKOFF = 16;
+        constexpr int MAX_RETRIES = 64;
+
+        for (int retry = 0; retry < MAX_RETRIES; ++retry) {
             pos = enqueue_pos_.load(std::memory_order_relaxed);
             size_t deq = dequeue_pos_.load(std::memory_order_acquire);
             size_t available = capacity_ - 1 - (pos - deq);
@@ -110,7 +129,14 @@ public:
                 pushed = batch_size;
                 return true;
             }
+            // CAS 失败，指数退避（应用退避倍数）
+            size_t scaled_backoff = backoff * backoff_multiplier_;
+            for (size_t i = 0; i < scaled_backoff; ++i) {
+                PAUSE_INSTRUCTION();
+            }
+            backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
         }
+        return false;
     }
 
     size_t pop_batch(T* items, size_t max_count) {
@@ -166,6 +192,7 @@ private:
     std::vector<std::atomic<size_t>> sequences_;
     alignas(64) std::atomic<size_t> enqueue_pos_;
     alignas(64) std::atomic<size_t> dequeue_pos_;
+    const size_t backoff_multiplier_;
 };
 
 } // namespace util
