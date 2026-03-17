@@ -155,7 +155,7 @@ protected:
      * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
      * @param task 任务函数
      */
-    virtual void submit_priority_impl(int /*priority*/, std::function<void()> task) {
+    virtual void submit_priority_impl(int priority, std::function<void()> task) {
         // 默认实现：忽略优先级，使用普通提交
         submit_impl(std::move(task));
     }

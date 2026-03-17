@@ -22,7 +22,7 @@ void demo_task_monitor_sampling() {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    auto stats = ex.get_statistics("default");
+    auto stats = ex.get_task_statistics("default");
     std::cout << "   Recorded tasks: " << stats.total_count << "/1000\n\n";
 
     // 设置 1% 采样率
@@ -34,7 +34,7 @@ void demo_task_monitor_sampling() {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    stats = ex.get_statistics("default");
+    stats = ex.get_task_statistics("default");
     std::cout << "   Recorded tasks: ~" << stats.total_count << "/10000 (expected ~100)\n";
     std::cout << "   Overhead reduced by ~99%\n\n";
 
