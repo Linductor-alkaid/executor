@@ -1,0 +1,28 @@
+{
+  "optimization": "Remove global lock from ThreadPool::submit()",
+  "date": "2026-03-17",
+  "approach": "Removed mutex_ lock, relying on scheduler/dispatcher internal locks",
+  "result": "FAILED - Performance degraded",
+  "metrics": {
+    "submission_throughput": {
+      "value": 415219,
+      "unit": "tasks/s",
+      "change_vs_baseline": -14.9,
+      "baseline": 487956
+    },
+    "e2e_throughput": {
+      "value": 448943,
+      "unit": "tasks/s",
+      "change_vs_baseline": -7.3,
+      "baseline": 484219
+    },
+    "latency_p99": {
+      "value": 0.177,
+      "unit": "μs",
+      "change_vs_baseline": 18.8,
+      "baseline": 0.149
+    }
+  },
+  "root_cause": "Race condition with condition variable - workers can miss notifications when notify_all() is called outside mutex",
+  "lesson": "Condition variable notification requires proper synchronization with the mutex that workers use in wait()"
+}
