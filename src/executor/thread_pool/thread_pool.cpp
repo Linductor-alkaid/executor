@@ -40,23 +40,26 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
     }
     
     // 初始化工作线程本地队列
-    // 注意：WorkerLocalQueue 包含不可移动的 mutex，不能使用 reserve/emplace_back/resize
-    // 使用 vector 的构造函数直接构造新 vector，然后使用 placement new 重新构造每个元素
-    // 先销毁现有元素（如果有）
-    for (auto& queue : local_queues_) {
-        queue.~WorkerLocalQueue();
-    }
-    
-    // 使用 vector 的构造函数直接分配内存（默认构造所有元素）
-    // 使用 swap 避免赋值操作可能触发的移动
-    std::vector<WorkerLocalQueue> new_queues(config_.min_threads);
-    local_queues_.swap(new_queues);
-    
-    // 使用 placement new 重新构造每个元素，设置正确的 capacity
+#ifdef USE_LOCKFREE_WORKER_QUEUE
+    // LockFreeWorkerQueue 可以直接 resize
+    local_queues_.clear();
     for (size_t i = 0; i < config_.min_threads; ++i) {
-        local_queues_[i].~WorkerLocalQueue();
-        new (&local_queues_[i]) WorkerLocalQueue(config_.queue_capacity);
+        local_queues_.emplace_back(config_.queue_capacity);
     }
+#else
+    // WorkerLocalQueue 包含不可移动的 mutex，需要 placement new
+    for (auto& queue : local_queues_) {
+        queue.~WorkerQueueImpl();
+    }
+
+    std::vector<WorkerQueueImpl> new_queues(config_.min_threads);
+    local_queues_.swap(new_queues);
+
+    for (size_t i = 0; i < config_.min_threads; ++i) {
+        local_queues_[i].~WorkerQueueImpl();
+        new (&local_queues_[i]) WorkerQueueImpl(config_.queue_capacity);
+    }
+#endif
     
     // 初始化任务分发器
     dispatcher_ = std::make_unique<TaskDispatcher>(

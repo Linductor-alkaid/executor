@@ -24,6 +24,15 @@
 - **API 接口**：`start()`、`stop()`、`push_task()`、`is_running()`、`pending_count()`、`processed_count()`
 - **使用示例**：`examples/lockfree_task_executor_example.cpp` 演示基本用法、日志收集、事件处理
 
+### 优化
+
+- **无锁工作线程队列**：`WorkerLocalQueue` 改造为无锁实现（`LockFreeWorkerQueue`）
+  - 使用 MPSC 无锁队列 + 指针存储（`uintptr_t`）绕过 trivially copyable 限制
+  - 条件编译支持：`-DUSE_LOCKFREE_WORKER_QUEUE=ON` 启用无锁版本
+  - 性能提升：提交吞吐量 +10.7%（441,500 → 488,698 tasks/s），端到端吞吐量 +2.1%（433,083 → 442,009 tasks/s）
+  - steal 操作使用批量 pop + 缓冲区优化，保持互斥锁（低频操作）
+  - 完整单元测试覆盖：基本操作、批量操作、工作窃取、并发安全性
+
 ### 测试
 
 - **批量提交性能测试**：
@@ -38,6 +47,8 @@
   - `benchmark_lockfree_task_executor`：基础延迟和吞吐量测试
   - `benchmark_lockfree_mpsc`：简化吞吐量测试
   - `benchmark_lockfree_mpsc_full`：完整性能评估（延迟/吞吐量/背压/可扩展性）
+- **无锁工作队列测试**：`test_lockfree_worker_queue` 包含 4 项测试
+  - 基本 push/pop 操作、批量操作、工作窃取、并发 push/pop（4 生产者 + 1 消费者）
 
 ### 文档
 

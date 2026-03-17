@@ -5,7 +5,14 @@
 #include "priority_scheduler.hpp"
 #include "load_balancer.hpp"
 #include "task_dispatcher.hpp"
+
+// 使用无锁队列优化（可通过 -DUSE_LOCKFREE_WORKER_QUEUE=ON 启用）
+#ifdef USE_LOCKFREE_WORKER_QUEUE
+#include "lockfree_worker_queue.hpp"
+#else
 #include "worker_local_queue.hpp"
+#endif
+
 #include "thread_pool_resizer.hpp"
 #include "../util/exception_handler.hpp"
 #include "../util/thread_utils.hpp"
@@ -23,6 +30,12 @@
 #include <random>
 
 namespace executor {
+
+#ifdef USE_LOCKFREE_WORKER_QUEUE
+using WorkerQueueImpl = LockFreeWorkerQueue;
+#else
+using WorkerQueueImpl = WorkerLocalQueue;
+#endif
 
 /**
  * @brief 线程池核心类
@@ -205,7 +218,7 @@ private:
     std::unique_ptr<LoadBalancer> load_balancer_;
 
     // 工作线程本地队列
-    std::vector<WorkerLocalQueue> local_queues_;
+    std::vector<WorkerQueueImpl> local_queues_;
 
     // 任务分发器
     std::unique_ptr<TaskDispatcher> dispatcher_;
