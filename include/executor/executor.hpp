@@ -4,6 +4,7 @@
 #include "types.hpp"
 #include "interfaces.hpp"
 #include "executor_manager.hpp"
+#include "gpu/gpu_scheduler.hpp"
 #include <future>
 #include <functional>
 #include <string>
@@ -340,10 +341,45 @@ public:
 
     /**
      * @brief 获取所有 GPU 执行器状态（监控查询）
-     * 
+     *
      * @return 执行器名称到状态的映射
      */
     std::map<std::string, gpu::GpuExecutorStatus> get_all_gpu_executor_status() const;
+
+    /**
+     * @brief 自动选择 CPU/GPU 执行器提交任务
+     *
+     * 根据任务特征自动选择 CPU 或 GPU 执行器。
+     * 如果选择 GPU，调用 submit_gpu()；如果选择 CPU，在 CPU 线程池执行。
+     *
+     * @tparam KernelFunc GPU kernel 函数类型
+     * @param characteristics 任务特征（数据大小、计算强度等）
+     * @param gpu_executor_name GPU 执行器名称（GPU 被选中时使用）
+     * @param kernel GPU kernel 函数（需支持 nullptr stream 用于 CPU 执行）
+     * @param gpu_config GPU 任务配置（GPU 被选中时使用）
+     * @return std::future<void> 任务执行结果的 future
+     */
+    template<typename KernelFunc>
+    auto submit_auto(
+        const gpu::TaskCharacteristics& characteristics,
+        const std::string& gpu_executor_name,
+        KernelFunc&& kernel,
+        const gpu::GpuTaskConfig& gpu_config)
+        -> std::future<void>;
+
+    /**
+     * @brief 更新调度器配置
+     *
+     * @param config 调度器配置
+     */
+    void update_scheduler_config(const gpu::GpuScheduler::Config& config);
+
+    /**
+     * @brief 获取调度器配置
+     *
+     * @return 当前调度器配置
+     */
+    gpu::GpuScheduler::Config get_scheduler_config() const;
 
 private:
     /**
@@ -410,6 +446,9 @@ private:
     // 定时器线程
     std::thread timer_thread_;
     std::atomic<bool> timer_running_{false};
+
+    // GPU 调度器
+    gpu::GpuScheduler scheduler_;
 };
 
 // 模板方法实现
@@ -551,6 +590,27 @@ auto Executor::submit_gpu(const std::string& executor_name,
         throw std::runtime_error("GPU executor '" + executor_name + "' not found. Call register_gpu_executor() first.");
     }
     return executor->submit_kernel(std::forward<KernelFunc>(kernel), config);
+}
+
+// 智能调度模板方法实现
+template<typename KernelFunc>
+auto Executor::submit_auto(
+    const gpu::TaskCharacteristics& characteristics,
+    const std::string& gpu_executor_name,
+    KernelFunc&& kernel,
+    const gpu::GpuTaskConfig& gpu_config)
+    -> std::future<void> {
+
+    auto choice = scheduler_.decide(characteristics);
+
+    if (choice == gpu::ExecutorChoice::GPU) {
+        return submit_gpu(gpu_executor_name, std::forward<KernelFunc>(kernel), gpu_config);
+    } else {
+        // CPU fallback: execute kernel with nullptr stream
+        return submit([kernel = std::forward<KernelFunc>(kernel)]() mutable {
+            kernel(nullptr);
+        });
+    }
 }
 
 } // namespace executor

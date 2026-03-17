@@ -242,6 +242,16 @@ std::map<std::string, gpu::GpuExecutorStatus> Executor::get_all_gpu_executor_sta
     return manager_->get_all_gpu_executor_statuses();
 }
 
+// 更新调度器配置
+void Executor::update_scheduler_config(const gpu::GpuScheduler::Config& config) {
+    scheduler_.update_config(config);
+}
+
+// 获取调度器配置
+gpu::GpuScheduler::Config Executor::get_scheduler_config() const {
+    return scheduler_.get_config();
+}
+
 // 启动定时器线程
 void Executor::start_timer_thread() {
     if (timer_running_.exchange(true)) {

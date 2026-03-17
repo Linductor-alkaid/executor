@@ -11,6 +11,8 @@ file(GLOB_RECURSE EXECUTOR_SOURCES
 # 如果未启用任何GPU后端，排除GPU相关源文件
 if(NOT EXECUTOR_CUDA_ENABLED AND NOT EXECUTOR_OPENCL_ENABLED)
     list(FILTER EXECUTOR_SOURCES EXCLUDE REGEX ".*gpu.*")
+    # gpu_scheduler 不依赖 GPU 后端，始终编译
+    list(APPEND EXECUTOR_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/executor/gpu/gpu_scheduler.cpp")
 else()
     # 如果未启用CUDA，排除CUDA特定文件
     if(NOT EXECUTOR_CUDA_ENABLED)

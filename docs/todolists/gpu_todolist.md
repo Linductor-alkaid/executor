@@ -343,23 +343,23 @@
 
 ### 3.4 智能调度（CPU/GPU 自动选择）
 
-- [ ] 创建 `src/executor/gpu/gpu_scheduler.hpp`
-  - [ ] 定义 `GpuScheduler` 类
-  - [ ] 定义任务特征分析接口
+- [x] 创建 `include/executor/gpu/gpu_scheduler.hpp`
+  - [x] 定义 `GpuScheduler` 类
+  - [x] 定义任务特征分析接口（`TaskCharacteristics`）
 
-- [ ] 创建 `src/executor/gpu/gpu_scheduler.cpp`
-  - [ ] 实现任务特征分析（数据量、计算复杂度等）
-  - [ ] 实现 CPU/GPU 选择策略
+- [x] 创建 `src/executor/gpu/gpu_scheduler.cpp`
+  - [x] 实现任务特征分析（数据量、计算复杂度等）
+  - [x] 实现 CPU/GPU 选择策略（基于阈值的启发式决策）
   - [ ] 实现性能预测模型
   - [ ] 实现自适应调度（基于历史性能数据）
 
-- [ ] 扩展 `Executor` Facade
-  - [ ] 添加 `submit_auto()` 方法（自动选择执行器）
-  - [ ] 添加调度策略配置
+- [x] 扩展 `Executor` Facade
+  - [x] 添加 `submit_auto()` 方法（自动选择执行器）
+  - [x] 添加调度策略配置（`update_scheduler_config` / `get_scheduler_config`）
 
-- [ ] 编写智能调度测试
-  - [ ] 测试任务特征分析
-  - [ ] 测试 CPU/GPU 选择
+- [x] 编写智能调度测试
+  - [x] 测试任务特征分析
+  - [x] 测试 CPU/GPU 选择
   - [ ] 测试性能预测准确性
 
 ### 3.5 性能优化
