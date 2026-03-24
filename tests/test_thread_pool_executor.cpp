@@ -105,10 +105,13 @@ bool test_thread_pool_executor_multiple_tasks() {
         TEST_ASSERT(result == static_cast<int>(i) * 2, "Task result should match");
     }
     
+    // 等待所有任务完成统计更新（future.get() 返回时 completed_tasks_ 可能尚未递增）
+    executor.wait_for_completion();
+
     // 检查状态
     auto status = executor.get_status();
     TEST_ASSERT(status.completed_tasks >= num_tasks, "Completed tasks should be at least num_tasks");
-    
+
     executor.stop();
     
     std::cout << "  ThreadPoolExecutor multiple tasks: PASSED" << std::endl;
