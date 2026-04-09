@@ -6,6 +6,14 @@
 
 ## [0.2.2] - 2026-03-13
 
+### 修复
+
+- **ObjectPool ABA 问题**：将 `ObjectPool` 的 free list 从无锁 CAS（`std::atomic<Node*>`）改为 mutex 保护（`std::mutex` + `std::lock_guard`），彻底消除 ABA 问题导致的 SEGFAULT
+  - 受影响组件：`LockFreeTaskExecutor`、`RealtimeThreadExecutor` 等使用 `ObjectPool<Task>` 的执行器
+  - 接口不变：`acquire()` / `release()` 签名及语义保持向后兼容
+  - 修改文件：`src/util/object_pool.hpp`
+- **基准测试超时配置**：`benchmark_lockfree_task_executor` 的 CTest 超时从 30s 调整为 120s，避免高吞吐量压测场景下误判超时
+
 ### 新增
 
 - **批量任务提交 API**：新增 `submit_batch()` 和 `submit_batch_no_future()` 方法
