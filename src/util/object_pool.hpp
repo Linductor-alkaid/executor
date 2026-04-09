@@ -1,17 +1,18 @@
 #pragma once
 
-#include <atomic>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace executor {
 namespace util {
 
 /**
- * @brief Lock-free object pool for task allocation
+ * @brief Object pool for task allocation
  *
- * Pre-allocates objects and provides lock-free acquire/release operations.
- * Uses a free-list approach with atomic operations.
+ * Pre-allocates objects and provides mutex-protected acquire/release operations.
+ * Uses a free-list approach. Mutex protection eliminates ABA problem present
+ * in the previous lock-free CAS implementation.
  */
 template<typename T>
 class ObjectPool {
@@ -25,11 +26,11 @@ public:
 
         // Build free list
         for (size_t i = 0; i < capacity - 1; ++i) {
-            storage_[i]->next.store(storage_[i + 1].get(), std::memory_order_relaxed);
+            storage_[i]->next = storage_[i + 1].get();
         }
-        storage_[capacity - 1]->next.store(nullptr, std::memory_order_relaxed);
+        storage_[capacity - 1]->next = nullptr;
 
-        free_list_.store(storage_[0].get(), std::memory_order_relaxed);
+        free_list_ = storage_[0].get();
     }
 
     /**
@@ -37,16 +38,11 @@ public:
      * @return Pointer to object, or nullptr if pool is exhausted
      */
     T* acquire() {
-        Node* node = free_list_.load(std::memory_order_acquire);
-        while (node != nullptr) {
-            Node* next = node->next.load(std::memory_order_relaxed);
-            if (free_list_.compare_exchange_weak(node, next,
-                                                  std::memory_order_release,
-                                                  std::memory_order_acquire)) {
-                return &node->data;
-            }
-        }
-        return nullptr;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!free_list_) return nullptr;
+        Node* node = free_list_;
+        free_list_ = node->next;
+        return &node->data;
     }
 
     /**
@@ -60,23 +56,21 @@ public:
             reinterpret_cast<char*>(obj) - offsetof(Node, data)
         );
 
-        Node* old_head = free_list_.load(std::memory_order_relaxed);
-        do {
-            node->next.store(old_head, std::memory_order_relaxed);
-        } while (!free_list_.compare_exchange_weak(old_head, node,
-                                                     std::memory_order_release,
-                                                     std::memory_order_relaxed));
+        std::lock_guard<std::mutex> lock(mutex_);
+        node->next = free_list_;
+        free_list_ = node;
     }
 
 private:
     struct Node {
         T data;
-        std::atomic<Node*> next{nullptr};
+        Node* next{nullptr};
     };
 
     size_t capacity_;
     std::vector<std::unique_ptr<Node>> storage_;
-    std::atomic<Node*> free_list_{nullptr};
+    std::mutex mutex_;
+    Node* free_list_{nullptr};
 };
 
 } // namespace util
