@@ -36,12 +36,29 @@ if(EXECUTOR_ENABLE_GPU)
 
     # CUDA 特定示例
     if(EXECUTOR_CUDA_ENABLED)
+        set(_cuda_inc_dirs ${CUDA_INCLUDE_DIRS})
+        if(NOT _cuda_inc_dirs AND CUDAToolkit_INCLUDE_DIRS)
+            set(_cuda_inc_dirs ${CUDAToolkit_INCLUDE_DIRS})
+        endif()
+
         add_executable(gpu_basic gpu_basic.cpp)
         target_link_libraries(gpu_basic PRIVATE executor)
+        target_include_directories(gpu_basic PRIVATE ${_cuda_inc_dirs})
+
         add_executable(gpu_multi_device gpu_multi_device.cpp)
         target_link_libraries(gpu_multi_device PRIVATE executor)
-        add_executable(gpu_unified_memory gpu_unified_memory.cpp)
-        target_link_libraries(gpu_unified_memory PRIVATE executor)
+        target_include_directories(gpu_multi_device PRIVATE ${_cuda_inc_dirs})
+
+        # gpu_unified_memory 包含 CUDA kernel 语法，必须用 nvcc 编译
+        # Ninja/Makefile 生成器下可用 enable_language(CUDA)；VS 生成器需要 CUDA toolset，跳过
+        if(NOT CMAKE_GENERATOR MATCHES "Visual Studio")
+            enable_language(CUDA)
+            add_executable(gpu_unified_memory gpu_unified_memory.cpp)
+            target_link_libraries(gpu_unified_memory PRIVATE executor)
+            set_source_files_properties(gpu_unified_memory.cpp PROPERTIES LANGUAGE CUDA)
+        else()
+            message(STATUS "Skipping gpu_unified_memory: Visual Studio generator requires CUDA toolset integration")
+        endif()
     endif()
 
     # OpenCL 特定示例
