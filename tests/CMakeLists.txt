@@ -44,7 +44,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     
     # 如果是 CUDA/GPU 测试，添加 CUDA 头文件支持（不链接库，使用动态加载）
-    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*" OR TEST_NAME MATCHES ".*unified_memory.*") AND EXECUTOR_CUDA_ENABLED)
+    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*") AND EXECUTOR_CUDA_ENABLED)
         if(CUDA_INCLUDE_DIRS)
             target_include_directories(${TEST_NAME} PRIVATE ${CUDA_INCLUDE_DIRS})
         elseif(CUDAToolkit_INCLUDE_DIRS)
@@ -136,7 +136,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "benchmark;batch"
             TIMEOUT 120
         )
-    # 无锁任务执行器基准测试（mutex 保护下竞争较高，需要更长超时）
+    # 无锁任务执行器基准测试（高吞吐量压测，需要更长超时）
     elseif(TEST_NAME STREQUAL "benchmark_lockfree_task_executor")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "benchmark"
