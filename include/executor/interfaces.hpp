@@ -6,6 +6,8 @@
 #include <functional>
 #include <type_traits>
 #include <vector>
+#include <thread>
+#include <memory>
 
 namespace executor {
 
@@ -549,21 +551,60 @@ inline std::vector<std::future<void>> IGpuExecutor::submit_kernels_batch(
 template<typename KernelFunc>
 auto IGpuExecutor::submit_kernel_after(std::shared_future<void> dependency, KernelFunc&& kernel,
                                        const gpu::GpuTaskConfig& config) -> std::future<void> {
+    // P-005 fix: 旧实现在 worker 线程的 lambda 中直接 dep.wait(),
+    // 会阻塞单一 GPU worker,后续无依赖任务全部饿死。
+    //
+    // 新实现: dep.wait() 移到独立 std::thread,等依赖完成后再通过
+    // submit_kernel_impl 把真正的 kernel 重新入队,worker 线程立即
+    // 可处理其它任务。
+    //
+    // 限制 (选项 B, 最小可行修复):
+    //   - 每个 submit_kernel_after 启一个 std::thread。线程创建有
+    //     固定开销 (~数十 us + 8MB stack),大规模依赖链 (>>千级)
+    //     短暂 burst 场景下会比"阻塞 worker"更糟。计划在后续 P
+    //     中用 CUDA event + 共享等待线程池(选项 A)替换。
+    //   - 独立 thread 中调用 submit_kernel_impl 需要类成员上下文
+    //     (protected 虚函数),此处合法,因为 lambda 继承自 IGpuExecutor。
+    //   - 失败/超时: dep.wait() 在 std::future 上无超时 API;
+    //     若 dep 永远不完成,独立线程会永久存活,但不会影响 worker。
+    //     调用方应避免传入永远不完成的 future。
     std::shared_future<void> dep = std::move(dependency);
+
+    // 构造"去 dep 等待"的 kernel lambda,这样重新入队时 worker 线程
+    // 不会再次阻塞。
     std::function<void(void*)> kernel_func;
     if constexpr (std::is_invocable_v<KernelFunc, void*>) {
-        kernel_func = [dep, kernel = std::forward<KernelFunc>(kernel)](void* stream) mutable {
-            dep.wait();
+        kernel_func = [kernel = std::forward<KernelFunc>(kernel)](void* stream) mutable {
             kernel(stream);
         };
     } else {
-        kernel_func = [dep, kernel = std::forward<KernelFunc>(kernel)](void* stream) mutable {
-            dep.wait();
-            (void)stream;
+        kernel_func = [kernel = std::forward<KernelFunc>(kernel)](void* /*stream*/) mutable {
             kernel();
         };
     }
-    return submit_kernel_impl(std::move(kernel_func), config);
+
+    // 创建外层 promise/future — 调用方拿到的 future
+    auto promise = std::make_shared<std::promise<void>>();
+    auto result_future = promise->get_future();
+
+    // 启动独立线程等待 dep,然后把 kernel 重新入队
+    // 捕获 this 指针:lambda 在 IGpuExecutor 上下文,
+    // 可合法访问 protected submit_kernel_impl。
+    std::thread waiter([dep, kernel_func = std::move(kernel_func), config,
+                        promise, this]() mutable {
+        try {
+            dep.wait();
+            // dep 已完成,现在把 kernel 重新入队;内部 promise 由
+            // submit_kernel_impl 创建,这里只 wait inner 即可。
+            auto inner_future = submit_kernel_impl(std::move(kernel_func), config);
+            inner_future.get();
+            promise->set_value();
+        } catch (...) {
+            promise->set_exception(std::current_exception());
+        }
+    });
+    waiter.detach();
+    return result_future;
 }
 
 } // namespace executor
