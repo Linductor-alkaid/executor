@@ -41,7 +41,10 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
     
     // 初始化工作线程本地队列
 #ifdef USE_LOCKFREE_WORKER_QUEUE
-    // LockFreeWorkerQueue 可以直接 resize
+    // LockFreeWorkerQueue 内部含 std::vector<std::atomic<size_t>>，因此整体不可移动。
+    // std::vector 在 reserve/emplace_back 触发 realloc 时会做 move-construct，导致编译失败。
+    // 由于本分支的修复需要绕开 std::vector 的存储语义，超出 P-004 范围，
+    // 暂保留原始 emplace_back 路径——P-004 提交完成后此处的预存在 bug 由后续 plan 处理。
     local_queues_.clear();
     for (size_t i = 0; i < config_.min_threads; ++i) {
         local_queues_.emplace_back(config_.queue_capacity);
@@ -61,8 +64,8 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
     }
 #endif
     
-    // 初始化任务分发器
-    dispatcher_ = std::make_unique<TaskDispatcher>(
+    // 初始化任务分发器（TaskDispatcher 是模板类，需要显式指定实例化类型）
+    dispatcher_ = std::make_unique<TaskDispatcher<WorkerQueueImpl>>(
         *load_balancer_, scheduler_, local_queues_
     );
     

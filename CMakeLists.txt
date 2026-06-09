@@ -16,6 +16,12 @@ option(EXECUTOR_ENABLE_GPU "Enable GPU support" ON)
 option(EXECUTOR_ENABLE_CUDA "Enable CUDA support" ON)
 option(EXECUTOR_ENABLE_OPENCL "Enable OpenCL support" OFF)
 
+# 无锁工作线程队列（需配套支持 TaskDispatcher 模板化的双模式构建）
+option(EXECUTOR_LOCKFREE_QUEUE "Use LockFreeWorkerQueue as the worker local queue implementation" OFF)
+if(EXECUTOR_LOCKFREE_QUEUE)
+    add_definitions(-DUSE_LOCKFREE_WORKER_QUEUE)
+endif()
+
 # 包含 CMake 模块
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)
