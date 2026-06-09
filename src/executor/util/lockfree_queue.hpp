@@ -206,10 +206,28 @@ public:
         return seq != pos + 1;
     }
 
+    /**
+     * @brief 返回队列中当前的元素数量（近似值）
+     *
+     * 本方法在多线程并发下读取 enqueue_pos_ 和 dequeue_pos_ 两个原子变量。
+     * 在 ARM/POWER 等弱内存序架构上,如果使用 relaxed 加载,编译器/CPU 可能把
+     * dequeue_pos_ 的读取重排到 enqueue_pos_ 之前,导致在 deq 刚刚被推进的
+     * 瞬间出现 enq < deq 的情况,触发 size_t 下溢,size() 返回一个巨大的
+     * 接近 SIZE_MAX 的值,引发调用方分配/拷贝异常甚至安全断言。
+     *
+     * 修复:两个加载都改用 acquire,确保 enqueue_pos_ 看到的是 dequeue_pos_
+     * 推进之后的"最新"视图(以及相反),并用饱和减法保护下溢。
+     *
+     * 注意:此方法返回的是某瞬时快照,不是精确值(并发环境下两值仍可能小幅
+     * 不一致),仅供监控/统计用途,不可作为容量判定依据。
+     *
+     * 在弱序架构 (ARM/POWER) 上的端到端正确性需要 CI 验证,本机 x86_64
+     * TSO 模型下能掩盖此问题。
+     */
     size_t size() const {
-        size_t enq = enqueue_pos_.load(std::memory_order_relaxed);
-        size_t deq = dequeue_pos_.load(std::memory_order_relaxed);
-        return enq - deq;
+        size_t enq = enqueue_pos_.load(std::memory_order_acquire);
+        size_t deq = dequeue_pos_.load(std::memory_order_acquire);
+        return (enq >= deq) ? (enq - deq) : 0;
     }
 
     size_t capacity() const {
