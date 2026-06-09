@@ -170,6 +170,8 @@ for (int t = 0; t < 4; ++t) {
 
 ### 3.4 延迟与周期任务
 
+> ⚠️ **API 范围提示**：`submit_delayed`、`submit_periodic`、`cancel_task` **仅在 `Executor` Facade 类（`include/executor/executor.hpp`）中提供**，**不属于** `IAsyncExecutor`、`IExecutor` 或 `ThreadPool` 的接口。用户直接对底层 `ThreadPool` 实例调用这些方法会编译失败。延迟与周期任务统一由 Facade 内部的 `ExecutorManager` 调度，底层 `ThreadPool` 不感知任务时间维度。
+
 ```cpp
 template<typename F, typename... Args>
 auto submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
