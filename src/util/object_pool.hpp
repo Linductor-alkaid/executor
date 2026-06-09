@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <vector>
 
 namespace executor {
@@ -18,6 +19,14 @@ template<typename T>
 class ObjectPool {
 public:
     explicit ObjectPool(size_t capacity = 1024) : capacity_(capacity) {
+        // Reject zero capacity: the free-list construction below would
+        // underflow (`capacity - 1` wraps to SIZE_MAX) and dereference
+        // `storage_[0]` / `storage_[SIZE_MAX]`, triggering UB and very
+        // likely a segfault before acquire()/release() are ever called.
+        if (capacity == 0) {
+            throw std::invalid_argument("ObjectPool capacity must be > 0");
+        }
+
         // Pre-allocate all objects
         storage_.reserve(capacity);
         for (size_t i = 0; i < capacity; ++i) {
