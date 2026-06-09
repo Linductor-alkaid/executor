@@ -116,7 +116,13 @@ public:
     bool load();
     void unload();
     bool is_available() const;
-    const OpenCLFunctionPointers& get_functions() const;
+    /**
+     * @brief 获取 OpenCL 函数指针集合（按值返回以保证线程安全）
+     *
+     * 返回函数指针集合的拷贝而非引用,即便其他线程并发调用 unload()
+     * 也不会让副本悬空。锁在拷贝期间持有,出函数即释放。
+     */
+    OpenCLFunctionPointers get_functions() const;
     std::string get_dll_path() const;
 
 private:

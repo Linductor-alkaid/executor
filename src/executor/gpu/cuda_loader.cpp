@@ -101,7 +101,11 @@ bool CudaLoader::is_available() const {
     return is_loaded_ && functions_.is_complete();
 }
 
-const CudaFunctionPointers& CudaLoader::get_functions() const {
+CudaFunctionPointers CudaLoader::get_functions() const {
+    // 按值返回以避免悬空引用:
+    // 拷贝在锁内完成,出函数时锁释放,调用方持有的副本与 loader
+    // 内部状态脱钩,即使其他线程随后 unload() 也不会影响本副本。
+    std::lock_guard<std::mutex> lock(mutex_);
     return functions_;
 }
 

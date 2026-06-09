@@ -14,7 +14,7 @@ std::vector<GpuDeviceInfo> enumerate_cuda_devices() {
         return devices;
     }
 
-    const auto& funcs = loader.get_functions();
+    auto funcs = loader.get_functions();
     int device_count = 0;
     if (funcs.cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
         return devices;
@@ -65,7 +65,7 @@ std::vector<GpuDeviceInfo> enumerate_opencl_devices() {
         return devices;
     }
 
-    const auto& funcs = loader.get_functions();
+    auto funcs = loader.get_functions();
 
     // 获取平台数量
     cl_uint num_platforms = 0;

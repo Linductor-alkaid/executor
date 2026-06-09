@@ -77,7 +77,7 @@ CudaExecutor::~CudaExecutor() {
 #ifdef EXECUTOR_ENABLE_CUDA
     if (is_available_ && loader_->is_available()) {
         (void)ensure_device_context();  // 多 GPU 场景下确保操作本设备
-        const auto& funcs = loader_->get_functions();
+        auto funcs = loader_->get_functions();
         
         // 释放所有已分配的内存（仅未使用内存池时 allocated_memory_ 非空）
         {
@@ -110,7 +110,7 @@ bool CudaExecutor::check_cuda_available() {
         return false;
     }
 
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (!funcs.is_complete()) {
         return false;
     }
@@ -145,7 +145,7 @@ bool CudaExecutor::initialize_device() {
         return false;
     }
 
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (!funcs.is_complete()) {
         return false;
     }
@@ -191,7 +191,7 @@ bool CudaExecutor::initialize_device() {
 bool CudaExecutor::check_cuda_error(cudaError_t error_code, const char* operation) const {
     if (error_code != cudaSuccess) {
         if (loader_->is_available()) {
-            const auto& funcs = loader_->get_functions();
+            auto funcs = loader_->get_functions();
             if (funcs.cudaGetErrorString != nullptr) {
                 const char* msg = funcs.cudaGetErrorString(error_code);
                 std::fprintf(stderr, "CudaExecutor: %s failed: %s\n",
@@ -206,7 +206,7 @@ bool CudaExecutor::check_cuda_error(cudaError_t error_code, const char* operatio
 std::exception_ptr CudaExecutor::make_cuda_exception_ptr(cudaError_t error_code, const char* operation) const {
     std::string msg = std::string(operation) + " failed";
     if (loader_->is_available()) {
-        const auto& funcs = loader_->get_functions();
+        auto funcs = loader_->get_functions();
         if (funcs.cudaGetErrorString != nullptr) {
             const char* errStr = funcs.cudaGetErrorString(error_code);
             if (errStr && errStr[0] != '\0') {
@@ -230,7 +230,7 @@ bool CudaExecutor::ensure_device_context() const {
     if (!loader_->is_available()) {
         return false;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaSetDevice == nullptr) {
         return false;
     }
@@ -257,7 +257,7 @@ bool CudaExecutor::start() {
         return false;
     }
 
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaStreamCreate == nullptr || funcs.cudaStreamDestroy == nullptr) {
         is_running_.store(false);
         return false;
@@ -343,7 +343,7 @@ void* CudaExecutor::raw_allocate_device_memory(size_t size) {
     if (!ensure_device_context()) {
         return nullptr;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaMalloc == nullptr) {
         return nullptr;
     }
@@ -367,7 +367,7 @@ void CudaExecutor::raw_free_device_memory(void* ptr) {
     if (!ensure_device_context()) {
         return;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaFree != nullptr) {
         cudaError_t error = funcs.cudaFree(ptr);
         check_cuda_error(error, "cudaFree");
@@ -390,7 +390,7 @@ void* CudaExecutor::allocate_device_memory(size_t size) {
     if (!ensure_device_context()) {
         return nullptr;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaMalloc == nullptr) {
         return nullptr;
     }
@@ -427,7 +427,7 @@ void CudaExecutor::free_device_memory(void* ptr) {
     if (!ensure_device_context()) {
         return;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaFree == nullptr) {
         return;
     }
@@ -460,7 +460,7 @@ void* CudaExecutor::allocate_unified_memory(size_t size) {
     if (!ensure_device_context()) {
         return nullptr;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (!funcs.is_unified_memory_available() || funcs.cudaMallocManaged == nullptr) {
         return nullptr;  // 不支持统一内存
     }
@@ -492,7 +492,7 @@ void CudaExecutor::free_unified_memory(void* ptr) {
     if (!ensure_device_context()) {
         return;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaFree == nullptr) {
         return;
     }
@@ -525,7 +525,7 @@ bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, 
     if (!ensure_device_context()) {
         return false;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (!funcs.is_unified_memory_available() || funcs.cudaMemPrefetchAsync == nullptr) {
         return false;  // 不支持内存预取
     }
@@ -555,7 +555,7 @@ bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool 
     if (!ensure_device_context()) {
         return false;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     cudaError_t error;
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
@@ -592,7 +592,7 @@ bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool as
     if (!ensure_device_context()) {
         return false;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     cudaError_t error;
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
@@ -629,7 +629,7 @@ bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size
     if (!ensure_device_context()) {
         return false;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     cudaError_t error;
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
@@ -671,7 +671,7 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     auto p2p_log = [&funcs](const char* step, bool use_cuda_err) {
         if (funcs.cudaGetLastError && funcs.cudaGetErrorString) {
             cudaError_t e = funcs.cudaGetLastError();
@@ -748,7 +748,7 @@ bool CudaExecutor::add_stream_callback(int stream_id, std::function<void()> call
     if (!ensure_device_context()) {
         return false;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaLaunchHostFunc == nullptr) {
         return false;
     }
@@ -782,7 +782,7 @@ void CudaExecutor::synchronize() {
     if (!ensure_device_context()) {
         return;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaDeviceSynchronize != nullptr) {
         cudaError_t error = funcs.cudaDeviceSynchronize();
         check_cuda_error(error, "cudaDeviceSynchronize");
@@ -799,7 +799,7 @@ void CudaExecutor::synchronize_stream(int stream_id) {
     if (!ensure_device_context()) {
         return;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaStreamSynchronize == nullptr) {
         return;
     }
@@ -852,7 +852,7 @@ void CudaExecutor::destroy_stream(int stream_id) {
     if (!ensure_device_context()) {
         return;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaStreamDestroy == nullptr) {
         return;
     }
@@ -895,7 +895,7 @@ GpuDeviceInfo CudaExecutor::get_device_info() const {
 
     // 获取内存信息
     if (loader_->is_available() && ensure_device_context()) {
-        const auto& funcs = loader_->get_functions();
+        auto funcs = loader_->get_functions();
         if (funcs.cudaMemGetInfo != nullptr) {
             size_t free_mem = 0;
             size_t total_mem = 0;
@@ -931,7 +931,7 @@ GpuExecutorStatus CudaExecutor::get_status() const {
 
 #ifdef EXECUTOR_ENABLE_CUDA
     if (loader_->is_available() && ensure_device_context()) {
-        const auto& funcs = loader_->get_functions();
+        auto funcs = loader_->get_functions();
         
         // 获取内存使用情况
         if (funcs.cudaMemGetInfo != nullptr) {
@@ -1023,7 +1023,7 @@ void CudaExecutor::run_one_task(GpuQueuedTask& task) {
         }
         task.kernel_func(stream_ptr);
         if (loader_->is_available()) {
-            const auto& funcs = loader_->get_functions();
+            auto funcs = loader_->get_functions();
             if (funcs.cudaGetLastError != nullptr) {
                 cudaError_t err = funcs.cudaGetLastError();
                 if (err != cudaSuccess) {
@@ -1168,7 +1168,7 @@ cudaStream_t CudaExecutor::create_one_stream() {
     if (!ensure_device_context()) {
         return nullptr;
     }
-    const auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     if (funcs.cudaStreamCreate == nullptr) {
         return nullptr;
     }
