@@ -108,14 +108,24 @@ size_t WorkerLocalQueue::size() const {
 }
 
 bool WorkerLocalQueue::empty() const {
-    // 快速检查（使用原子变量）
+    // 关键不变量：empty() 必须与 size_.load() == 0 严格等价。
+    //
+    // 修复说明（2026-06-09, P-001）：
+    //   旧实现在加锁路径上使用 `return front_index_ >= queue_.size();`，
+    //   这是错误的——front_index_ 是环形缓冲区下标，由
+    //   `front_index_ = (front_index_ + 1) % queue_.size()` 维护，
+    //   其取值范围恒为 [0, queue_.size())，因此 `front_index_ >= queue_.size()`
+    //   永远为 false。也就是说，旧版本在 size_>0 路径下加锁后永远返回 false，
+    //   即 empty() 永远报告"非空"——与 size()/clear() 等其他方法的状态完全脱节。
+    //
+    // 正确做法：empty() 统一基于原子 size_ 判断，与 size() 保持一致语义。
+    // 第一行无锁快速路径在绝大多数调用下直接返回，避免每次都加锁；
+    // 仅在 size_ 暂态为非 0 时加锁复核（防 ABA / pop 竞态导致错误返回 true）。
     if (size_.load(std::memory_order_relaxed) == 0) {
         return true;
     }
-    
-    // 如果原子变量显示非空，需要加锁确认
     std::lock_guard<std::mutex> lock(mutex_);
-    return front_index_ >= queue_.size();
+    return size_.load(std::memory_order_relaxed) == 0;
 }
 
 void WorkerLocalQueue::clear() {
