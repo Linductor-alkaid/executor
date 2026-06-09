@@ -180,11 +180,18 @@ public:
     bool is_available() const;
 
     /**
-     * @brief 获取CUDA函数指针集合
-     * 
-     * @return 函数指针集合的引用，如果未加载则返回空指针集合
+     * @brief 获取CUDA函数指针集合（按值返回以保证线程安全）
+     *
+     * 返回函数指针集合的拷贝而非引用。这样调用方持有的是独立副本,
+     * 即便其他线程并发调用 unload() 也不会让副本悬空,副本中的指针
+     * 在拷贝完成瞬间即与 loader 内部状态脱钩。
+     *
+     * 拷贝成本: CudaFunctionPointers 内全部为函数指针(几十个),
+     *         sizeof 在百字节级,远小于一次 CUDA 调用。
+     *
+     * @return 函数指针集合的拷贝,如果未加载则所有指针为 nullptr
      */
-    const CudaFunctionPointers& get_functions() const;
+    CudaFunctionPointers get_functions() const;
 
     /**
      * @brief 获取已加载的DLL路径

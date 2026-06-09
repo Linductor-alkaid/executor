@@ -56,7 +56,7 @@ void OpenCLExecutor::wait_for_completion() {
 }
 
 bool OpenCLExecutor::initialize_opencl() {
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     cl_int err;
 
     // 获取平台
@@ -113,7 +113,7 @@ bool OpenCLExecutor::initialize_opencl() {
 }
 
 void OpenCLExecutor::cleanup() {
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
 
     // 释放内存
     {
@@ -153,7 +153,7 @@ void* OpenCLExecutor::allocate_device_memory(size_t size) {
         return nullptr;
     }
 
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     cl_int err;
     cl_mem buffer = funcs.clCreateBuffer(context_, CL_MEM_READ_WRITE, size, nullptr, &err);
 
@@ -177,7 +177,7 @@ void OpenCLExecutor::free_device_memory(void* ptr) {
     std::lock_guard<std::mutex> lock(memory_mutex_);
     auto it = memory_map_.find(ptr);
     if (it != memory_map_.end()) {
-        auto& funcs = loader_->get_functions();
+        auto funcs = loader_->get_functions();
         funcs.clReleaseMemObject(it->second);
         memory_map_.erase(it);
     }
@@ -199,7 +199,7 @@ bool OpenCLExecutor::copy_to_device(void* dst, const void* src, size_t size, boo
         return false;
     }
 
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
     cl_int err = funcs.clEnqueueWriteBuffer(
         queue_wrapper->queue, it->second, async ? CL_FALSE : CL_TRUE,
@@ -224,7 +224,7 @@ bool OpenCLExecutor::copy_to_host(void* dst, const void* src, size_t size, bool 
         return false;
     }
 
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
     cl_int err = funcs.clEnqueueReadBuffer(
         queue_wrapper->queue, it->second, async ? CL_FALSE : CL_TRUE,
@@ -251,7 +251,7 @@ bool OpenCLExecutor::copy_device_to_device(void* dst, const void* src, size_t si
         return false;
     }
 
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
     cl_int err = funcs.clEnqueueCopyBuffer(
         queue_wrapper->queue, src_it->second, dst_it->second,
@@ -271,7 +271,7 @@ void OpenCLExecutor::synchronize() {
         return;
     }
 
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> lock(queues_mutex_);
 
     for (auto& queue_wrapper : queues_) {
@@ -288,7 +288,7 @@ void OpenCLExecutor::synchronize_stream(int stream_id) {
         return;
     }
 
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> lock(queue_wrapper->mutex);
     funcs.clFinish(queue_wrapper->queue);
 }
@@ -298,7 +298,7 @@ int OpenCLExecutor::create_stream() {
         return -1;
     }
 
-    auto& funcs = loader_->get_functions();
+    auto funcs = loader_->get_functions();
     cl_int err;
 
     auto queue_wrapper = std::make_unique<CommandQueueWrapper>();
@@ -321,7 +321,7 @@ void OpenCLExecutor::destroy_stream(int stream_id) {
         if (stream_id >= 0 && stream_id < static_cast<int>(queues_.size())) {
             auto& queue_wrapper = queues_[stream_id];
             if (queue_wrapper && queue_wrapper->queue) {
-                auto& funcs = loader_->get_functions();
+                auto funcs = loader_->get_functions();
                 std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
                 funcs.clReleaseCommandQueue(queue_wrapper->queue);
                 queue_wrapper->queue = nullptr;
@@ -346,7 +346,7 @@ GpuDeviceInfo OpenCLExecutor::get_device_info() const {
     info.device_id = config_.device_id;
 
     if (is_available_ && device_) {
-        auto& funcs = loader_->get_functions();
+        auto funcs = loader_->get_functions();
         char device_name[256] = {0};
         funcs.clGetDeviceInfo(device_, 0x102B, sizeof(device_name), device_name, nullptr); // CL_DEVICE_NAME
         info.name = device_name;
