@@ -220,8 +220,8 @@ private:
     // 工作线程本地队列
     std::vector<WorkerQueueImpl> local_queues_;
 
-    // 任务分发器
-    std::unique_ptr<TaskDispatcher> dispatcher_;
+    // 任务分发器（模板化以匹配 WorkerQueueImpl）
+    std::unique_ptr<TaskDispatcher<WorkerQueueImpl>> dispatcher_;
 
     // 动态扩缩容控制器
     std::unique_ptr<ThreadPoolResizer> resizer_;

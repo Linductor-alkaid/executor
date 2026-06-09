@@ -114,6 +114,9 @@ public:
         steal_buffer_.clear();
     }
 
+    /**
+     * @brief 析构函数
+     */
     ~LockFreeWorkerQueue() {
         clear();
     }
