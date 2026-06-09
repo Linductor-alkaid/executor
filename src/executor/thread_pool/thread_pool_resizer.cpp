@@ -83,7 +83,12 @@ bool ThreadPoolResizer::should_shrink() {
     // 3. 持续空闲时间 > 60秒
     // 4. 当前线程数 > min_threads
     
-    size_t idle_threads = total_threads - active_threads;
+    // Guard against size_t underflow (same fix as ThreadPool::get_status()):
+    // active_threads_ is a relaxed atomic that may briefly exceed
+    // total_threads_ during resize transitions. Saturate to 0.
+    size_t idle_threads = (active_threads <= total_threads)
+                              ? (total_threads - active_threads)
+                              : 0;
     bool idle_high = (idle_threads > total_threads * 0.5);
     bool queue_low = (queue_size < config_.queue_capacity * 0.2);
     bool can_shrink = (total_threads > min_threads);

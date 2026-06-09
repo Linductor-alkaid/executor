@@ -214,7 +214,13 @@ ThreadPoolStatus ThreadPool::get_status() const {
     ThreadPoolStatus status;
     status.total_threads = workers_.size();
     status.active_threads = active_threads_.load(std::memory_order_relaxed);
-    status.idle_threads = status.total_threads - status.active_threads;
+    // Guard against size_t underflow: active_threads_ is a relaxed atomic
+    // that may briefly exceed workers_.size() during resize() (e.g. when
+    // workers are being torn down but the counter has not yet been
+    // decremented). Saturate to 0 instead of wrapping to a huge value.
+    status.idle_threads = (status.active_threads <= status.total_threads)
+                              ? (status.total_threads - status.active_threads)
+                              : 0;
     
     // 队列大小 = 全局调度器 + 所有本地队列
     size_t local_queue_size = 0;
