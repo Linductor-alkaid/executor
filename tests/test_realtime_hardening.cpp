@@ -6,6 +6,7 @@
 
 // 包含线程工具头文件
 #include "executor/util/thread_utils.hpp"
+#include "executor/config.hpp"
 
 #ifdef __linux__
 #include <unistd.h>
@@ -81,6 +82,21 @@ bool test_set_current_thread_timer_slack_ns() {
 
 // ========== 主测试函数 ==========
 
+bool test_default_config_is_optimal() {
+    std::cout << "Testing RealtimeThreadConfig default-is-optimal values..." << std::endl;
+
+    executor::RealtimeThreadConfig cfg;
+    TEST_ASSERT(cfg.enable_memory_lock == true,
+                "Default enable_memory_lock should be true (opt-out, facade philosophy)");
+    TEST_ASSERT(cfg.timer_slack_ns == 1,
+                "Default timer_slack_ns should be 1 (1ns, opt-out by setting 0)");
+    // thread_name 仍然 "", 不变
+
+    std::cout << "  enable_memory_lock default = " << cfg.enable_memory_lock << std::endl;
+    std::cout << "  timer_slack_ns default = " << cfg.timer_slack_ns << std::endl;
+    return true;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Realtime Hardening Tests" << std::endl;
@@ -92,6 +108,7 @@ int main() {
     all_passed &= test_try_mlock_current_thread();
     all_passed &= test_set_current_thread_name();
     all_passed &= test_set_current_thread_timer_slack_ns();
+    all_passed &= test_default_config_is_optimal();
 
     std::cout << std::endl;
     std::cout << "========================================" << std::endl;

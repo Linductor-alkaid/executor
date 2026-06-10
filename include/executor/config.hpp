@@ -35,8 +35,8 @@ struct RealtimeThreadConfig {
     std::vector<int> cpu_affinity;                        // CPU亲和性（绑定到特定核心）
     std::function<void()> cycle_callback;                 // 周期回调函数
     ICycleManager* cycle_manager = nullptr;               // 可选的周期管理器接口（用于更精确的周期控制）
-    bool enable_memory_lock = false;                      // 是否调用 mlockall 锁定内存（避免分页抖动），默认关闭
-    uint64_t timer_slack_ns = 0;                          // timer slack（纳秒），0 表示不修改（保留内核默认）
+    bool enable_memory_lock = true;                       // 默认开, mlockall 防分页抖动, 失败静默; 显式设 false 关闭
+    uint64_t timer_slack_ns = 1;                          // 默认 1ns, 几乎消除 50us 内核 timer slack; 显式设 0 表示保留内核默认
 };
 
 /**
