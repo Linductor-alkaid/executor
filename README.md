@@ -2,113 +2,115 @@
 
 [![CI](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml) [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](https://isocpp.org/) [![CMake](https://img.shields.io/badge/CMake-3.16%2B-064F8C?logo=cmake)](https://cmake.org/) [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-1793D1)](https://github.com)
 
-> 轻量级 C++ 任务执行与线程管理库，提供统一的线程池与专用实时线程管理，支持任务提交、优先级调度、实时周期任务及基础监控；可选 GPU（CUDA/OpenCL）执行器，与 CPU 执行器统一管理。
+> 中文文档: [README_zh.md](README_zh.md)
+
+> A lightweight C++ task execution and thread management library providing a unified thread pool and dedicated real-time thread management. Supports task submission, priority scheduling, real-time periodic tasks, and basic monitoring. Optional GPU (CUDA/OpenCL) executor managed alongside the CPU executor through a unified API.
 
 ---
 
-## 特性
+## Features
 
-- **混合执行模式**
-  线程池（普通并发任务）+ 专用实时线程（高实时性任务，如 CAN 通信、传感器采集）
+- **Hybrid Execution Modes**
+  Thread pool (general concurrent tasks) + dedicated real-time thread (high real-time tasks such as CAN communication, sensor acquisition)
 
-- **Linux 实时性加固（P016）**
-  `RealtimeThreadConfig` 支持 `enable_memory_lock`（`mlockall` 内存锁定，避免分页抖动）、`timer_slack_ns`（压低 timer slack 至纳秒级）及 `thread_name`（线程命名，便于 top/perf 识别）；所有字段 opt-in，对已有代码无影响。参考示例：`tests/test_realtime_hardening.cpp`（`test_realtime_hardening`）
+- **Linux Real-Time Hardening (P016)**
+  `RealtimeThreadConfig` supports `enable_memory_lock` (`mlockall` memory lock to avoid page fault jitter), `timer_slack_ns` (reduce timer slack to nanosecond level), and `thread_name` (thread naming for `top`/`perf` visibility). All fields are opt-in and have no impact on existing code. Reference example: `tests/test_realtime_hardening.cpp` (`test_realtime_hardening`)
 
-- **统一 API**
-  `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic`、`submit_batch`、`submit_batch_no_future` 及实时任务注册
+- **Unified API**
+  `Executor` facade provides `submit`, `submit_priority`, `submit_delayed`, `submit_periodic`, `submit_batch`, `submit_batch_no_future`, and real-time task registration
 
-- **批量任务提交**
-  `submit_batch()` 和 `submit_batch_no_future()` 高效提交大量任务，单线程场景性能提升 **5-16x**（500-2000 个任务）
+- **Batch Task Submission**
+  `submit_batch()` and `submit_batch_no_future()` efficiently submit large numbers of tasks, with **5–16x** throughput improvement in single-threaded scenarios (500–2000 tasks)
 
-- **可选 GPU（CUDA/OpenCL）**
-  GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端
+- **Optional GPU (CUDA/OpenCL)**
+  GPU executor interface with CUDA/OpenCL implementations: kernel submission, device memory and stream management, multi-device, memory pool, monitoring. Runtime dynamic loading with safe graceful degradation when no GPU is available. Device query API automatically recommends the best backend.
 
-- **可配置**
-  线程数、队列容量、优先级、CPU 亲和性、工作窃取、监控开关等
+- **Configurable**
+  Thread count, queue capacity, priority, CPU affinity, work stealing, monitoring toggle, and more
 
-- **单例 / 实例化**
-  支持进程内共享或按项目隔离的独立实例（RAII 生命周期）
+- **Singleton / Instance-Based**
+  Supports a shared in-process singleton or isolated independent instances per project (RAII lifecycle)
 
-- **可选监控**
-  任务统计、执行器状态查询；可选 `ICycleManager` 集成以精确控制实时周期
+- **Optional Monitoring**
+  Task statistics and executor state queries. Optional `ICycleManager` integration for precise real-time cycle control
 
-- **最小依赖**
-  仅依赖 C++ 标准库与平台特定 API（Linux: `pthread`、`rt`；Windows: Win32 API），无第三方必需依赖；GPU 为可选模块（CUDA/OpenCL 头文件 + 运行时动态加载）
+- **Minimal Dependencies**
+  Depends only on the C++ standard library and platform-specific APIs (Linux: `pthread`, `rt`; Windows: Win32 API). No required third-party dependencies. GPU is an optional module (CUDA/OpenCL headers + runtime dynamic loading).
 
-- **跨平台支持**
-  支持 Linux 和 Windows，自动适配平台特性（如 Windows 高精度定时器）
+- **Cross-Platform Support**
+  Supports Linux and Windows with automatic adaptation of platform features (e.g., Windows high-resolution timers)
 
-## 依赖与要求
+## Dependencies & Requirements
 
-| 项目 | 要求 |
-|------|------|
-| **C++ 标准** | C++20 |
-| **构建系统** | CMake 3.16+ |
-| **平台** | **Linux**：`pthread`、`rt`（实时扩展）<br>**Windows**：Visual Studio 2019+ / MSVC 14.0+，Win32 API |
-| **GPU（可选）** | 启用 `EXECUTOR_ENABLE_GPU` 时：<br>- CUDA：需 CUDA Toolkit（头文件），运行时动态加载<br>- OpenCL：需 OpenCL 头文件，运行时动态加载<br>无静态链接，GPU 不可用时安全降级 |
+| Item | Requirement |
+|------|-------------|
+| **C++ Standard** | C++20 |
+| **Build System** | CMake 3.16+ |
+| **Platform** | **Linux**: `pthread`, `rt` (real-time extensions)<br>**Windows**: Visual Studio 2019+ / MSVC 14.0+, Win32 API |
+| **GPU (optional)** | When `EXECUTOR_ENABLE_GPU` is enabled:<br>- CUDA: CUDA Toolkit (headers required), runtime loaded dynamically<br>- OpenCL: OpenCL headers required, runtime loaded dynamically<br>No static linking; safe graceful degradation when GPU is unavailable |
 
-### 平台特定说明
+### Platform-Specific Notes
 
 #### Linux
-- 需要 `pthread` 和 `librt`（实时扩展库）
-- 支持高精度定时器和实时调度策略
+- Requires `pthread` and `librt` (real-time extension library)
+- Supports high-resolution timers and real-time scheduling policies
 
 #### Windows
-- 支持 Visual Studio 2019 及更高版本（MSVC 14.0+）
-- 对于短周期实时任务（周期 < 20ms），自动启用高精度定时器（`timeBeginPeriod`）
-- 定时器精度：默认 15.6ms，启用高精度后可达 1ms
-- 注意：高精度定时器会增加系统功耗，仅在需要时自动启用
+- Supports Visual Studio 2019 and later (MSVC 14.0+)
+- For short-cycle real-time tasks (cycle < 20 ms), high-resolution timers (`timeBeginPeriod`) are automatically enabled
+- Timer precision: 15.6 ms by default; up to 1 ms with high-resolution mode enabled
+- Note: high-resolution timers increase system power consumption and are only enabled automatically when needed
 
-## 快速开始
+## Quick Start
 
-### 构建
+### Build
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-启用 GPU 支持时：
+To enable GPU support:
 
 ```bash
-# 启用 CUDA（NVIDIA GPU）
+# Enable CUDA (NVIDIA GPU)
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_CUDA=ON
 
-# 启用 OpenCL（Intel/AMD/NVIDIA GPU）
+# Enable OpenCL (Intel/AMD/NVIDIA GPU)
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_OPENCL=ON
 
-# 同时启用 CUDA 和 OpenCL
+# Enable both CUDA and OpenCL
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_ENABLE_GPU=ON -DEXECUTOR_ENABLE_CUDA=ON -DEXECUTOR_ENABLE_OPENCL=ON
 
 cmake --build build
 ```
 
-查询系统 GPU 设备：
+Enumerate GPU devices on the system:
 
 ```bash
 ./build/examples/gpu_device_query
 ```
 
-### 运行测试
+### Run Tests
 
 ```bash
 ctest --test-dir build
 ```
 
-### 基本用法
+### Basic Usage
 
-可不显式调用 `initialize`/`shutdown`，库会兜底；仍推荐在需要自定义配置或退出时显式调用。
+Explicit calls to `initialize`/`shutdown` are optional — the library provides a fallback; however, explicit calls are still recommended when custom configuration or controlled shutdown is needed.
 
 ```cpp
 #include <executor/executor.hpp>
 
 int main() {
-    // 配置执行器
+    // Configure the executor
     executor::ExecutorConfig config;
     config.min_threads = 4;
     config.max_threads = 16;
 
-    // 初始化并提交任务
+    // Initialize and submit tasks
     auto& ex = executor::Executor::instance();
     ex.initialize(config);
 
@@ -122,31 +124,31 @@ int main() {
 }
 ```
 
-> 更多示例见 [examples/](examples/)（需 `-DEXECUTOR_BUILD_EXAMPLES=ON` 构建）；GPU 示例 `gpu_basic`、`gpu_multi_device` 需同时启用 GPU）。
+> For more examples see [examples/](examples/) (build with `-DEXECUTOR_BUILD_EXAMPLES=ON`). GPU examples `gpu_basic` and `gpu_multi_device` also require GPU support to be enabled.
 
-## 文档
+## Documentation
 
-| 文档 | 说明 |
-|------|------|
-| [BUILD.md](docs/BUILD.md) | 构建、安装、`find_package`、选项与发布包 |
-| [API.md](docs/API.md) | API 使用说明与主要类型 |
-| [MIGRATION.md](docs/MIGRATION.md) | 迁移指南（版本升级说明） |
-| [executor.md](docs/design/executor.md) | 架构与设计 |
-| [gpu_executor.md](docs/design/gpu_executor.md) | GPU 执行器扩展设计（CUDA 等） |
-| [cpp-project-design.md](docs/design/cpp-project-design.md) | 项目结构与实现 |
-| [COVERAGE.md](docs/COVERAGE.md) | 代码覆盖率（gcov/lcov） |
+| Document | Description |
+|----------|-------------|
+| [BUILD.md](docs/BUILD.md) | Build, install, `find_package`, options, and release packages |
+| [API.md](docs/API.md) | API usage and primary types |
+| [MIGRATION.md](docs/MIGRATION.md) | Migration guide (version upgrade notes) |
+| [executor.md](docs/design/executor.md) | Architecture and design |
+| [gpu_executor.md](docs/design/gpu_executor.md) | GPU executor extension design (CUDA, etc.) |
+| [cpp-project-design.md](docs/design/cpp-project-design.md) | Project structure and implementation |
+| [COVERAGE.md](docs/COVERAGE.md) | Code coverage (gcov/lcov) |
 
-## 安装与集成
+## Installation & Integration
 
-### 安装
+### Install
 
 ```bash
 cmake --install build --prefix /usr/local
 ```
 
-### 在项目中使用
+### Use in Your Project
 
-通过 `find_package(executor)` 集成：
+Integrate via `find_package(executor)`:
 
 ```cmake
 find_package(executor REQUIRED)
@@ -154,70 +156,70 @@ add_executable(myapp main.cpp)
 target_link_libraries(myapp PRIVATE executor::executor)
 ```
 
-或使用 `add_subdirectory`：
+Or use `add_subdirectory`:
 
 ```cmake
 add_subdirectory(path/to/executor)
 target_link_libraries(myapp PRIVATE executor::executor)
 ```
 
-> 📖 详细说明见 [docs/BUILD.md](docs/BUILD.md)
+> 📖 For detailed instructions see [docs/BUILD.md](docs/BUILD.md)
 
 ---
 
-## 平台兼容性
+## Platform Compatibility
 
-### 测试状态
+### Test Status
 
-- ✅ **Linux**：完全支持，所有测试通过
-- ✅ **Windows**：支持，已通过编译和测试验证
-  - 编译：Visual Studio 2019+ / MSVC 14.0+
-  - 测试：所有单元测试和集成测试通过
-  - 实时精度：短周期任务自动启用高精度定时器
+- ✅ **Linux**: Fully supported, all tests passing
+- ✅ **Windows**: Supported, verified by compilation and testing
+  - Build: Visual Studio 2019+ / MSVC 14.0+
+  - Tests: All unit tests and integration tests passing
+  - Real-time precision: high-resolution timers automatically enabled for short-cycle tasks
 
-### 已知限制
+### Known Limitations
 
-- **Windows 定时器精度**：虽然启用了高精度定时器，但由于系统调度器的限制，短周期（< 10ms）的精度可能不如 Linux
-- **实时调度**：Windows 不支持 Linux 的实时调度策略（SCHED_FIFO/SCHED_RR），使用线程优先级代替
+- **Windows Timer Precision**: Despite high-resolution timers being enabled, precision for short cycles (< 10 ms) may be lower than Linux due to system scheduler constraints
+- **Real-Time Scheduling**: Windows does not support Linux real-time scheduling policies (SCHED_FIFO/SCHED_RR); thread priorities are used instead
 
-### 实时线程周期精度（误差）
+### Real-Time Thread Cycle Precision (Jitter)
 
-以下为 **实时线程**（`register_realtime_task` + `RealtimeThreadExecutor` 周期回调）在不同周期下的 jitter（实际触发时刻 − 期望时刻，单位 μs）统计。运行 `./build/tests/benchmark_realtime_precision --json`（Windows 下为 `.\build\tests\Debug\benchmark_realtime_precision.exe --json`）可复现。
+The table below shows jitter statistics (actual trigger time − expected time, in µs) for **real-time threads** (`register_realtime_task` + `RealtimeThreadExecutor` cycle callback) at various cycle periods. Run `./build/tests/benchmark_realtime_precision --json` (Windows: `.\build\tests\Debug\benchmark_realtime_precision.exe --json`) to reproduce.
 
-**更高实时精度需求**：若需进一步压低 jitter（如硬实时、高频率周期），建议接入 **周期管理器**（`RealtimeThreadConfig::cycle_manager`，实现 `ICycleManager`），由外部统一驱动周期并配合实时调度（如 Linux `SCHED_FIFO`）、CPU 隔离等使用。详见 [API.md 第 8 节](docs/API.md) 与 [examples/realtime_can.cpp](examples/realtime_can.cpp)。
+**For higher real-time precision**: if you need to reduce jitter further (e.g., hard real-time, high-frequency cycles), consider integrating a **cycle manager** (`RealtimeThreadConfig::cycle_manager`, implementing `ICycleManager`) to drive cycles externally in conjunction with real-time scheduling (e.g., Linux `SCHED_FIFO`), CPU isolation, etc. See [API.md section 8](docs/API.md) and [examples/realtime_can.cpp](examples/realtime_can.cpp).
 
 #### Linux
 
-完整 JSON 见 [docs/optimization/realtime_precision_linux.json](docs/optimization/realtime_precision_linux.json)。
+Full JSON: [docs/optimization/realtime_precision_linux.json](docs/optimization/realtime_precision_linux.json).
 
-| 周期 | jitter_us (min) | jitter_us (avg) | jitter_us (p50) | jitter_us (p95) | jitter_us (p99) |
-|------|-----------------|-----------------|-----------------|-----------------|-----------------|
-| 1 ms | 0.00 | 59.98 | 54.64 | 64.34 | 64.34 |
-| 5 ms | 0.00 | 90.47 | 91.39 | 129.46 | 129.46 |
-| 10 ms | 0.00 | 81.40 | 85.71 | 104.31 | 104.31 |
-| 50 ms | 0.00 | 89.74 | 85.11 | 108.31 | 108.31 |
+| Period | jitter_us (min) | jitter_us (avg) | jitter_us (p50) | jitter_us (p95) | jitter_us (p99) |
+|--------|-----------------|-----------------|-----------------|-----------------|-----------------|
+| 1 ms   | 0.00 | 59.98 | 54.64 | 64.34 | 64.34 |
+| 5 ms   | 0.00 | 90.47 | 91.39 | 129.46 | 129.46 |
+| 10 ms  | 0.00 | 81.40 | 85.71 | 104.31 | 104.31 |
+| 50 ms  | 0.00 | 89.74 | 85.11 | 108.31 | 108.31 |
 | 100 ms | 0.00 | 108.96 | 109.16 | 141.39 | 141.39 |
 
 #### Windows
 
-完整 JSON 见 [docs/optimization/realtime_precision_windows.json](docs/optimization/realtime_precision_windows.json)。Windows 非实时系统，调度与定时器分辨率会导致周期回调普遍偏晚；长周期下误差更大，仅适合软实时或对数毫秒级抖动不敏感的场景。
+Full JSON: [docs/optimization/realtime_precision_windows.json](docs/optimization/realtime_precision_windows.json). Windows is not a real-time OS; scheduler and timer resolution cause cycle callbacks to fire consistently late. Errors are larger at longer periods. Suitable only for soft real-time or scenarios tolerant of millisecond-level jitter.
 
-| 周期 | jitter_us (min) | jitter_us (avg) | jitter_us (p50) | jitter_us (p95) | jitter_us (p99) |
-|------|-----------------|-----------------|-----------------|-----------------|-----------------|
-| 1 ms | 109.00 | 109.00 | 109.00 | 109.00 | 109.00 |
-| 5 ms | 0.00 | 1146.65 | 1077.90 | 1947.10 | 1947.10 |
-| 10 ms | 0.00 | 1041.09 | 1159.20 | 1530.40 | 1530.40 |
-| 50 ms | 0.00 | 7967.12 | 7344.40 | 14731.90 | 14731.90 |
+| Period | jitter_us (min) | jitter_us (avg) | jitter_us (p50) | jitter_us (p95) | jitter_us (p99) |
+|--------|-----------------|-----------------|-----------------|-----------------|-----------------|
+| 1 ms   | 109.00 | 109.00 | 109.00 | 109.00 | 109.00 |
+| 5 ms   | 0.00 | 1146.65 | 1077.90 | 1947.10 | 1947.10 |
+| 10 ms  | 0.00 | 1041.09 | 1159.20 | 1530.40 | 1530.40 |
+| 50 ms  | 0.00 | 7967.12 | 7344.40 | 14731.90 | 14731.90 |
 | 100 ms | 0.00 | 10888.87 | 8839.40 | 16736.00 | 16736.00 |
 
-## 版本
+## Version
 
-当前版本：**v0.2.1**
+Current version: **v0.2.1**
 
-变更记录见 [CHANGELOG.md](CHANGELOG.md)
+See [CHANGELOG.md](CHANGELOG.md) for the change log.
 
 ---
 
-## 📄 许可
+## 📄 License
 
-见[LICENSE](LICENSE)
+See [LICENSE](LICENSE)
