@@ -32,7 +32,7 @@ struct RealtimeThreadConfig {
     std::string thread_name;                              // 线程名称
     int64_t cycle_period_ns = 0;                          // 周期（纳秒），如2000000表示2ms
     int thread_priority = 0;                              // 线程优先级（SCHED_FIFO: 1-99，Linux）
-    std::vector<int> cpu_affinity;                        // CPU亲和性（绑定到特定核心）
+    std::vector<int> cpu_affinity;                        // CPU亲和性 (空 = 自适应 sentinel: RealtimeThreadExecutor::start 时按 hw_concurrency 自动选核, 失败静默不绑; 显式设值尊重覆盖)
     std::function<void()> cycle_callback;                 // 周期回调函数
     ICycleManager* cycle_manager = nullptr;               // 可选的周期管理器接口（用于更精确的周期控制）
     bool enable_memory_lock = true;                       // 默认开, mlockall 防分页抖动, 失败静默; 显式设 false 关闭
