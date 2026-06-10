@@ -12,6 +12,10 @@
 
 ## 后续版本
 
-若未来发布包含**破坏性变更**的版本，将在此添加迁移步骤与兼容性说明。当前无其他版本。
+若未来发布包含**破坏性变更**的版本，将在此添加迁移步骤与兼容性说明。
+
+### P016：RealtimeThreadConfig 新增 opt-in 字段
+
+`RealtimeThreadConfig` 新增 `enable_memory_lock`（`bool`，默认 `false`）和 `timer_slack_ns`（`uint64_t`，默认 `0`）字段。两字段均为 opt-in，默认值与旧版行为完全一致，**对已有代码无需任何修改**。
 
 变更摘要见 [CHANGELOG.md](../CHANGELOG.md)。
