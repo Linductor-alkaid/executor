@@ -57,7 +57,7 @@ bool RealtimeThreadExecutor::start() {
             util::set_cpu_affinity(thread_.native_handle(), config_.cpu_affinity);
         }
 
-        // 锁定内存，避免分页到 swap 引入抖动（失败时静默回退，不影响运行）
+        // 锁定内存，避免分页到 swap 引入抖动（默认开启，失败静默回退；用户可显式设 false 关闭）
         if (config_.enable_memory_lock) {
             util::try_mlock_current_thread();
         }
@@ -67,7 +67,7 @@ bool RealtimeThreadExecutor::start() {
             util::set_current_thread_name(config_.thread_name);
         }
 
-        // 降低 timer slack，减少定时唤醒抖动
+        // 降低 timer slack，减少定时唤醒抖动（默认 1ns；0 为显式 opt-out，保留内核默认）
         if (config_.timer_slack_ns > 0) {
             util::set_current_thread_timer_slack_ns(config_.timer_slack_ns);
         }
