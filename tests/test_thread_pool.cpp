@@ -640,6 +640,26 @@ bool test_thread_pool_wait_for_completion() {
 
 // ========== 主测试函数 ==========
 
+bool test_default_thread_count_is_adaptive_sentinel() {
+    std::cout << "Testing ExecutorConfig/ThreadPoolConfig default thread count is 0 (adaptive sentinel)..." << std::endl;
+    ExecutorConfig ec;
+    TEST_ASSERT(ec.min_threads == 0, "Default min_threads should be 0 (adaptive sentinel)");
+    TEST_ASSERT(ec.max_threads == 0, "Default max_threads should be 0 (adaptive sentinel)");
+    ThreadPoolConfig tc;
+    TEST_ASSERT(tc.min_threads == 0, "Default ThreadPoolConfig.min_threads should be 0");
+    TEST_ASSERT(tc.max_threads == 0, "Default ThreadPoolConfig.max_threads should be 0");
+    return true;
+}
+
+bool test_default_enable_work_stealing_is_true() {
+    std::cout << "Testing default enable_work_stealing is true (opt-out philosophy)..." << std::endl;
+    ExecutorConfig ec;
+    TEST_ASSERT(ec.enable_work_stealing == true, "Default enable_work_stealing should be true");
+    ThreadPoolConfig tc;
+    TEST_ASSERT(tc.enable_work_stealing == true, "Default ThreadPoolConfig.enable_work_stealing should be true");
+    return true;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Executor ThreadPool Module Tests" << std::endl;
@@ -671,7 +691,13 @@ int main() {
     all_passed &= test_thread_pool_submit_after_shutdown();
     all_passed &= test_thread_pool_wait_for_completion();
     std::cout << std::endl;
-    
+
+    // 默认值自适应测试
+    std::cout << "--- Default Value Tests ---" << std::endl;
+    all_passed &= test_default_thread_count_is_adaptive_sentinel();
+    all_passed &= test_default_enable_work_stealing_is_true();
+    std::cout << std::endl;
+
     // 总结
     std::cout << "========================================" << std::endl;
     std::cout << "Test Summary:" << std::endl;
