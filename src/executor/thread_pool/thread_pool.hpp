@@ -22,6 +22,7 @@
 #include <vector>
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <condition_variable>
 #include <future>
 #include <chrono>
@@ -219,6 +220,11 @@ private:
 
     // 工作线程本地队列
     std::vector<WorkerQueueImpl> local_queues_;
+    // 260610P012: 专门保护 local_queues_ 的 shared_mutex
+    // - steal 持 shared_lock(并发读)
+    // - resize / shutdown 持 unique_lock(排他写)
+    // 这样既消除 UAF,又允许多个 steal 线程并发。
+    mutable std::shared_mutex local_queues_mutex_;
 
     // 任务分发器（模板化以匹配 WorkerQueueImpl）
     std::unique_ptr<TaskDispatcher<WorkerQueueImpl>> dispatcher_;

@@ -363,6 +363,18 @@ void ThreadPool::set_task_monitor(monitor::TaskMonitor* m) {
 }
 
 bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
+    // 260610P012 (WIP / 已知不完整): 用 shared_lock 替代之前的无锁访问
+    // 设计: 引入 local_queues_mutex_ (std::shared_mutex) — steal 持 shared_lock(并发读),
+    // resize/shutdown 持 unique_lock(排他)。
+    //
+    // ⚠️ 已知缺口(留给明天的 plan 完整覆盖):
+    // - worker_loop() 中 local_queues_[i].size() / .pop() (line 99/127/145) 等 13+ 处仍无锁访问
+    // - LoadBalancer::resize() 重建 local_queues_ 时仍可能与 worker_loop 产生 UAF
+    // - 本次只修了 try_steal_task 入口,运行时若 resize 极频繁,worker_loop 仍可能撞 UAF
+    //
+    // 完整修复需要给所有 local_queues_ 访问加 shared_lock,影响面大,留作单独 plan。
+    std::shared_lock<std::shared_mutex> lock(local_queues_mutex_);
+
     if (local_queues_.size() <= 1) {
         return false;  // 只有一个线程，无法窃取
     }
