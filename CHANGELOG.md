@@ -4,6 +4,31 @@
 
 ---
 
+## [Unreleased]
+
+本节汇总 0.2.2 发布后、尚未正式打版本号的改动（P008–P016，共 7 个 PR）。
+
+### 修复
+
+- **P008** [#?] fix(thread_pool): shutdown() 并发调用导致 double-join UB（`std::once_flag` 保护）
+- **P009** [#14] fix(thread_pool): TaskDispatcher::dispatch() 在 resize 期间丢弃任务（无效 worker_id 时重入队）
+- **P010** [#?] fix(thread_pool): LoadBalancer::set_strategy() 对 strategy_ 的无锁写入构成数据竞争
+- **P011** [#?] fix(gpu): CudaExecutor::wait_for_completion() 可被 worker 线程自锁死锁
+- **P012** [#15] fix(thread_pool): try_steal_task() 在 resize 期间访问 local_queues_ 存在数据竞争（改用 shared_lock）
+- **P013** [#13] fix(util): LockFreeQueue::stats_enabled_ 改为 std::atomic<bool>，消除多线程 UB
+
+### 新增
+
+- **P016** [#16] perf(realtime): RealtimeThreadExecutor Linux 实时性加固（mlockall / pthread_setname_np / timer_slack）
+  - `RealtimeThreadConfig` 新增 `enable_memory_lock`、`timer_slack_ns` 字段（opt-in，不破坏现有 API）
+  - 1 ms 周期 jitter p99 从 61 µs 压至约 15–20 µs
+
+### 文档
+
+- **P014** [#?] docs: API.md 与源码同步（章节编号修正、~10 个公开 API 补录、P016 字段说明）
+
+---
+
 ## [0.2.2] - 2026-03-13
 
 ### 修复

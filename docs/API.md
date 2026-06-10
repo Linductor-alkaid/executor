@@ -604,6 +604,7 @@ exec.stop();
 
 ```cpp
 void enable_monitoring(bool enable);
+void set_monitoring_sampling_rate(double rate);
 
 AsyncExecutorStatus get_async_executor_status() const;
 RealtimeExecutorStatus get_realtime_executor_status(const std::string& name) const;
@@ -613,6 +614,7 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 ```
 
 - `enable_monitoring`：开启/关闭任务监控（默认可在 `ExecutorConfig::enable_monitoring` 配置）。
+- `set_monitoring_sampling_rate`：设置监控采样率（0.0–1.0），1.0 表示每次任务都采样，较低值可减少监控开销。
 - `get_async_executor_status`：线程池名称、运行状态、活跃/完成/失败任务数、队列大小、平均任务时间等。
 - `get_realtime_executor_status`：实时线程名称、运行状态、周期、周期计数、超时计数、平均/最大周期时间等。
 - `get_task_statistics` / `get_all_task_statistics`：按 `task_type` 或全部的成功/失败/超时次数及执行时间统计。
@@ -621,7 +623,7 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
 ## 7. 配置与类型
 
-### 6.1 ExecutorConfig（初始化线程池）
+### 7.1 ExecutorConfig（初始化线程池）
 
 用于 `Executor::initialize()`：
 
@@ -636,26 +638,29 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 | `enable_work_stealing` | `bool` | 是否启用工作窃取 |
 | `enable_monitoring` | `bool` | 是否启用监控，默认 true |
 
-### 6.2 RealtimeThreadConfig（实时线程）
+### 7.2 RealtimeThreadConfig（实时线程）
 
 用于 `register_realtime_task()`：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `thread_name` | `std::string` | 线程名称 |
+| `thread_name` | `std::string` | 线程名称（Linux 下通过 `pthread_setname_np` 设置，便于 top/perf 识别） |
 | `cycle_period_ns` | `int64_t` | 周期（纳秒），如 2 000 000 表示 2 ms |
 | `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99） |
 | `cpu_affinity` | `std::vector<int>` | CPU 亲和性 |
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
+| `enable_memory_lock` | `bool` | 是否调用 `mlockall` 锁定内存（避免分页抖动），默认 false（opt-in） |
+| `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒），0 表示不修改内核默认；设为 1 可将默认 50 µs slack 压到最低 |
 
-### 6.3 状态与统计类型
+### 7.3 状态与统计类型
 
 - **AsyncExecutorStatus**：`name`、`is_running`、`active_tasks`、`completed_tasks`、`failed_tasks`、`queue_size`、`avg_task_time_ms`。
 - **RealtimeExecutorStatus**：`name`、`is_running`、`cycle_period_ns`、`cycle_count`、`cycle_timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`。
 - **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。
+- **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
-### 6.4 TaskPriority
+### 7.4 TaskPriority
 
 ```cpp
 enum class TaskPriority { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 };
@@ -669,7 +674,7 @@ enum class TaskPriority { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 };
 
 GPU 执行器与 CPU 执行器接口分离，通过 `Executor` 注册与提交 GPU kernel，详见 [GPU 执行器设计](design/gpu_executor.md)。
 
-### 7.1 注册与任务提交
+### 8.1 注册与任务提交
 
 ```cpp
 bool register_gpu_executor(const std::string& name,
@@ -685,7 +690,7 @@ auto submit_gpu(const std::string& executor_name,
 - `register_gpu_executor`：按配置创建并注册 GPU 执行器（当前支持 `GpuBackend::CUDA`）。
 - `submit_gpu`：向指定 GPU 执行器提交 kernel；kernel 可为 `void()` 或 `void(void*)`（流句柄，CUDA 下为 `cudaStream_t`）。
 
-### 7.2 查询与状态
+### 8.2 查询与状态
 
 ```cpp
 IGpuExecutor* get_gpu_executor(const std::string& name);
@@ -693,7 +698,7 @@ std::vector<std::string> get_gpu_executor_names() const;
 gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 ```
 
-### 7.3 GPU 执行器接口（IGpuExecutor）
+### 8.3 GPU 执行器接口（IGpuExecutor）
 
 通过 `get_gpu_executor(name)` 获取指针后，可调用：
 
@@ -702,16 +707,20 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 - **执行**：`submit_kernel(kernel, config)`（返回 `std::future<void>`）、`synchronize`、`wait_for_completion`
 - **状态**：`get_name`、`get_device_info`、`get_status`、`start`、`stop`
 
-### 7.4 配置与类型
+### 8.4 配置与类型
 
 - **GpuExecutorConfig**：`name`、`backend`（如 CUDA/OpenCL）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`
 - **GpuTaskConfig**：`grid_size`、`block_size`、`shared_memory_bytes`、`stream_id`、`async`；可选 `priority`
 - **GpuDeviceInfo**：设备名称、后端、设备 ID、厂商、总/空闲内存、计算能力等
 - **GpuExecutorStatus**：名称、运行状态、活跃/完成/失败 kernel 数、队列大小、平均 kernel 时间、内存使用等
+- **GpuScheduler**：GPU 任务调度器，支持优先级队列与批量提交策略；可通过 `GpuScheduler::Config` 配置
+- **KernelLaunchOptimizer**：自动调优 kernel 启动参数（grid/block 尺寸），减少 kernel 配置开销；`KernelLaunchOptimizer::Config` 可定制
+- **TaskSchedulerOptimizer**：优化 GPU 任务调度顺序，提高流水线利用率；`TaskSchedulerOptimizer::Config` 可定制
+- **TransferOptimizer**：优化主机↔设备数据传输（合并小传输、异步流水线）；`TransferOptimizer::Config` 可定制
 
 多 GPU 设备间 P2P 拷贝（`copy_from_peer`）为实验性功能。示例见 [examples/gpu_basic.cpp](../examples/gpu_basic.cpp)、[examples/gpu_multi_device.cpp](../examples/gpu_multi_device.cpp)、[examples/gpu_opencl.cpp](../examples/gpu_opencl.cpp)。
 
-### 7.5 GPU 设备查询 API
+### 8.5 GPU 设备查询 API
 
 在创建 GPU 执行器前，可查询系统可用设备及推荐后端：
 
@@ -759,7 +768,7 @@ exec.register_gpu_executor("gpu0", config);
 
 `ICycleManager` 是可选接口，用于为实时线程提供更精确的周期控制和监控。若不提供，executor 使用内置的简单周期实现（基于 `std::this_thread::sleep_until`）。
 
-### 8.1 接口定义
+### 9.1 接口定义
 
 ```cpp
 class ICycleManager {
@@ -782,7 +791,7 @@ public:
 };
 ```
 
-### 8.2 使用场景
+### 9.2 使用场景
 
 **内置周期（默认）**：
 - 使用 `std::this_thread::sleep_until` 实现简单周期控制
@@ -795,7 +804,7 @@ public:
 - 需要自定义周期超时检测和恢复策略
 - 需要与外部周期管理系统集成
 
-### 8.3 实现示例
+### 9.3 实现示例
 
 以下示例实现一个基于 `sleep_until` 的简单周期管理器：
 
@@ -880,7 +889,7 @@ private:
 };
 ```
 
-### 8.4 注入到实时线程配置
+### 9.4 注入到实时线程配置
 
 在 `RealtimeThreadConfig` 中设置 `cycle_manager` 指针：
 
@@ -913,21 +922,21 @@ exec.stop_realtime_task("can_channel_0");
 // 注意：cycle_manager 的生命周期需由用户管理，确保在使用期间有效
 ```
 
-### 8.5 工作流程
+### 9.5 工作流程
 
 1. **注册阶段**：`RealtimeThreadExecutor::start()` 调用 `cycle_manager->register_cycle(name, period_ns, callback)`，注册周期任务。
 2. **启动阶段**：`RealtimeThreadExecutor::start()` 调用 `cycle_manager->start_cycle(name)`，周期管理器开始按周期调用回调。
 3. **执行阶段**：周期管理器在每个周期调用 `callback`（即 `RealtimeThreadConfig::cycle_callback`），实时线程在此回调中执行周期逻辑。
 4. **停止阶段**：`RealtimeThreadExecutor::stop()` 调用 `cycle_manager->stop_cycle(name)`，周期管理器停止周期循环。
 
-### 8.6 注意事项
+### 9.6 注意事项
 
 - **生命周期管理**：`cycle_manager` 指针的生命周期需由用户管理，确保在实时线程运行期间有效。
 - **线程安全**：`ICycleManager` 的实现需保证线程安全（如使用互斥锁保护内部状态）。
 - **统计信息**：`get_statistics()` 可用于监控周期执行时间、超时次数等，便于性能分析。
 - **多实例共享**：一个 `ICycleManager` 实例可管理多个实时线程的周期，便于统一监控和管理。
 
-### 8.7 完整示例
+### 9.7 完整示例
 
 参见 [examples/realtime_can.cpp](../examples/realtime_can.cpp)，其中展示了 `SimpleCycleManager` 的完整实现和使用。
 

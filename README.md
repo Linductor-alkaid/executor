@@ -11,6 +11,9 @@
 - **混合执行模式**
   线程池（普通并发任务）+ 专用实时线程（高实时性任务，如 CAN 通信、传感器采集）
 
+- **Linux 实时性加固（P016）**
+  `RealtimeThreadConfig` 支持 `enable_memory_lock`（`mlockall` 内存锁定，避免分页抖动）、`timer_slack_ns`（压低 timer slack 至纳秒级）及 `thread_name`（线程命名，便于 top/perf 识别）；所有字段 opt-in，对已有代码无影响。参考示例：`tests/test_realtime_hardening.cpp`（`test_realtime_hardening`）
+
 - **统一 API**
   `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic`、`submit_batch`、`submit_batch_no_future` 及实时任务注册
 
