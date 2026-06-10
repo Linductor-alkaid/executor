@@ -90,7 +90,13 @@ public:
 
         // 检查 worker_id 是否有效
         if (worker_id >= local_queues_.size()) {
-            // 如果 worker_id 无效，丢弃任务（这里简化处理）
+            // 260610P009: resize 期间 LoadBalancer 可能返回已被移除的 worker_id。
+            // 修复前: 直接丢弃,任务从 scheduler 出队后永久丢失(高并发场景下可能频繁发生)。
+            // 修复后: 将任务重新 enqueue 回 scheduler,等待下一轮 dispatch。
+            // 这样保证 total == completed + failed(无任务丢失)。
+            // 注: PriorityScheduler::enqueue 是 const Task&,所以这里传 task 走 copy 而非 move
+            // (Task 应当支持轻量 copy —— 若 Task 变重,再加 move overload)
+            scheduler_.enqueue(task);
             return false;
         }
 
