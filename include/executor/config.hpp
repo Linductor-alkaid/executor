@@ -16,13 +16,13 @@ class ICycleManager;
  * @brief 线程池配置结构
  */
 struct ThreadPoolConfig {
-    size_t min_threads = 4;              // 最小线程数（默认：4）
-    size_t max_threads = 16;             // 最大线程数（默认：16）
+    size_t min_threads = 0;              // 0 = 自适应 sentinel, ExecutorManager::initialize 时按 hw_concurrency 计算 (min 2)
+    size_t max_threads = 0;              // 0 = 自适应 sentinel, ExecutorManager::initialize 时按 hw_concurrency 计算 (默认 hw)
     size_t queue_capacity = 1000;        // 任务队列容量
     int thread_priority = 0;             // 线程优先级（-20到19，Linux；Windows使用SetThreadPriority）
     std::vector<int> cpu_affinity;       // CPU亲和性（绑定到特定核心）
     int64_t task_timeout_ms = 0;         // 任务超时时间（毫秒），0表示不超时
-    bool enable_work_stealing = false;   // 启用工作窃取
+    bool enable_work_stealing = true;    // 默认开, 无锁工作窃取 -10.7% 退化; max_threads==1 时自动关
 };
 
 /**
@@ -46,13 +46,13 @@ struct RealtimeThreadConfig {
  * 可内嵌或映射为 ThreadPoolConfig
  */
 struct ExecutorConfig {
-    size_t min_threads = 4;              // 最小线程数
-    size_t max_threads = 16;             // 最大线程数
+    size_t min_threads = 0;              // 0 = 自适应 sentinel, ExecutorManager::initialize 时按 hw_concurrency 计算 (min 2)
+    size_t max_threads = 0;              // 0 = 自适应 sentinel, ExecutorManager::initialize 时按 hw_concurrency 计算 (默认 hw)
     size_t queue_capacity = 1000;        // 任务队列容量
     int thread_priority = 0;              // 线程优先级
     std::vector<int> cpu_affinity;       // CPU亲和性
     int64_t task_timeout_ms = 0;         // 任务超时时间（毫秒）
-    bool enable_work_stealing = false;   // 启用工作窃取
+    bool enable_work_stealing = true;    // 默认开, 无锁工作窃取 -10.7% 退化; max_threads==1 时自动关
     bool enable_monitoring = true;       // 启用任务监控（默认开启）
 };
 

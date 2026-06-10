@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <algorithm>
+#include <thread>
 
 #ifdef EXECUTOR_ENABLE_GPU
 #include "executor/gpu/cuda_executor.hpp"
@@ -61,13 +62,33 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
 
     // 将 ExecutorConfig 转换为 ThreadPoolConfig
     ThreadPoolConfig pool_config;
-    pool_config.min_threads = config.min_threads;
-    pool_config.max_threads = config.max_threads;
     pool_config.queue_capacity = config.queue_capacity;
     pool_config.thread_priority = config.thread_priority;
     pool_config.cpu_affinity = config.cpu_affinity;
     pool_config.task_timeout_ms = config.task_timeout_ms;
-    pool_config.enable_work_stealing = config.enable_work_stealing;
+
+    // 0 = 自适应 sentinel: 按 hw_concurrency 计算实际值
+    if (config.min_threads == 0 || config.max_threads == 0) {
+        unsigned hw = std::thread::hardware_concurrency();
+        if (hw == 0) {
+            // 探测失败，退到安全默认
+            pool_config.min_threads = (config.min_threads == 0) ? 2 : config.min_threads;
+            pool_config.max_threads = (config.max_threads == 0) ? 4 : config.max_threads;
+        } else {
+            pool_config.min_threads = (config.min_threads == 0) ? std::max(2u, hw / 4) : static_cast<unsigned>(config.min_threads);
+            pool_config.max_threads = (config.max_threads == 0) ? hw : static_cast<unsigned>(config.max_threads);
+        }
+        // 确保 min <= max
+        if (pool_config.min_threads > pool_config.max_threads) {
+            pool_config.min_threads = pool_config.max_threads;
+        }
+    } else {
+        pool_config.min_threads = config.min_threads;
+        pool_config.max_threads = config.max_threads;
+    }
+
+    // max_threads==1 时工作窃取无意义，自动关闭
+    pool_config.enable_work_stealing = (pool_config.max_threads == 1) ? false : config.enable_work_stealing;
 
     // 创建 ThreadPoolExecutor
     auto executor = std::make_unique<ThreadPoolExecutor>("default", pool_config);
