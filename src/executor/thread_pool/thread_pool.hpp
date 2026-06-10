@@ -145,11 +145,21 @@ public:
 
     /**
      * @brief 设置任务监控器（可选）
-     * 
+     *
      * 设置后，execute_task 前后将调用 record_task_start / record_task_complete。
      * @param m 监控器指针，可为 nullptr 表示禁用
      */
     void set_task_monitor(monitor::TaskMonitor* m);
+
+    /**
+     * @brief 获取超时任务计数
+     *
+     * 返回因软超时（elapsed >= timeout_ms at execution start）被跳过的任务数。
+     * @return 超时任务计数
+     */
+    size_t get_timeout_count() const {
+        return static_cast<size_t>(timeout_count_.load(std::memory_order_relaxed));
+    }
 
 private:
     /**
@@ -175,8 +185,9 @@ private:
      * 
      * @param execution_time_ns 任务执行时间（纳秒）
      * @param success 是否成功
+     * @param timed_out 是否因软超时而被跳过（P024: 超时不算 failed, 但算 completed）
      */
-    void update_statistics(int64_t execution_time_ns, bool success);
+    void update_statistics(int64_t execution_time_ns, bool success, bool timed_out = false);
 
     /**
      * @brief 尝试工作窃取
@@ -248,6 +259,7 @@ private:
     std::atomic<size_t> failed_tasks_{0};
     std::atomic<int64_t> total_execution_time_ns_{0};
     std::atomic<size_t> active_threads_{0};
+    std::atomic<int64_t> timeout_count_{0};  // P024: 软超时跳过的任务计数
 
     // 条件变量：用于工作线程等待任务
     std::condition_variable condition_;

@@ -640,6 +640,75 @@ bool test_thread_pool_wait_for_completion() {
 
 // ========== 主测试函数 ==========
 
+bool test_task_timeout_soft_skip_works() {
+    std::cout << "Testing task timeout soft skip (P024)..." << std::endl;
+
+    ThreadPool pool;
+    ThreadPoolConfig config;
+    config.min_threads = 1;
+    config.max_threads = 1;
+    config.task_timeout_ms = 1;  // 1ms timeout
+    pool.initialize(config);
+
+    // Block the single worker so subsequent tasks queue up
+    std::atomic<bool> blocker_done{false};
+    pool.submit([&blocker_done]() noexcept {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        blocker_done.store(true);
+    });
+
+    // Let the blocker start
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    // Submit a task that will have elapsed > 1ms by the time the worker is free
+    std::atomic<bool> function_called{false};
+    pool.submit([&function_called]() noexcept {
+        function_called.store(true);
+    });
+
+    // Wait for everything to settle
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    TEST_ASSERT(!function_called.load(),
+                "Timed-out task function should NOT be called");
+    TEST_ASSERT(pool.get_timeout_count() >= 1,
+                "timeout_count should be >= 1 after soft timeout");
+
+    pool.shutdown();
+
+    std::cout << "  task timeout soft skip: PASSED" << std::endl;
+    return true;
+}
+
+bool test_task_timeout_not_triggered_when_fast() {
+    std::cout << "Testing task timeout not triggered when fast (P024)..." << std::endl;
+
+    ThreadPool pool;
+    ThreadPoolConfig config;
+    config.min_threads = 2;
+    config.max_threads = 4;
+    config.task_timeout_ms = 1000;  // 1s timeout, plenty of time
+    pool.initialize(config);
+
+    std::atomic<bool> function_called{false};
+    auto future = pool.submit([&function_called]() noexcept {
+        function_called.store(true);
+    });
+
+    future.wait();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    TEST_ASSERT(function_called.load(),
+                "Task function should be called normally");
+    TEST_ASSERT(pool.get_timeout_count() == 0,
+                "timeout_count should be 0 when task is fast enough");
+
+    pool.shutdown();
+
+    std::cout << "  task timeout not triggered when fast: PASSED" << std::endl;
+    return true;
+}
+
 bool test_default_thread_count_is_adaptive_sentinel() {
     std::cout << "Testing ExecutorConfig/ThreadPoolConfig default thread count is 0 (adaptive sentinel)..." << std::endl;
     ExecutorConfig ec;
@@ -731,6 +800,8 @@ int main() {
     all_passed &= test_thread_pool_concurrent_shutdown();
     all_passed &= test_thread_pool_submit_after_shutdown();
     all_passed &= test_thread_pool_wait_for_completion();
+    all_passed &= test_task_timeout_soft_skip_works();
+    all_passed &= test_task_timeout_not_triggered_when_fast();
     std::cout << std::endl;
 
     // 默认值自适应测试

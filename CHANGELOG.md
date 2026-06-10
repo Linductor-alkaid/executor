@@ -26,6 +26,7 @@
 - **P019-B** [#20] perf(thread_pool): adaptive thread count（0 = sentinel, probes `hw_concurrency`），`work_stealing` default `true`
 - **P019-C** [#21] perf(thread_pool+realtime): auto-allocate thread-pool `cpu_affinity` [0..hw-1]，adaptive realtime `thread_priority` by `cycle_period_ns`
 - **P019C companion** [#22] perf(realtime): `RealtimeThreadConfig::cpu_affinity` empty → bind core 0 on start（hw >= 2）
+- **P024** [#24] perf(thread_pool): implement soft task_timeout_ms (skip execution if elapsed >= timeout, count timeout_count; C++ no safe thread kill, in-progress tasks not interrupted)
 
 ### 文档
 
