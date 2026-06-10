@@ -641,6 +641,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 - `RealtimeThreadConfig.timer_slack_ns` = 1（1 ns，失败静默）
 - `RealtimeThreadConfig.cpu_affinity` 空 → bind core 0（hw >= 2）
 - `RealtimeThreadConfig.thread_priority` = 0 → 自适应按 `cycle_period_ns` 建议
+- `task_timeout_ms > 0`: 软超时 (执行前 skip + 记录 timeout_count, C++ 无安全 kill 机制, 执行中不强制中断)
 
 ### 7.1 ExecutorConfig / ThreadPoolConfig（线程池配置）
 
@@ -653,7 +654,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `queue_capacity` | `size_t` | `1000` | 任务队列容量 |
 | `thread_priority` | `int` | `0` | 线程优先级（Linux SCHED_FIFO 1–99，Windows `SetThreadPriority`） |
 | `cpu_affinity` | `std::vector<int>` | 空 | 空 = 自适应 sentinel；`ExecutorManager` 自动填 [0..hw-1]；显式设值保留 |
-| `task_timeout_ms` | `int64_t` | `0` | 任务超时（ms），0 = 不超时（注：当前版本未实现完整超时机制，P019-docs 留 follow-up） |
+| `task_timeout_ms` | `int64_t` | `0` | > 0: 软超时 (执行前 check elapsed >= timeout 则 skip + 记录 timeout_count; 0 = 不超时; 注意: 执行中不强制中断, C++ 无安全 kill 机制) |
 | `enable_work_stealing` | `bool` | `true` | 无锁工作窃取；`max_threads == 1` 时自动关；-10.7% 性能退化关闭 |
 | `enable_monitoring` | `bool` | `true` | 是否启用监控 |
 

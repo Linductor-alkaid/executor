@@ -168,25 +168,43 @@ void ThreadPool::execute_task(const Task& task) {
     if (monitor_ && monitor_->is_enabled()) {
         monitor_->record_task_start(task.task_id, "default");
     }
+
+    // P024 soft timeout: check elapsed time BEFORE execution.
+    // If elapsed >= timeout at execution start, skip the task entirely and
+    // record it as timed out.  This is a pre-execution check only — C++ has
+    // no safe mechanism to forcefully kill a running thread, so in-progress
+    // tasks are never interrupted.
+    bool timed_out = false;
+    if (task.timeout_ms > 0 && task.submit_time_ns > 0) {
+        int64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()
+        ).count();
+        int64_t timeout_ns = task.timeout_ms * 1'000'000;
+        if ((now_ns - task.submit_time_ns) >= timeout_ns) {
+            timed_out = true;
+        }
+    }
+
     auto start_time = std::chrono::steady_clock::now();
     bool success = false;
 
-    try {
-        // 检查超时（如果设置了超时时间）
-        if (task.timeout_ms > 0) {
-            // 注意：这里只做简单的超时检查，实际超时控制需要更复杂的机制
-            // 阶段4暂不实现完整的超时机制
+    if (!timed_out) {
+        try {
+            // 执行任务
+            if (task.function) {
+                task.function();
+                success = true;
+            }
+        } catch (...) {
+            // 捕获所有异常，通过ExceptionHandler处理
+            exception_handler_.handle_task_exception("ThreadPool", std::current_exception());
+            success = false;
         }
-
-        // 执行任务
-        if (task.function) {
-            task.function();
-            success = true;
-        }
-    } catch (...) {
-        // 捕获所有异常，通过ExceptionHandler处理
-        exception_handler_.handle_task_exception("ThreadPool", std::current_exception());
-        success = false;
+    } else {
+        // 软超时：跳过执行，记录超时计数
+        timeout_count_.fetch_add(1, std::memory_order_relaxed);
+        // 标记 timed_out 用于 update_statistics: completed++ 但不 failed++,
+        // 保持 total_tasks_ == completed + failed 等式成立, 避免破坏 wait_for_completion().
     }
 
     auto end_time = std::chrono::steady_clock::now();
@@ -197,16 +215,17 @@ void ThreadPool::execute_task(const Task& task) {
     if (monitor_ && monitor_->is_enabled()) {
         monitor_->record_task_complete(task.task_id, success, execution_time_ns);
     }
-    update_statistics(execution_time_ns, success);
+    update_statistics(execution_time_ns, success, timed_out);
 }
 
-void ThreadPool::update_statistics(int64_t execution_time_ns, bool success) {
+void ThreadPool::update_statistics(int64_t execution_time_ns, bool success, bool timed_out) {
     completed_tasks_.fetch_add(1, std::memory_order_relaxed);
-    
-    if (!success) {
+
+    if (!success && !timed_out) {
+        // 软超时不计入 failed (有专门的 timeout_count); 只有异常/失败计入 failed
         failed_tasks_.fetch_add(1, std::memory_order_relaxed);
     }
-    
+
     // 更新总执行时间（使用原子操作累加）
     total_execution_time_ns_.fetch_add(execution_time_ns, std::memory_order_relaxed);
 }
