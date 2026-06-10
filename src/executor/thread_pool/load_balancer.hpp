@@ -138,7 +138,9 @@ private:
 
     std::vector<WorkerLoad> worker_loads_;      // 每个线程的负载信息
     std::atomic<size_t> round_robin_index_{0}; // 轮询索引
-    Strategy strategy_;                        // 当前策略
+    // 260610P010: std::atomic<Strategy> 替换裸 Strategy 字段
+    // 解决 set_strategy() 与 select_worker() 之间无锁并发读写引发的 data race (UB)
+    std::atomic<Strategy> strategy_{Strategy::ROUND_ROBIN}; // 当前策略
     mutable std::shared_mutex mutex_;          // 保护负载信息的读写锁
 };
 
