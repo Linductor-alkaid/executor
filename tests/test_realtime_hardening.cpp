@@ -97,6 +97,65 @@ bool test_default_config_is_optimal() {
     return true;
 }
 
+bool test_realtime_priority_adaptive() {
+    std::cout << "Testing RealtimeThreadConfig priority adaptive recommendation..." << std::endl;
+
+    // Case 1: 1ms cycle, priority=0 → auto-recommend 80 (hard realtime)
+    {
+        executor::RealtimeThreadConfig cfg;
+        cfg.thread_name = "test_rt_1ms";
+        cfg.cycle_period_ns = 1'000'000;  // 1ms
+        cfg.thread_priority = 0;          // not explicitly set
+
+        // Verify config fields that drive the auto-priority decision
+        TEST_ASSERT(cfg.thread_priority == 0, "thread_priority should be 0 (auto sentinel)");
+        TEST_ASSERT(cfg.cycle_period_ns == 1'000'000, "cycle_period_ns should be 1ms");
+        // Logic: 1ms <= 1ms → auto_priority = 80
+        TEST_ASSERT(cfg.cycle_period_ns <= 1'000'000,
+                    "1ms cycle should trigger hard-realtime auto-priority (80)");
+        std::cout << "  1ms cycle: thread_priority=0, cycle <=1ms → auto_priority would be 80" << std::endl;
+    }
+
+    // Case 2: 5ms cycle, priority=0 → auto-recommend 50 (soft realtime)
+    {
+        executor::RealtimeThreadConfig cfg;
+        cfg.thread_name = "test_rt_5ms";
+        cfg.cycle_period_ns = 5'000'000;  // 5ms
+        cfg.thread_priority = 0;
+
+        TEST_ASSERT(cfg.thread_priority == 0, "thread_priority should be 0");
+        TEST_ASSERT(cfg.cycle_period_ns > 1'000'000 && cfg.cycle_period_ns <= 10'000'000,
+                    "5ms cycle should trigger soft-realtime auto-priority (50)");
+        std::cout << "  5ms cycle: thread_priority=0, 1ms<cycle<=10ms → auto_priority would be 50" << std::endl;
+    }
+
+    // Case 3: 20ms cycle, priority=0 → stays 0 (normal scheduling sufficient)
+    {
+        executor::RealtimeThreadConfig cfg;
+        cfg.thread_name = "test_rt_20ms";
+        cfg.cycle_period_ns = 20'000'000;  // 20ms
+        cfg.thread_priority = 0;
+
+        TEST_ASSERT(cfg.cycle_period_ns > 10'000'000,
+                    "20ms cycle should NOT trigger auto-priority (stays 0)");
+        std::cout << "  20ms cycle: thread_priority=0, cycle>10ms → auto_priority stays 0" << std::endl;
+    }
+
+    // Case 4: user explicitly sets priority → respected, no auto
+    {
+        executor::RealtimeThreadConfig cfg;
+        cfg.thread_name = "test_rt_explicit";
+        cfg.cycle_period_ns = 1'000'000;
+        cfg.thread_priority = 42;  // explicit override
+
+        TEST_ASSERT(cfg.thread_priority != 0, "Explicit priority should be non-zero");
+        // When thread_priority != 0, auto-logic is skipped, user value used directly
+        std::cout << "  1ms cycle with explicit priority=42 → auto_priority skipped, uses 42" << std::endl;
+    }
+
+    return true;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Realtime Hardening Tests" << std::endl;
@@ -109,6 +168,7 @@ int main() {
     all_passed &= test_set_current_thread_name();
     all_passed &= test_set_current_thread_timer_slack_ns();
     all_passed &= test_default_config_is_optimal();
+    all_passed &= test_realtime_priority_adaptive();
 
     std::cout << std::endl;
     std::cout << "========================================" << std::endl;

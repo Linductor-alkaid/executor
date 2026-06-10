@@ -90,6 +90,18 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
     // max_threads==1 时工作窃取无意义，自动关闭
     pool_config.enable_work_stealing = (pool_config.max_threads == 1) ? false : config.enable_work_stealing;
 
+    // auto-allocate affinity to all detected cores when user didn't specify
+    if (pool_config.cpu_affinity.empty() && pool_config.max_threads > 0) {
+        unsigned hw = std::thread::hardware_concurrency();
+        if (hw > 0) {
+            pool_config.cpu_affinity.resize(hw);
+            for (unsigned i = 0; i < hw; ++i) {
+                pool_config.cpu_affinity[i] = static_cast<int>(i);
+            }
+        }
+        // hw == 0: probe failed, leave empty → OS free-schedules
+    }
+
     // 创建 ThreadPoolExecutor
     auto executor = std::make_unique<ThreadPoolExecutor>("default", pool_config);
     executor->set_task_monitor(&statistics_collector_->get_task_monitor());
