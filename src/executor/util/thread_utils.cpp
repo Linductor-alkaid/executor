@@ -8,6 +8,8 @@
     #include <unistd.h>
     #include <sys/syscall.h>
     #include <sys/resource.h>
+    #include <sys/mman.h>
+    #include <sys/prctl.h>
     #include <errno.h>
 #else
     #error "Unsupported platform"
@@ -110,6 +112,22 @@ std::vector<int> get_current_thread_affinity() {
     return cpu_ids;
 }
 
+bool try_mlock_current_thread() {
+    // Windows 不支持 mlockall，无对应的进程级内存锁定语义，直接返回 false
+    return false;
+}
+
+void set_current_thread_name(const std::string& name) {
+    // Windows 通过 SetThreadDescription 设置线程名（需要 Win10 1607+）
+    // 将窄字符串转换为宽字符串
+    std::wstring wname(name.begin(), name.end());
+    SetThreadDescription(GetCurrentThread(), wname.c_str());
+}
+
+void set_current_thread_timer_slack_ns(uint64_t /*slack_ns*/) {
+    // Windows 不支持 per-thread timer slack，空实现
+}
+
 #elif defined(__linux__)
 
 bool set_thread_priority(std::thread::native_handle_type handle, int priority) {
@@ -198,6 +216,26 @@ std::vector<int> get_current_thread_affinity() {
     }
     
     return cpu_ids;
+}
+
+bool try_mlock_current_thread() {
+    // 锁定当前及未来的所有页面，防止分页到 swap 引入抖动
+    // 失败（如无 CAP_IPC_LOCK 权限）时静默返回 false，不抛异常
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) == 0) {
+        return true;
+    }
+    return false;
+}
+
+void set_current_thread_name(const std::string& name) {
+    // pthread_setname_np 限制线程名最长 15 字符 + '\0'，超出会失败
+    // 这里主动截断到 15 字符以保证设置成功
+    std::string truncated = name.substr(0, 15);
+    pthread_setname_np(pthread_self(), truncated.c_str());
+}
+
+void set_current_thread_timer_slack_ns(uint64_t slack_ns) {
+    prctl(PR_SET_TIMERSLACK, static_cast<unsigned long>(slack_ns));
 }
 
 #endif

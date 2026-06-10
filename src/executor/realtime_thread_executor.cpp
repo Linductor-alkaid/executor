@@ -57,6 +57,21 @@ bool RealtimeThreadExecutor::start() {
             util::set_cpu_affinity(thread_.native_handle(), config_.cpu_affinity);
         }
 
+        // 锁定内存，避免分页到 swap 引入抖动（失败时静默回退，不影响运行）
+        if (config_.enable_memory_lock) {
+            util::try_mlock_current_thread();
+        }
+
+        // 设置线程名，便于 top/htop/perf 调试
+        if (!config_.thread_name.empty()) {
+            util::set_current_thread_name(config_.thread_name);
+        }
+
+        // 降低 timer slack，减少定时唤醒抖动
+        if (config_.timer_slack_ns > 0) {
+            util::set_current_thread_timer_slack_ns(config_.timer_slack_ns);
+        }
+
         // 如果提供了外部周期管理器，使用它进行精确周期控制
         if (config_.cycle_manager) {
             // 注册周期任务：回调函数是 cycle_loop()
