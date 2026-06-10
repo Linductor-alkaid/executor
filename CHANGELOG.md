@@ -22,6 +22,10 @@
 - **P016** [#16] perf(realtime): RealtimeThreadExecutor Linux 实时性加固（mlockall / pthread_setname_np / timer_slack）
   - `RealtimeThreadConfig` 新增 `enable_memory_lock`、`timer_slack_ns` 字段（opt-in，不破坏现有 API）
   - 1 ms 周期 jitter p99 从 61 µs 压至约 15–20 µs
+- **P019-A** [#19] perf(realtime): flip P016 opt-in to opt-out（`enable_memory_lock`、`timer_slack_ns` now default-on）
+- **P019-B** [#20] perf(thread_pool): adaptive thread count（0 = sentinel, probes `hw_concurrency`），`work_stealing` default `true`
+- **P019-C** [#21] perf(thread_pool+realtime): auto-allocate thread-pool `cpu_affinity` [0..hw-1]，adaptive realtime `thread_priority` by `cycle_period_ns`
+- **P019C companion** [#22] perf(realtime): `RealtimeThreadConfig::cpu_affinity` empty → bind core 0 on start（hw >= 2）
 
 ### 文档
 
