@@ -70,7 +70,8 @@ public:
             // 检查队列是否已满（保留一个空槽位）
             size_t deq = dequeue_pos_.load(std::memory_order_acquire);
             if (pos - deq >= capacity_ - 1) {
-                if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                // 260610P013: relaxed load
+        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
 
@@ -85,7 +86,8 @@ public:
                     buffer_[index] = item;
                     // 更新序列号，标记数据已就绪
                     sequences_[index].store(pos + 1, std::memory_order_release);
-                    if (stats_enabled_) {
+                    // 260610P013: relaxed load
+                    if (stats_enabled_.load(std::memory_order_relaxed)) {
                         stats_.total_pushes.fetch_add(1, std::memory_order_relaxed);
                         update_peak_size();
                     }
@@ -99,12 +101,14 @@ public:
                 backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
             } else if (diff < 0) {
                 // 队列满
-                if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                // 260610P013: relaxed load
+        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
             // diff > 0: 其他线程正在操作，重试
         }
-        if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+        // 260610P013: relaxed load
+        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -119,11 +123,13 @@ public:
             item = buffer_[index];
             sequences_[index].store(pos + capacity_, std::memory_order_release);
             dequeue_pos_.store(pos + 1, std::memory_order_release);
-            if (stats_enabled_) stats_.total_pops.fetch_add(1, std::memory_order_relaxed);
+            // 260610P013: relaxed load
+            if (stats_enabled_.load(std::memory_order_relaxed)) stats_.total_pops.fetch_add(1, std::memory_order_relaxed);
             return true;
         }
         // 队列空
-        if (stats_enabled_) stats_.empty_pops.fetch_add(1, std::memory_order_relaxed);
+        // 260610P013: relaxed load
+        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.empty_pops.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -142,7 +148,8 @@ public:
             size_t available = capacity_ - 1 - (pos - deq);
 
             if (available == 0) {
-                if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                // 260610P013: relaxed load
+        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
 
@@ -154,7 +161,8 @@ public:
                     sequences_[index].store(pos + i + 1, std::memory_order_release);
                 }
                 pushed = batch_size;
-                if (stats_enabled_) {
+                // 260610P013: relaxed load
+                if (stats_enabled_.load(std::memory_order_relaxed)) {
                     stats_.total_pushes.fetch_add(batch_size, std::memory_order_relaxed);
                     stats_.batch_pushes.fetch_add(1, std::memory_order_relaxed);
                     update_peak_size();
@@ -168,7 +176,8 @@ public:
             }
             backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
         }
-        if (stats_enabled_) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+        // 260610P013: relaxed load
+        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -189,11 +198,13 @@ public:
 
         if (popped > 0) {
             dequeue_pos_.store(pos + popped, std::memory_order_release);
-            if (stats_enabled_) {
+            // 260610P013: relaxed load
+            if (stats_enabled_.load(std::memory_order_relaxed)) {
                 stats_.total_pops.fetch_add(popped, std::memory_order_relaxed);
                 stats_.batch_pops.fetch_add(1, std::memory_order_relaxed);
             }
-        } else if (stats_enabled_) {
+            // 260610P013: relaxed load
+        } else if (stats_enabled_.load(std::memory_order_relaxed)) {
             stats_.empty_pops.fetch_add(1, std::memory_order_relaxed);
         }
         return popped;
@@ -235,11 +246,13 @@ public:
     }
 
     void enable_stats(bool enable) {
-        stats_enabled_ = enable;
+        // 260610P013: relaxed store
+        stats_enabled_.store(enable, std::memory_order_relaxed);
     }
 
     LockFreeQueueStats get_stats() const {
-        if (!stats_enabled_) return {};
+        // 260610P013: relaxed load
+        if (!stats_enabled_.load(std::memory_order_relaxed)) return {};
         LockFreeQueueStats result;
         result.total_pushes = stats_.total_pushes.load(std::memory_order_relaxed);
         result.failed_pushes = stats_.failed_pushes.load(std::memory_order_relaxed);
@@ -277,7 +290,10 @@ private:
     alignas(64) std::atomic<size_t> enqueue_pos_;
     alignas(64) std::atomic<size_t> dequeue_pos_;
     const size_t backoff_multiplier_;
-    bool stats_enabled_;
+    // 260610P013: std::atomic<bool> 替换裸 bool 字段
+    // enable_stats() 可从任意线程写入,热路径 (push/pop) 频繁读取 — C++ data race (UB)
+    // relaxed ordering: 统计开关不与其它内存构成 happens-before 关系
+    std::atomic<bool> stats_enabled_;
 
     struct Stats {
         alignas(64) std::atomic<uint64_t> total_pushes{0};
