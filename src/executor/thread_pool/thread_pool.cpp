@@ -252,41 +252,43 @@ ThreadPoolStatus ThreadPool::get_status() const {
 }
 
 void ThreadPool::shutdown(bool wait_for_tasks) {
-    // 检查是否已经关闭
-    if (stop_.load()) {
-        return;
-    }
-
-    // 如果需要等待任务完成，先等待（此时 stop_ 仍为 false，工作线程继续运行）
-    if (wait_for_tasks) {
-        wait_for_completion();
-    }
-
-    // 设置停止标志
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_.store(true);
-    }
-
-    // 停止监控线程
-    resize_monitor_stop_.store(true);
-    if (resize_monitor_thread_.joinable()) {
-        resize_monitor_thread_.join();
-    }
-
-    // 唤醒所有等待的线程
-    condition_.notify_all();
-
-    // 等待所有工作线程退出
-    for (auto& worker : workers_) {
-        if (worker.joinable()) {
-            worker.join();
+    // P-008 修复: 用 std::call_once 保证 shutdown 逻辑只执行一次,
+    // 避免两个线程同时通过 stop_.load() 检查后 double-join resize_monitor_thread_
+    // 或 workers_ 中已 joinable 的线程(触发 std::system_error, UB)。
+    // call_once 的好处是: 持锁窗口极短(只覆盖 stop_ 标志翻转),
+    // join() 在锁外执行,不会与工作线程持 mutex_ 死锁。
+    std::call_once(shutdown_once_flag_, [this, wait_for_tasks]() {
+        // 如果需要等待任务完成，先等待（此时 stop_ 仍为 false，工作线程继续运行）
+        if (wait_for_tasks) {
+            wait_for_completion();
         }
-    }
 
-    workers_.clear();
-    worker_ids_.clear();
-    local_queues_.clear();
+        // 设置停止标志
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_.store(true);
+        }
+
+        // 停止监控线程
+        resize_monitor_stop_.store(true);
+        if (resize_monitor_thread_.joinable()) {
+            resize_monitor_thread_.join();
+        }
+
+        // 唤醒所有等待的线程
+        condition_.notify_all();
+
+        // 等待所有工作线程退出
+        for (auto& worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+
+        workers_.clear();
+        worker_ids_.clear();
+        local_queues_.clear();
+    });
 }
 
 void ThreadPool::wait_for_completion() {
