@@ -63,8 +63,15 @@ bool RealtimeThreadExecutor::start() {
             util::set_thread_priority(thread_.native_handle(), config_.thread_priority);
         }
 
-        // 设置 CPU 亲和性
-        if (!config_.cpu_affinity.empty()) {
+        // CPU 亲和性: 空 = 自适应 sentinel, 按 hw_concurrency 自动选核; 显式设值尊重覆盖
+        if (config_.cpu_affinity.empty()) {
+            unsigned hw = std::thread::hardware_concurrency();
+            if (hw >= 2) {
+                // 简单策略: 绑到核 0. 多 rt 线程场景用户可显式覆盖 cpu_affinity.
+                // hw == 1 不绑, 避免争抢唯一核心; hw == 0 (探测失败) 同样不绑.
+                util::set_cpu_affinity(thread_.native_handle(), {0});
+            }
+        } else {
             util::set_cpu_affinity(thread_.native_handle(), config_.cpu_affinity);
         }
 

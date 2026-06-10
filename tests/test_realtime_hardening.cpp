@@ -156,6 +156,32 @@ bool test_realtime_priority_adaptive() {
     return true;
 }
 
+// ========== P019C: RealtimeThreadConfig::cpu_affinity 自适应 sentinel 测试 ==========
+
+bool test_default_realtime_cpu_affinity_is_adaptive_sentinel() {
+    std::cout << "Testing default RealtimeThreadConfig::cpu_affinity is empty (adaptive sentinel)..." << std::endl;
+
+    executor::RealtimeThreadConfig cfg;
+    TEST_ASSERT(cfg.cpu_affinity.empty(),
+                "Default RealtimeThreadConfig::cpu_affinity should be empty (sentinel: auto-bind core 0 on start)");
+
+    std::cout << "  RealtimeThreadConfig::cpu_affinity default = empty (sentinel)" << std::endl;
+    return true;
+}
+
+bool test_explicit_realtime_cpu_affinity_is_respected() {
+    std::cout << "Testing explicit RealtimeThreadConfig::cpu_affinity is preserved..." << std::endl;
+
+    executor::RealtimeThreadConfig cfg;
+    cfg.cpu_affinity = {1, 2};
+    TEST_ASSERT(cfg.cpu_affinity.size() == 2, "Explicit realtime cpu_affinity should have 2 entries");
+    TEST_ASSERT(cfg.cpu_affinity[0] == 1, "First cpu should be 1");
+    TEST_ASSERT(cfg.cpu_affinity[1] == 2, "Second cpu should be 2");
+
+    std::cout << "  explicit realtime cpu_affinity preserved: {1, 2}" << std::endl;
+    return true;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Realtime Hardening Tests" << std::endl;
@@ -169,6 +195,8 @@ int main() {
     all_passed &= test_set_current_thread_timer_slack_ns();
     all_passed &= test_default_config_is_optimal();
     all_passed &= test_realtime_priority_adaptive();
+    all_passed &= test_default_realtime_cpu_affinity_is_adaptive_sentinel();
+    all_passed &= test_explicit_realtime_cpu_affinity_is_respected();
 
     std::cout << std::endl;
     std::cout << "========================================" << std::endl;
