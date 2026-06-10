@@ -6,8 +6,7 @@
 namespace executor {
 
 LoadBalancer::LoadBalancer(size_t num_workers)
-    : worker_loads_(num_workers)
-    , strategy_(Strategy::ROUND_ROBIN) {
+    : worker_loads_(num_workers) {
     auto now = std::chrono::steady_clock::now();
     for (auto& load : worker_loads_) {
         load.last_update = now;
@@ -15,7 +14,8 @@ LoadBalancer::LoadBalancer(size_t num_workers)
 }
 
 size_t LoadBalancer::select_worker() {
-    switch (strategy_) {
+    // 260610P010: 读 atomic 用 relaxed(只关心最新值,不依赖与其它内存的顺序)
+    switch (strategy_.load(std::memory_order_relaxed)) {
         case Strategy::ROUND_ROBIN:
             return select_round_robin();
         case Strategy::LEAST_TASKS:
@@ -123,11 +123,12 @@ std::vector<LoadBalancer::WorkerLoad> LoadBalancer::get_all_loads() const {
 }
 
 void LoadBalancer::set_strategy(Strategy strategy) {
-    strategy_ = strategy;
+    // 260610P010: relaxed 写足矣(setter 不会跟其它内存操作组成 happens-before 链)
+    strategy_.store(strategy, std::memory_order_relaxed);
 }
 
 LoadBalancer::Strategy LoadBalancer::get_strategy() const {
-    return strategy_;
+    return strategy_.load(std::memory_order_relaxed);
 }
 
 void LoadBalancer::resize(size_t new_num_workers) {
