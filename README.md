@@ -13,8 +13,21 @@
 - **Hybrid Execution Modes**
   Thread pool (general concurrent tasks) + dedicated real-time thread (high real-time tasks such as CAN communication, sensor acquisition)
 
-- **Linux Real-Time Hardening (P016)**
-  `RealtimeThreadConfig` supports `enable_memory_lock` (`mlockall` memory lock to avoid page fault jitter), `timer_slack_ns` (reduce timer slack to nanosecond level), and `thread_name` (thread naming for `top`/`perf` visibility). All fields are opt-in and have no impact on existing code. Reference example: `tests/test_realtime_hardening.cpp` (`test_realtime_hardening`)
+- **Default-Optimal Facade (P019)**
+  Zero-config users get the best behavior on their platform automatically:
+  - **Adaptive thread count** (`min/max_threads` = 0 sentinel, `ExecutorManager` probes `hardware_concurrency()` at init, falls back to (2, 4) on failure)
+  - **Work-stealing by default** (lock-free implementation, auto-disabled when `max_threads == 1`)
+  - **Auto CPU affinity for thread pool** (empty affinity → auto-allocate [0..hw-1], preserves user override)
+  - **Auto CPU affinity for real-time threads** (empty → bind core 0 if hw >= 2, else OS-free; preserves override)
+  - **Adaptive real-time thread priority** (`thread_priority` = 0 → auto-recommend 80 if cycle ≤ 1 ms, 50 if ≤ 10 ms, 0 if > 10 ms)
+  All auto-decisions **fail silent** and user-supplied values are **always preserved**.
+
+- **Linux Real-Time Hardening (P016 + P019-A)**
+  `RealtimeThreadConfig` defaults are now opt-out:
+  - `enable_memory_lock` (default `true` — `mlockall` to avoid page-fault jitter; failure silent)
+  - `timer_slack_ns` (default `1` — 1 ns slack to avoid kernel's 50 µs default; failure silent; `0` is now explicit opt-out)
+  - `thread_name` (still `""` by default — library doesn't guess user business names)
+  Reference example: `tests/test_realtime_hardening.cpp`
 
 - **Unified API**
   `Executor` facade provides `submit`, `submit_priority`, `submit_delayed`, `submit_periodic`, `submit_batch`, `submit_batch_no_future`, and real-time task registration

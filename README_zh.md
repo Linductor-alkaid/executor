@@ -13,8 +13,21 @@
 - **混合执行模式**
   线程池（普通并发任务）+ 专用实时线程（高实时性任务，如 CAN 通信、传感器采集）
 
-- **Linux 实时性加固（P016）**
-  `RealtimeThreadConfig` 支持 `enable_memory_lock`（`mlockall` 内存锁定，避免分页抖动）、`timer_slack_ns`（压低 timer slack 至纳秒级）及 `thread_name`（线程命名，便于 top/perf 识别）；所有字段 opt-in，对已有代码无影响。参考示例：`tests/test_realtime_hardening.cpp`（`test_realtime_hardening`）
+- **默认即最优 Facade（P019）**
+  零配置用户自动获得当前平台下的最优行为：
+  - **自适应线程数**（`min/max_threads` = 0 sentinel，`ExecutorManager` 初始化时探测 `hardware_concurrency()`，探测失败退到 (2, 4)）
+  - **工作窃取默认开启**（无锁实现，`max_threads == 1` 时自动关闭）
+  - **线程池自动 CPU 亲和性**（空 affinity → 自动分配 [0..hw-1]，保留用户覆盖）
+  - **实时线程自动 CPU 亲和性**（空 → hw >= 2 时绑核 0，否则不绑；保留用户覆盖）
+  - **自适应实时线程优先级**（`thread_priority` = 0 → 自动建议：cycle ≤ 1 ms → 80，≤ 10 ms → 50，> 10 ms → 0）
+  所有自动决策**失败静默**，用户显式设值**始终保留**。
+
+- **Linux 实时性加固（P016 + P019-A）**
+  `RealtimeThreadConfig` 默认值已改为 opt-out：
+  - `enable_memory_lock`（默认 `true` — `mlockall` 锁定内存避免分页抖动；失败静默）
+  - `timer_slack_ns`（默认 `1` — 1 ns slack 以规避内核 50 µs 默认值；失败静默；`0` 为显式 opt-out）
+  - `thread_name`（仍为 `""` 默认 — 库不猜测用户业务命名）
+  参考示例：`tests/test_realtime_hardening.cpp`
 
 - **统一 API**
   `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic`、`submit_batch`、`submit_batch_no_future` 及实时任务注册

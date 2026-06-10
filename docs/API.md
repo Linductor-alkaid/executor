@@ -623,20 +623,39 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
 ## 7. 配置与类型
 
-### 7.1 ExecutorConfig（初始化线程池）
+### 7.0 Facade 哲学：默认即最优
 
-用于 `Executor::initialize()`：
+executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `min_threads` | `size_t` | 最小线程数，默认 4 |
-| `max_threads` | `size_t` | 最大线程数，默认 16 |
-| `queue_capacity` | `size_t` | 任务队列容量，默认 1000 |
-| `thread_priority` | `int` | 线程优先级（如 Linux -20..19） |
-| `cpu_affinity` | `std::vector<int>` | CPU 亲和性（核心编号） |
-| `task_timeout_ms` | `int64_t` | 任务超时（毫秒），0 表示不超时 |
-| `enable_work_stealing` | `bool` | 是否启用工作窃取 |
-| `enable_monitoring` | `bool` | 是否启用监控，默认 true |
+1. **默认即最优** — 零配置用户拿到平台/负载下最好的行为
+2. **自动决策** — 库在内部探测环境（`hw_concurrency`、timer slack）选最优路径
+3. **失败静默** — 自动决策失败时退到安全默认，不抛异常，不打 error 日志
+4. **用户覆盖** — 显式设的非默认/非空值永远保留
+
+实现：
+
+- `ThreadPoolConfig.min_threads` / `max_threads` = 0（sentinel，自适应）
+- `ThreadPoolConfig.enable_work_stealing` = `true`（默认开）
+- `ThreadPoolConfig.cpu_affinity` 空 → auto-allocate [0..hw-1]
+- `RealtimeThreadConfig.enable_memory_lock` = `true`（mlockall，失败静默）
+- `RealtimeThreadConfig.timer_slack_ns` = 1（1 ns，失败静默）
+- `RealtimeThreadConfig.cpu_affinity` 空 → bind core 0（hw >= 2）
+- `RealtimeThreadConfig.thread_priority` = 0 → 自适应按 `cycle_period_ns` 建议
+
+### 7.1 ExecutorConfig / ThreadPoolConfig（线程池配置）
+
+用于 `Executor::initialize()` / `ExecutorConfig` / `ThreadPoolConfig`：
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `min_threads` | `size_t` | `0` | 0 = 自适应 sentinel；`ExecutorManager::initialize` 时按 `hw_concurrency` 计算（min 2） |
+| `max_threads` | `size_t` | `0` | 0 = 自适应 sentinel；默认 hw；探测失败退到 (2, 4) |
+| `queue_capacity` | `size_t` | `1000` | 任务队列容量 |
+| `thread_priority` | `int` | `0` | 线程优先级（Linux SCHED_FIFO 1–99，Windows `SetThreadPriority`） |
+| `cpu_affinity` | `std::vector<int>` | 空 | 空 = 自适应 sentinel；`ExecutorManager` 自动填 [0..hw-1]；显式设值保留 |
+| `task_timeout_ms` | `int64_t` | `0` | 任务超时（ms），0 = 不超时（注：当前版本未实现完整超时机制，P019-docs 留 follow-up） |
+| `enable_work_stealing` | `bool` | `true` | 无锁工作窃取；`max_threads == 1` 时自动关；-10.7% 性能退化关闭 |
+| `enable_monitoring` | `bool` | `true` | 是否启用监控 |
 
 ### 7.2 RealtimeThreadConfig（实时线程）
 
@@ -646,12 +665,12 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 |------|------|------|
 | `thread_name` | `std::string` | 线程名称（Linux 下通过 `pthread_setname_np` 设置，便于 top/perf 识别） |
 | `cycle_period_ns` | `int64_t` | 周期（纳秒），如 2 000 000 表示 2 ms |
-| `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99） |
-| `cpu_affinity` | `std::vector<int>` | CPU 亲和性 |
+| `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99）；== 0 时按 `cycle_period_ns` 自适应建议（≤1 ms → 80，≤10 ms → 50，>10 ms → 0）；显式设值保留 |
+| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时绑核 0（hw >= 2）；显式设值保留 |
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
-| `enable_memory_lock` | `bool` | 是否调用 `mlockall` 锁定内存（避免分页抖动），默认 false（opt-in） |
-| `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒），0 表示不修改内核默认；设为 1 可将默认 50 µs slack 压到最低 |
+| `enable_memory_lock` | `bool` | 是否调用 `mlockall` 锁定内存（避免分页抖动）；默认 `true`（opt-out，失败静默） |
+| `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，失败静默）；`0` = 显式 opt-out 保留内核默认 |
 
 ### 7.3 状态与统计类型
 
