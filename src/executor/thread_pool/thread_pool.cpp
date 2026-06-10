@@ -363,6 +363,13 @@ void ThreadPool::set_task_monitor(monitor::TaskMonitor* m) {
 }
 
 bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
+    // 260610P012: resize 期间 LoadBalancer::resize() 会重建 local_queues_ (vector 重分配),
+    // 无锁访问 local_queues_[i] / local_queues_.size() 会触发 UAF / 越界。
+    // 修复: 整个 steal 期间持 mutex_,与 resize() 互斥。
+    // 权衡: 多个 steal 线程互相串行化(steal 临界区短,影响可控)。
+    // 后续优化方向: 把 mutex_ 改为 std::shared_mutex,resize 用 unique_lock,steal 用 shared_lock 允许并发。
+    std::lock_guard<std::mutex> lock(mutex_);
+
     if (local_queues_.size() <= 1) {
         return false;  // 只有一个线程，无法窃取
     }
