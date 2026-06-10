@@ -506,15 +506,88 @@ bool test_thread_pool_shutdown_no_wait() {
     return true;
 }
 
+bool test_thread_pool_concurrent_shutdown() {
+    std::cout << "Testing ThreadPool concurrent shutdown (10 threads, P-008 regression)..." << std::endl;
+
+    ThreadPool pool;
+    ThreadPoolConfig config;
+    config.min_threads = 4;
+    config.max_threads = 8;
+    TEST_ASSERT(pool.initialize(config), "Should initialize thread pool");
+
+    // 提交几个短任务,确保 worker 线程真的在运行
+    std::vector<std::future<void>> futures;
+    for (int i = 0; i < 4; ++i) {
+        futures.push_back(pool.submit([]() noexcept {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }));
+    }
+
+    // P-008 回归测试: 10 个线程同时调用 shutdown(),
+    // 修复前可能两个线程同时通过 stop_.load() 早返回检查,
+    // 然后都进入 resize_monitor_thread_.join() / workers_ join 循环,
+    // 第二次 join 触发 std::system_error (UB)。
+    const int num_threads = 10;
+    std::atomic<int> ready_count{0};
+    std::atomic<bool> go{false};
+    std::vector<std::thread> shutdown_threads;
+    std::vector<std::exception_ptr> exceptions(num_threads);
+    std::atomic<int> success_count{0};
+
+    for (int i = 0; i < num_threads; ++i) {
+        shutdown_threads.emplace_back([&, i]() {
+            // 在屏障前自旋,等所有线程就位
+            ready_count.fetch_add(1, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            try {
+                pool.shutdown(true);  // 触发 race 的关键调用
+                success_count.fetch_add(1, std::memory_order_relaxed);
+            } catch (...) {
+                exceptions[i] = std::current_exception();
+            }
+        });
+    }
+
+    // 等所有线程都进入就绪态
+    while (ready_count.load(std::memory_order_acquire) < num_threads) {
+        std::this_thread::yield();
+    }
+    // 同时放行所有 shutdown 调用,最大化 race 窗口
+    go.store(true, std::memory_order_release);
+
+    // 等待所有 shutdown 线程完成
+    for (auto& t : shutdown_threads) {
+        t.join();
+    }
+
+    // 断言: 没有线程因 double-join 抛出异常
+    for (int i = 0; i < num_threads; ++i) {
+        TEST_ASSERT(!exceptions[i], "Concurrent shutdown should not throw (no double-join UB)");
+    }
+    TEST_ASSERT(success_count.load() == num_threads,
+                "All concurrent shutdown calls should succeed");
+    TEST_ASSERT(pool.is_stopped(), "Thread pool should be stopped after concurrent shutdown");
+
+    // 任务 future 应当仍然可 get() (已经在 shutdown(true) 之前提交)
+    for (auto& f : futures) {
+        f.get();
+    }
+
+    std::cout << "  ThreadPool concurrent shutdown: PASSED" << std::endl;
+    return true;
+}
+
 bool test_thread_pool_submit_after_shutdown() {
     std::cout << "Testing ThreadPool submit after shutdown..." << std::endl;
-    
+
     ThreadPool pool;
     ThreadPoolConfig config;
     config.min_threads = 2;
     config.max_threads = 4;
     pool.initialize(config);
-    
+
     pool.shutdown();
     
     // 关闭后提交任务应该抛出异常
@@ -594,6 +667,7 @@ int main() {
     all_passed &= test_thread_pool_status();
     all_passed &= test_thread_pool_shutdown();
     all_passed &= test_thread_pool_shutdown_no_wait();
+    all_passed &= test_thread_pool_concurrent_shutdown();
     all_passed &= test_thread_pool_submit_after_shutdown();
     all_passed &= test_thread_pool_wait_for_completion();
     std::cout << std::endl;

@@ -249,6 +249,11 @@ private:
     // 互斥锁：保护共享状态
     mutable std::mutex mutex_;
 
+    // P-008: shutdown() 并发调用的幂等性保护
+    // std::call_once 用 flag,保证 shutdown 逻辑全生命周期只执行一次,
+    // 避免两个线程同时通过 stop_.load() 早返回检查后 double-join 触发 UB。
+    mutable std::once_flag shutdown_once_flag_;
+
     // 异常处理器
     util::ExceptionHandler exception_handler_;
 
