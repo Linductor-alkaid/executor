@@ -47,8 +47,19 @@ bool RealtimeThreadExecutor::start() {
         }
 #endif
         
-        // 设置线程优先级
-        if (config_.thread_priority != 0) {
+        // 自适应 priority: 用户未显式设 (== 0) 时, 按周期建议
+        if (config_.thread_priority == 0 && config_.cycle_period_ns > 0) {
+            int auto_priority = 0;
+            if (config_.cycle_period_ns <= 1'000'000) {        // <= 1ms
+                auto_priority = 80;  // 硬实时, 短周期
+            } else if (config_.cycle_period_ns <= 10'000'000) {  // <= 10ms
+                auto_priority = 50;  // 软实时, 中周期
+            }  // > 10ms 保持 0 (普通调度够用)
+            if (auto_priority > 0) {
+                util::set_thread_priority(thread_.native_handle(), auto_priority);
+            }
+        } else if (config_.thread_priority != 0) {
+            // 用户显式设了, 尊重覆盖
             util::set_thread_priority(thread_.native_handle(), config_.thread_priority);
         }
 

@@ -20,7 +20,7 @@ struct ThreadPoolConfig {
     size_t max_threads = 0;              // 0 = 自适应 sentinel, ExecutorManager::initialize 时按 hw_concurrency 计算 (默认 hw)
     size_t queue_capacity = 1000;        // 任务队列容量
     int thread_priority = 0;             // 线程优先级（-20到19，Linux；Windows使用SetThreadPriority）
-    std::vector<int> cpu_affinity;       // CPU亲和性（绑定到特定核心）
+    std::vector<int> cpu_affinity;       // CPU亲和性（绑定到特定核心）, 空 = auto-allocate [0..hw-1]
     int64_t task_timeout_ms = 0;         // 任务超时时间（毫秒），0表示不超时
     bool enable_work_stealing = true;    // 默认开, 无锁工作窃取 -10.7% 退化; max_threads==1 时自动关
 };
@@ -50,7 +50,7 @@ struct ExecutorConfig {
     size_t max_threads = 0;              // 0 = 自适应 sentinel, ExecutorManager::initialize 时按 hw_concurrency 计算 (默认 hw)
     size_t queue_capacity = 1000;        // 任务队列容量
     int thread_priority = 0;              // 线程优先级
-    std::vector<int> cpu_affinity;       // CPU亲和性
+    std::vector<int> cpu_affinity;       // CPU亲和性, 空 = auto-allocate [0..hw-1]
     int64_t task_timeout_ms = 0;         // 任务超时时间（毫秒）
     bool enable_work_stealing = true;    // 默认开, 无锁工作窃取 -10.7% 退化; max_threads==1 时自动关
     bool enable_monitoring = true;       // 启用任务监控（默认开启）

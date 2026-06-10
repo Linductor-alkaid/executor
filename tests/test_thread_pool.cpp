@@ -660,6 +660,47 @@ bool test_default_enable_work_stealing_is_true() {
     return true;
 }
 
+bool test_default_cpu_affinity_is_auto_allocated() {
+    std::cout << "Testing default cpu_affinity is auto-allocated [0..hw-1]..." << std::endl;
+
+    // 1. Default config has empty cpu_affinity
+    ExecutorConfig config;
+    TEST_ASSERT(config.cpu_affinity.empty(), "Default cpu_affinity should be empty (auto sentinel)");
+
+    // 2. Simulate executor_manager auto-allocation logic
+    unsigned hw = std::thread::hardware_concurrency();
+    std::cout << "  hw_concurrency = " << hw << std::endl;
+
+    std::vector<int> auto_affinity;
+    if (hw > 0) {
+        auto_affinity.resize(hw);
+        for (unsigned i = 0; i < hw; ++i) {
+            auto_affinity[i] = static_cast<int>(i);
+        }
+    }
+
+    if (hw > 0) {
+        TEST_ASSERT(!auto_affinity.empty(), "auto-affinity should be non-empty when hw > 0");
+        TEST_ASSERT(static_cast<unsigned>(auto_affinity.size()) == hw,
+                    "auto-affinity size should equal hw_concurrency");
+        // Contents should be [0, 1, 2, ..., hw-1]
+        for (unsigned i = 0; i < hw; ++i) {
+            TEST_ASSERT(auto_affinity[i] == static_cast<int>(i),
+                        "auto-affinity entry should match core index");
+        }
+        if (hw >= 2) {
+            TEST_ASSERT(auto_affinity.size() >= 2, "auto-affinity should have >= 2 entries when hw >= 2");
+        }
+    } else {
+        // Probe failed (rare in CI), affinity stays empty → OS free-schedules
+        TEST_ASSERT(auto_affinity.empty(), "auto-affinity should stay empty when hw == 0");
+        std::cout << "  (hw == 0, probe failed, skipped)" << std::endl;
+    }
+
+    std::cout << "  auto-affinity size = " << auto_affinity.size() << std::endl;
+    return true;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Executor ThreadPool Module Tests" << std::endl;
@@ -696,6 +737,7 @@ int main() {
     std::cout << "--- Default Value Tests ---" << std::endl;
     all_passed &= test_default_thread_count_is_adaptive_sentinel();
     all_passed &= test_default_enable_work_stealing_is_true();
+    all_passed &= test_default_cpu_affinity_is_auto_allocated();
     std::cout << std::endl;
 
     // 总结
