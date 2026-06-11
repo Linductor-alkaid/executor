@@ -83,6 +83,11 @@ bool test_set_current_thread_timer_slack_ns() {
     set_current_thread_timer_slack_ns(1);
     set_current_thread_timer_slack_ns(1000);
 
+    // 关键: 还原回 Linux 默认 (~50µs)。如果保留 1ns,后续所有 timer (sleep/nanosleep)
+    // 按 1ns 精度触发,叠加 mlockall 后 CI runner 可能因高频 timer interrupt 而 SIGKILL
+    // test_realtime_hardening (e.g. Code Coverage job with -O0 -g 全量 build).
+    set_current_thread_timer_slack_ns(50000);
+
     return true;
 }
 
