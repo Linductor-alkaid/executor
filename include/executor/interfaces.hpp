@@ -8,6 +8,8 @@
 #include <vector>
 #include <thread>
 #include <memory>
+#include <mutex>
+#include <atomic>
 
 namespace executor {
 
@@ -518,6 +520,31 @@ protected:
     virtual std::future<void> submit_kernel_impl(
         std::function<void(void*)> kernel_func,
         const gpu::GpuTaskConfig& config) = 0;
+
+    /**
+     * @brief 等待并清理所有 submit_kernel_after 产生的等待线程。
+     *
+     * 派生类的 stop() 应在销毁内部状态前调用此方法，防止析构后
+     * waiter 线程访问已销毁成员（UAF）。
+     */
+    void join_pending_waiters() {
+        stopping_.store(true, std::memory_order_release);
+        std::vector<std::thread> to_join;
+        {
+            std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
+            to_join.swap(pending_waiters_);
+        }
+        for (auto& t : to_join) {
+            if (t.joinable()) {
+                t.join();
+            }
+        }
+    }
+
+    // P-002 fix: tracks detached-waiter threads; joined in join_pending_waiters()
+    std::mutex              pending_waiters_mutex_;
+    std::vector<std::thread> pending_waiters_;
+    std::atomic<bool>       stopping_{false};
 };
 
 // 模板方法实现
@@ -588,14 +615,27 @@ auto IGpuExecutor::submit_kernel_after(std::shared_future<void> dependency, Kern
     auto result_future = promise->get_future();
 
     // 启动独立线程等待 dep,然后把 kernel 重新入队
-    // 捕获 this 指针:lambda 在 IGpuExecutor 上下文,
-    // 可合法访问 protected submit_kernel_impl。
+    // P-002 fix: 线程存入 pending_waiters_,由 join_pending_waiters()
+    // 在 stop() 时 join,防止析构后访问 this（UAF）。
+    // waiter 在 dep.wait_for 循环中定期检查 stopping_,使 stop() 不会
+    // 永久阻塞在永不完成的 dependency 上。
     std::thread waiter([dep, kernel_func = std::move(kernel_func), config,
                         promise, this]() mutable {
         try {
-            dep.wait();
-            // dep 已完成,现在把 kernel 重新入队;内部 promise 由
-            // submit_kernel_impl 创建,这里只 wait inner 即可。
+            // Poll-wait: 每 10ms 检查一次 stopping_ 标志，避免永久阻塞
+            while (dep.wait_for(std::chrono::milliseconds(10)) !=
+                   std::future_status::ready) {
+                if (stopping_.load(std::memory_order_acquire)) {
+                    promise->set_exception(std::make_exception_ptr(
+                        std::runtime_error("executor stopped before dependency completed")));
+                    return;
+                }
+            }
+            if (stopping_.load(std::memory_order_acquire)) {
+                promise->set_exception(std::make_exception_ptr(
+                    std::runtime_error("executor stopped before dependency completed")));
+                return;
+            }
             auto inner_future = submit_kernel_impl(std::move(kernel_func), config);
             inner_future.get();
             promise->set_value();
@@ -603,7 +643,10 @@ auto IGpuExecutor::submit_kernel_after(std::shared_future<void> dependency, Kern
             promise->set_exception(std::current_exception());
         }
     });
-    waiter.detach();
+    {
+        std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
+        pending_waiters_.push_back(std::move(waiter));
+    }
     return result_future;
 }
 

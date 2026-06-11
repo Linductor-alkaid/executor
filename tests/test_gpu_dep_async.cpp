@@ -104,7 +104,12 @@ bool test_gpu_dependency_does_not_starve_worker() {
     // We wait until A is finished, then submit D shortly before B is
     // expected to start. If the worker is blocked, D's start would be
     // delayed past B's end.
-    future_a.wait();
+    // 注: future_a 在上面 share() 后已变为 valid=false (state 转移到 shared_a),
+    // wait() 必须用 shared_a,否则抛 std::future_error("No associated state")。
+    // 这是 P-005 (#7) 引入的 bug:在有 GPU 设备的环境上(P-005 当时 CI 没 GPU,所以未暴露)
+    // 第一次跑到这里就 abort。这里同步修,合并 P-005 的 future_a.wait() → shared_a.wait()
+    // 让 test 在真实 GPU 上也能跑通。
+    shared_a.wait();
     // Small window to ensure B's dep is satisfied and B has been re-enqueued
     std::this_thread::sleep_for(milliseconds(5));
     auto future_d = exec.submit_kernel([&](void* /*s*/) {
@@ -189,18 +194,88 @@ bool test_gpu_dependency_does_not_starve_worker() {
 #endif
 }
 
+// P-002 regression test: destroy executor while a waiter thread is blocked on
+// a dependency that never completes.  With the old detach() implementation this
+// causes a heap-use-after-free (detectable under ASAN).  With the P-002 fix the
+// waiter polls stopping_ and exits cleanly when stop() is called.
+bool test_gpu_dep_async_destroy_race() {
+    std::cout << "P-002: destroy executor while dep-waiter is blocked"
+              << std::endl;
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig cfg;
+    cfg.name = "p002_destroy_race";
+    cfg.device_id = 0;
+    cfg.max_queue_size = 256;
+    cfg.default_stream_count = 1;
+
+    auto exec = std::make_unique<CudaExecutor>(cfg.name, cfg);
+    if (!exec->start()) {
+        std::cout << "  CUDA not available, skipping" << std::endl;
+        return true;
+    }
+
+    // Create a promise/future that we intentionally never complete —
+    // the waiter thread will block on dep.wait_for() loops.
+    std::promise<void> never_promise;
+    std::shared_future<void> never_dep = never_promise.get_future().share();
+
+    GpuTaskConfig tcfg;
+    tcfg.async = false;
+
+    // Submit a kernel that depends on 'never_dep'. The returned future
+    // will be broken (exception) when stop() cancels the waiter.
+    auto future = exec->submit_kernel_after(never_dep, [](void* /*s*/) {
+        // should never execute
+    }, tcfg);
+
+    // Give the waiter thread a moment to start and enter its poll-wait loop.
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+    // Destroy executor — stop() must join the waiter before returning.
+    // Under ASAN this would trap immediately on UAF if the old detach() was used.
+    exec->stop();
+    exec.reset();  // destructor runs here; must be clean
+
+    // The future should be broken with an exception (executor stopped).
+    // We just verify it doesn't deadlock and doesn't crash.
+    try {
+        future.get();
+        // If somehow the kernel ran, that's also acceptable (shouldn't happen,
+        // but not a correctness bug here).
+    } catch (const std::exception& e) {
+        // Expected: "executor stopped before dependency completed"
+        std::cout << "  future broken as expected: " << e.what() << std::endl;
+    } catch (...) {
+        // Any exception is fine — what matters is no UAF and no hang.
+    }
+
+    std::cout << "  P-002 destroy-race test: PASSED" << std::endl;
+    return true;
+#else
+    // Without CUDA, use the mock/software path to exercise the same code path.
+    // IGpuExecutor::submit_kernel_after is defined in interfaces.hpp and works
+    // through submit_kernel_impl — we can't instantiate IGpuExecutor directly
+    // without a concrete backend, so we just skip here.
+    std::cout << "  CUDA not enabled, skipping CUDA path" << std::endl;
+    return true;
+#endif
+}
+
 } // namespace
 
 int main() {
     std::cout << "=========================================" << std::endl;
-    std::cout << "P-005 GPU dependency async regression test" << std::endl;
+    std::cout << "GPU dependency async regression tests" << std::endl;
     std::cout << "=========================================" << std::endl;
 
-    bool ok = test_gpu_dependency_does_not_starve_worker();
+    bool ok = true;
+    ok &= test_gpu_dependency_does_not_starve_worker();
+    ok &= test_gpu_dep_async_destroy_race();
+
     if (ok) {
-        std::cout << "All P-005 tests PASSED" << std::endl;
+        std::cout << "All GPU dep-async tests PASSED" << std::endl;
         return 0;
     }
-    std::cerr << "P-005 tests FAILED" << std::endl;
+    std::cerr << "GPU dep-async tests FAILED" << std::endl;
     return 1;
 }
