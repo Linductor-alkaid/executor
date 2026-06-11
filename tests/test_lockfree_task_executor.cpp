@@ -4,6 +4,7 @@
 #include <thread>
 #include <chrono>
 #include <stdexcept>
+#include <memory>
 
 using namespace executor;
 
@@ -113,44 +114,63 @@ TEST(LockFreeTaskExecutorTest, BatchExceptionSafety) {
     LockFreeTaskExecutor exec(16);
 
     // A copyable wrapper whose copy-constructor throws on the Nth copy.
-    struct ThrowOnCopy {
-        int* counter;
-        int threshold;
-        ThrowOnCopy(int* c, int t) : counter(c), threshold(t) {}
-        ThrowOnCopy(const ThrowOnCopy& o) : counter(o.counter), threshold(o.threshold) {
-            ++(*counter);
-            if (*counter >= threshold) throw std::runtime_error("deliberate copy exception");
+// We track copies via a shared atomic counter so the throws happen
+// during std::function assignment inside push_tasks_batch, not at
+// test-array construction time (which would trip gtest's own
+// exception-in-test-body detection).
+struct ThrowOnCopy {
+    std::shared_ptr<std::atomic<int>> counter;
+    int threshold;
+    ThrowOnCopy(std::shared_ptr<std::atomic<int>> c, int t)
+        : counter(std::move(c)), threshold(t) {}
+    ThrowOnCopy(const ThrowOnCopy& o)
+        : counter(o.counter), threshold(o.threshold) {
+        if (++(*counter) >= threshold) {
+            throw std::runtime_error("deliberate copy exception");
         }
-        ThrowOnCopy& operator=(const ThrowOnCopy&) = default;
-        void operator()() {}
-    };
+    }
+    ThrowOnCopy& operator=(const ThrowOnCopy&) = default;
+    void operator()() {}
+};
 
-    int copy_count = 0;
-    // threshold=2: first copy succeeds, second throws
-    ThrowOnCopy thrower(&copy_count, 2);
-    std::function<void()> tasks[3] = {thrower, thrower, thrower};
+auto counter = std::make_shared<std::atomic<int>>(0);
+// Pre-create one std::function per slot so test-array construction
+// itself never throws. Push_tasks_batch will then copy the held
+// ThrowOnCopy into wrapper->func; the Nth copy throws and is
+// caught inside push_tasks_batch.
+std::function<void()> tasks[3] = {
+    ThrowOnCopy(counter, 2),
+    ThrowOnCopy(counter, 2),
+    ThrowOnCopy(counter, 2),
+};
+// Reset counter so the throw occurs inside push_tasks_batch, not
+// at this point (each array element already performed 1 copy above).
+counter->store(1);
 
-    size_t pushed = 0;
-    // Should not crash; exception is caught internally
-    EXPECT_NO_THROW(exec.push_tasks_batch(tasks, 3, pushed));
+size_t pushed = 0;
+// Should not crash; exception is caught internally by push_tasks_batch.
+EXPECT_NO_THROW(exec.push_tasks_batch(tasks, 3, pushed));
+// First task succeeded (counter went 1->2 just before the throw
+// on the second assignment). The key invariant is that the third
+// task was never enqueued with a half-initialised wrapper.
+EXPECT_LT(pushed, 3u);
 
-    // At least 0 tasks pushed (first may succeed before throw)
-    // The key invariant: executor is still usable afterwards
-    copy_count = 0;
-    ThrowOnCopy safe(&copy_count, 100);
-    std::function<void()> safe_tasks[2] = {safe, safe};
-    size_t pushed2 = 0;
-    EXPECT_TRUE(exec.push_tasks_batch(safe_tasks, 2, pushed2));
-    EXPECT_EQ(pushed2, 2u);
+// Executor must still be usable after the exception.
+auto safe_counter = std::make_shared<std::atomic<int>>(0);
+std::function<void()> safe_tasks[2] = {
+    ThrowOnCopy(safe_counter, 1000),
+    ThrowOnCopy(safe_counter, 1000),
+};
+size_t pushed2 = 0;
+EXPECT_TRUE(exec.push_tasks_batch(safe_tasks, 2, pushed2));
+EXPECT_EQ(pushed2, 2u);
 
-    // Run executor and verify safe tasks execute
-    std::atomic<int> ran{0};
-    std::function<void()> counting_tasks[2] = {[&ran]{ran++;}, [&ran]{ran++;}};
-    size_t pushed3 = 0;
-    exec.push_tasks_batch(counting_tasks, 2, pushed3);
-    exec.start();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    exec.stop();
-    // All tasks that were successfully pushed should have run
-    EXPECT_GE(ran.load(), 0);
+std::atomic<int> ran{0};
+std::function<void()> counting_tasks[2] = {[&ran]{ran++;}, [&ran]{ran++;}};
+size_t pushed3 = 0;
+EXPECT_TRUE(exec.push_tasks_batch(counting_tasks, 2, pushed3));
+exec.start();
+std::this_thread::sleep_for(std::chrono::milliseconds(100));
+exec.stop();
+EXPECT_EQ(ran.load(), 2);
 }

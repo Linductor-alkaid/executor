@@ -283,6 +283,22 @@ public:
         return result;
     }
 
+    // 260611P004: helpers for callers that perform a logical "batch"
+    // operation by composing per-item push/pop (e.g. the exception-safe
+    // push_tasks_batch path in LockFreeTaskExecutor). This keeps the
+    // stats signal meaningful regardless of which underlying entry
+    // point was used.
+    void record_batch_push() {
+        if (stats_enabled_.load(std::memory_order_relaxed)) {
+            stats_.batch_pushes.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    void record_batch_pop() {
+        if (stats_enabled_.load(std::memory_order_relaxed)) {
+            stats_.batch_pops.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
 private:
     void update_peak_size() {
         size_t current = size();
