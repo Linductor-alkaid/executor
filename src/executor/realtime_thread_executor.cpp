@@ -1,6 +1,12 @@
 #include "realtime_thread_executor.hpp"
 #include <stdexcept>
 #include <algorithm>
+#include <atomic>
+
+// Round-robin CPU hint: incremented each time a new RT thread auto-selects its core.
+// Wraps at hw_concurrency so threads spread across all available CPUs.
+static std::atomic<unsigned> g_next_rt_cpu_hint{0};
+
 #ifdef _WIN32
 #include <windows.h>
 #include <mmsystem.h>
@@ -70,13 +76,14 @@ bool RealtimeThreadExecutor::start() {
             util::set_thread_priority(self_handle, config_.thread_priority);
         }
 
-        // CPU 亲和性: 空 = 自适应 sentinel, 按 hw_concurrency 自动选核; 显式设值尊重覆盖
+        // CPU 亲和性: 空 = 自适应 sentinel, 用 round-robin 跨核分布; 显式设值尊重覆盖
         if (config_.cpu_affinity.empty()) {
             unsigned hw = std::thread::hardware_concurrency();
             if (hw >= 2) {
-                // 简单策略: 绑到核 0. 多 rt 线程场景用户可显式覆盖 cpu_affinity.
-                // hw == 1 不绑, 避免争抢唯一核心; hw == 0 (探测失败) 同样不绑.
-                util::set_cpu_affinity(self_handle, {0});
+                // P-005 round-robin: 每个新 RT 线程取下一个 CPU 核号, 避免全部挤在核 0.
+                // hw == 1 或探测失败(0) 时不绑, 避免争抢唯一核心. 多 rt 线程场景用户可显式覆盖 cpu_affinity.
+                unsigned cpu = g_next_rt_cpu_hint.fetch_add(1, std::memory_order_relaxed) % hw;
+                util::set_cpu_affinity(self_handle, {static_cast<int>(cpu)});
             }
         } else {
             util::set_cpu_affinity(self_handle, config_.cpu_affinity);
