@@ -302,6 +302,11 @@ void CudaExecutor::stop() {
         return;
     }
 
+    // P-002 fix: signal + join all submit_kernel_after waiter threads before
+    // tearing down internal state, preventing UAF when a waiter accesses
+    // submit_kernel_impl() on a partially-destroyed object.
+    join_pending_waiters();
+
     is_running_.store(false);
     queue_not_empty_cv_.notify_all();
 
