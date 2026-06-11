@@ -57,8 +57,36 @@ if(EXECUTOR_ENABLE_GPU)
                 set(CUDA_FOUND TRUE)
                 set(CUDA_VERSION ${CUDAToolkit_VERSION})
                 set(CUDA_TOOLKIT_ROOT_DIR ${CUDAToolkit_ROOT_DIR})
-                set(CUDA_INCLUDE_DIRS ${CUDAToolkit_INCLUDE_DIRS})
                 set(CUDA_LIBRARIES ${CUDAToolkit_LIBRARIES})
+
+                # 派生 CUDA include dirs: cmake 4.x 的 CUDAToolkit 模块把 include dirs
+                # 标为 INTERNAL(_cmake_CUDAToolkit_include_directories),外部变量
+                # CUDAToolkit_INCLUDE_DIRS 取不到,target_link_libraries 也没接
+                # CUDA::cudart 时 include 不会自动加。CUDAToolkit_BIN_DIR 已知,
+                # include path = <bin>/../targets/<arch>/include (CUDA 11+ 布局)
+                if(NOT CUDA_INCLUDE_DIRS AND CUDAToolkit_BIN_DIR)
+                    # 从 <cuda_root>/bin 推导 <cuda_root>
+                    get_filename_component(_cuda_root "${CUDAToolkit_BIN_DIR}" DIRECTORY)
+                    # 探测当前构建的 target arch (x86_64-linux / aarch64-linux / ...)
+                    set(_cuda_inc_candidates
+                        "${_cuda_root}/targets/x86_64-linux/include"
+                        "${_cuda_root}/targets/aarch64-linux/include"
+                        "${_cuda_root}/include")
+                    foreach(_c IN LISTS _cuda_inc_candidates)
+                        if(EXISTS "${_c}/cuda_runtime.h")
+                            set(CUDA_INCLUDE_DIRS "${_c}")
+                            break()
+                        endif()
+                    endforeach()
+                endif()
+                # CUDAToolkit 模块的 INTERNAL include 仍可能可用,加上作为兜底
+                if(_cmake_CUDAToolkit_include_directories)
+                    if(CUDA_INCLUDE_DIRS)
+                        list(APPEND CUDA_INCLUDE_DIRS ${_cmake_CUDAToolkit_include_directories})
+                    else()
+                        set(CUDA_INCLUDE_DIRS ${_cmake_CUDAToolkit_include_directories})
+                    endif()
+                endif()
             endif()
         endif()
         
