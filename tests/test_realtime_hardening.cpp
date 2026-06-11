@@ -217,6 +217,7 @@ bool test_realtime_round_robin_auto_affinity() {
         executor::RealtimeThreadConfig cfg;
         cfg.cycle_period_ns = 1'000'000;  // 1ms
         // lambda runs on the RT worker thread; capture this thread's affinity
+        cfg.thread_name = "p005_rt_" + std::to_string(i);
         cfg.cycle_callback = [&, i]() {
             if (!captured[i].exchange(true)) {
                 affinities[i] = executor::util::get_current_thread_affinity();
