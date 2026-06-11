@@ -6,6 +6,7 @@
 #include <atomic>
 #include <algorithm>
 #include <numeric>
+#include <cstdlib>
 
 using namespace executor;
 using namespace std::chrono;
@@ -92,6 +93,69 @@ BenchResult benchmark_throughput(size_t num_tasks) {
     return result;
 }
 
+// latency_single_task: measures submit-to-execution latency for isolated tasks.
+// Asserts P99 < 50µs to confirm the hybrid backoff reduces worst-case idle delay.
+static bool latency_single_task() {
+    constexpr size_t NUM_SAMPLES = 500;
+    constexpr double P99_LIMIT_US = 50.0;
+
+    LockFreeTaskExecutor exec(8192);
+    exec.start();
+
+    std::vector<double> latencies_us;
+    latencies_us.reserve(NUM_SAMPLES);
+
+    for (size_t i = 0; i < NUM_SAMPLES; ++i) {
+        // Drain the executor — ensure it is idle before each sample
+        std::this_thread::sleep_for(microseconds(200));
+
+        std::atomic<bool> done{false};
+        auto submit_time = steady_clock::now();
+
+        exec.push_task([&done, &submit_time]() {
+            auto exec_time = steady_clock::now();
+            (void)exec_time;  // latency computed after done is set
+            done.store(true, std::memory_order_release);
+        });
+
+        // Spin-wait — timeout 10ms
+        auto deadline = steady_clock::now() + milliseconds(10);
+        while (!done.load(std::memory_order_acquire)) {
+            if (steady_clock::now() > deadline) {
+                std::cerr << "[latency_single_task] TIMEOUT waiting for task " << i << "\n";
+                exec.stop();
+                return false;
+            }
+            std::this_thread::yield();
+        }
+
+        auto finish_time = steady_clock::now();
+        double us = duration<double, std::micro>(finish_time - submit_time).count();
+        latencies_us.push_back(us);
+    }
+
+    exec.stop();
+
+    std::sort(latencies_us.begin(), latencies_us.end());
+    size_t p50_idx = latencies_us.size() / 2;
+    size_t p99_idx = static_cast<size_t>(0.99 * (latencies_us.size() - 1));
+    double p50 = latencies_us[p50_idx];
+    double p99 = latencies_us[p99_idx];
+
+    std::cout << "\n[latency_single_task]\n";
+    std::cout << "  Samples : " << NUM_SAMPLES << "\n";
+    std::cout << "  P50     : " << std::fixed << std::setprecision(2) << p50 << " µs\n";
+    std::cout << "  P99     : " << p99 << " µs  (limit: " << P99_LIMIT_US << " µs)\n";
+
+    if (p99 >= P99_LIMIT_US) {
+        std::cerr << "[latency_single_task] FAIL: P99 " << p99
+                  << " µs >= " << P99_LIMIT_US << " µs\n";
+        return false;
+    }
+    std::cout << "  PASS\n";
+    return true;
+}
+
 int main() {
     std::cout << "========================================\n";
     std::cout << "LockFreeTaskExecutor Performance Benchmark\n";
@@ -115,6 +179,11 @@ int main() {
     std::cout << "========================================\n";
     std::cout << "Benchmark complete\n";
     std::cout << "========================================\n";
+
+    // Latency assertion test — must pass for CI green
+    if (!latency_single_task()) {
+        return EXIT_FAILURE;
+    }
 
     return 0;
 }

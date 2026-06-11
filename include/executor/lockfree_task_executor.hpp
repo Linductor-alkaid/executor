@@ -116,6 +116,7 @@ private:
     std::thread worker_;
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> processed_count_{0};
+    uint32_t idle_count_{0};  // only accessed from worker_thread
 };
 
 } // namespace executor

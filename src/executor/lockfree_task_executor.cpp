@@ -2,6 +2,16 @@
 #include "util/lockfree_queue.hpp"
 #include "util/object_pool.hpp"
 #include <chrono>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#  if defined(_MSC_VER)
+#    include <intrin.h>
+#  else
+#    include <immintrin.h>
+#  endif
+#  define EXECUTOR_PAUSE() _mm_pause()
+#else
+#  define EXECUTOR_PAUSE() std::this_thread::yield()
+#endif
 
 namespace executor {
 
@@ -130,8 +140,20 @@ void LockFreeTaskExecutor::worker_thread() {
             }
             processed_count_.fetch_add(popped, std::memory_order_relaxed);
         } else {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            // Hybrid backoff: PAUSE spin → yield → 1µs sleep
+            static constexpr uint32_t kPauseSpins  = 32;
+            static constexpr uint32_t kSleepThresh = 1000;
+            idle_count_++;
+            if (idle_count_ <= kPauseSpins) {
+                EXECUTOR_PAUSE();
+            } else if (idle_count_ <= kSleepThresh) {
+                std::this_thread::yield();
+            } else {
+                std::this_thread::sleep_for(std::chrono::microseconds(1));
+            }
+            continue;
         }
+        idle_count_ = 0;
     }
 
     // 处理剩余任务
