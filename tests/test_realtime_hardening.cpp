@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <fstream>
@@ -34,6 +35,16 @@ using namespace executor::util;
 
 bool test_try_mlock_current_thread() {
     std::cout << "Testing try_mlock_current_thread..." << std::endl;
+
+    // CI Code Coverage build 在 2 vCPU runner 上,mlockall(MCL_CURRENT|MCL_FUTURE) 会
+    // 锁住所有测试 runtime 内存 (gtest fixture + 数百 MB coverage 插桩) →
+    // OOM-killer 在后续 test 中 SIGKILL。允许通过 env 跳过实际 mlock 调用,
+    // 本地默认行为不变。
+    const char* skip_mlock = std::getenv("EXECUTOR_TEST_NO_MLOCKALL");
+    if (skip_mlock && skip_mlock[0] != '\0' && skip_mlock[0] != '0') {
+        std::cout << "  SKIPPED (EXECUTOR_TEST_NO_MLOCKALL set)" << std::endl;
+        return true;
+    }
 
     // CI 容器一般无 CAP_IPC_LOCK，可能返回 false；这里只断言不崩溃即可。
     // 返回值用于消除未使用变量告警。
