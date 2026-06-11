@@ -70,29 +70,26 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
     pushed = 0;
     if (count == 0) return true;
 
-    std::vector<TaskWrapper*> wrappers(count);
     for (size_t i = 0; i < count; ++i) {
-        wrappers[i] = task_pool_->acquire();
-        if (!wrappers[i]) {
-            for (size_t j = 0; j < i; ++j) {
-                task_pool_->release(wrappers[j]);
-            }
-            return false;
+        auto* wrapper = task_pool_->acquire();
+        if (!wrapper) {
+            return pushed > 0;
         }
-        wrappers[i]->func = tasks[i];
-    }
 
-    if (!queue_->push_batch(wrappers.data(), count, pushed)) {
-        for (size_t i = 0; i < count; ++i) {
-            task_pool_->release(wrappers[i]);
+        // func assignment before push: exception here releases this wrapper and returns
+        try {
+            wrapper->func = tasks[i];
+        } catch (...) {
+            task_pool_->release(wrapper);
+            return pushed > 0;
         }
-        return false;
-    }
 
-    if (pushed < count) {
-        for (size_t i = pushed; i < count; ++i) {
-            task_pool_->release(wrappers[i]);
+        if (!queue_->push(wrapper)) {
+            task_pool_->release(wrapper);
+            return pushed > 0;
         }
+
+        ++pushed;
     }
 
     return true;

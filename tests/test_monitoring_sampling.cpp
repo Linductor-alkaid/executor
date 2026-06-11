@@ -84,8 +84,13 @@ TEST(LockFreeQueueStatsTest, BatchStats) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     auto stats = executor.get_queue_stats();
+    // P-004 changed push_tasks_batch from a single queue_->push_batch() call
+    // to a per-item loop of queue_->push() (to support partial-success
+    // exception safety). So batch_pushes stays at 0 and total_pushes
+    // reflects per-item increments.
     EXPECT_EQ(stats.total_pushes, 50);
-    EXPECT_EQ(stats.batch_pushes, 1);
+    EXPECT_EQ(stats.batch_pushes, 0u);
+    // worker_thread still uses pop_batch, so batch_pops > 0.
     EXPECT_GE(stats.batch_pops, 1);
 
     executor.stop();
