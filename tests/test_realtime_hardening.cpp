@@ -3,6 +3,11 @@
 #include <string>
 #include <fstream>
 #include <thread>
+#include <set>
+#include <vector>
+#include <memory>
+#include <atomic>
+#include <chrono>
 
 // 包含线程工具头文件
 #include "executor/util/thread_utils.hpp"
@@ -182,6 +187,71 @@ bool test_explicit_realtime_cpu_affinity_is_respected() {
     return true;
 }
 
+// P-005: with the round-robin hint, when multiple RT threads are started
+// in sequence with empty (adaptive) cpu_affinity, they should be spread
+// across different cores — not all stuck on cpu 0.
+bool test_realtime_round_robin_auto_affinity() {
+    std::cout << "Testing RT threads round-robin across cores (P-005)..." << std::endl;
+
+    unsigned hw = std::thread::hardware_concurrency();
+    if (hw < 2) {
+        std::cout << "  skipped (hw_concurrency < 2)" << std::endl;
+        return true;
+    }
+
+    // We capture the affinity of each RT worker via its cycle_callback
+    // (runs inside the worker thread itself). The first cycle after
+    // start() runs the callback once; we read once and latch.
+    constexpr int kThreads = 4;
+    std::vector<std::unique_ptr<executor::RealtimeThreadExecutor>> execs;
+    std::vector<std::atomic<bool>> captured(kThreads);
+    std::vector<std::vector<int>> affinities(kThreads);
+    std::vector<std::atomic<bool>> first_cycle_done(kThreads);
+    for (int i = 0; i < kThreads; ++i) {
+        captured[i].store(false);
+        first_cycle_done[i].store(false);
+    }
+
+    for (int i = 0; i < kThreads; ++i) {
+        executor::RealtimeThreadConfig cfg;
+        cfg.cycle_period_ns = 1'000'000;  // 1ms
+        // lambda runs on the RT worker thread; capture this thread's affinity
+        cfg.cycle_callback = [&, i]() {
+            if (!captured[i].exchange(true)) {
+                affinities[i] = executor::util::get_current_thread_affinity();
+                first_cycle_done[i].store(true);
+            }
+        };
+        execs.push_back(std::make_unique<executor::RealtimeThreadExecutor>(
+            "p005_rt_" + std::to_string(i), cfg));
+        TEST_ASSERT(execs.back()->start(), "RT executor should start");
+    }
+
+    // Wait for all RT workers to have latched their affinity
+    for (int i = 0; i < kThreads;) {
+        if (first_cycle_done[i].load()) ++i;
+        else std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    // Stop them
+    for (auto& e : execs) e->stop();
+
+    // Verify: at least two distinct affinity masks were observed
+    // (i.e. threads were NOT all bunched on a single core).
+    std::set<std::vector<int>> distinct;
+    for (int i = 0; i < kThreads; ++i) {
+        distinct.insert(affinities[i]);
+    }
+    TEST_ASSERT(distinct.size() >= 2,
+                "Round-robin affinity should spread across >=2 cores, got " +
+                std::to_string(distinct.size()));
+
+    std::cout << "  round-robin auto-affinity: " << kThreads
+              << " RT threads, " << distinct.size() << " distinct cores (hw="
+              << hw << ")" << std::endl;
+    return true;
+}
+
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Realtime Hardening Tests" << std::endl;
@@ -197,6 +267,7 @@ int main() {
     all_passed &= test_realtime_priority_adaptive();
     all_passed &= test_default_realtime_cpu_affinity_is_adaptive_sentinel();
     all_passed &= test_explicit_realtime_cpu_affinity_is_respected();
+    all_passed &= test_realtime_round_robin_auto_affinity();
 
     std::cout << std::endl;
     std::cout << "========================================" << std::endl;
