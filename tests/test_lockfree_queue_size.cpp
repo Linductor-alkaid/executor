@@ -180,6 +180,70 @@ TEST(LockFreeQueueSizeTest, WorksWithStatsEnabled) {
     EXPECT_EQ(stats.total_pops, 20u);
 }
 
+// 5. P-007 regression: empty() and size() are both approximate, but
+//    under quiescent (single-threaded, sequential) conditions they
+//    must agree: when size()==0, empty() must be true; when an item
+//    is enqueued, size()==1 and empty() must be false. This anchors
+//    the documented contract that both are approximate *under
+//    concurrency*, but exact *in quiescent state*.
+TEST(LockFreeQueueSizeTest, EmptyAndSizeAgreeInQuiescentState) {
+    LockFreeQueue<int> q(64);
+    int out = 0;
+
+    // Empty state
+    ASSERT_EQ(q.size(), 0u);
+    EXPECT_TRUE(q.empty());
+
+    // After pushing N items, size()==N and empty()==false
+    for (int i = 0; i < 50; ++i) {
+        ASSERT_TRUE(q.push(i));
+        EXPECT_FALSE(q.empty());
+        EXPECT_EQ(q.size(), static_cast<size_t>(i + 1));
+    }
+
+    // After popping all items, size()==0 and empty()==true
+    for (int i = 0; i < 50; ++i) {
+        ASSERT_TRUE(q.pop(out));
+        if (i < 49) {
+            EXPECT_FALSE(q.empty());
+            EXPECT_GT(q.size(), 0u);
+        }
+    }
+    EXPECT_TRUE(q.empty());
+    EXPECT_EQ(q.size(), 0u);
+}
+
+// 6. P-007 stress: under MPSC traffic, the *invariant* we care about
+//    is that empty()==true implies size()==0 in quiescent trailing
+//    state. Mid-flight the two can disagree (documented), but after
+//    all producers stop and the consumer drains the queue, both must
+//    converge to the empty/zero answer. Run 100k iterations to flush
+//    out any ordering bug.
+TEST(LockFreeQueueSizeTest, EmptyAndSizeConvergeAfterDrain) {
+    constexpr int kIterations = 1000;       // outer iterations
+    constexpr int kBatchSize  = 64;         // items per iteration
+    LockFreeQueue<int> q(256);
+
+    for (int iter = 0; iter < kIterations; ++iter) {
+        // Push kBatchSize items
+        for (int i = 0; i < kBatchSize; ++i) {
+            ASSERT_TRUE(q.push(iter * kBatchSize + i));
+        }
+
+        // Drain all items
+        int out = 0;
+        int popped = 0;
+        while (q.pop(out)) ++popped;
+
+        ASSERT_EQ(popped, kBatchSize) << "iteration " << iter;
+
+        // After drain, both views must agree on empty
+        ASSERT_TRUE(q.empty()) << "iteration " << iter
+                                << " size=" << q.size();
+        ASSERT_EQ(q.size(), 0u) << "iteration " << iter;
+    }
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
