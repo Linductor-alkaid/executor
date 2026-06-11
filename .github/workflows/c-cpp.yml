@@ -101,6 +101,10 @@ jobs:
 
     - name: 运行测试
       working-directory: build
+      env:
+        # Code Coverage build 在 2 vCPU runner 上,mlockall(MCL_CURRENT|MCL_FUTURE)
+        # 会触发 OOM-killer。test_realtime_hardening 尊重这个 env 跳过 mlock 调用。
+        EXECUTOR_TEST_NO_MLOCKALL: 1
       run: ctest --output-on-failure
 
     - name: 生成覆盖率报告
