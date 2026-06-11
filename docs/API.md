@@ -298,21 +298,107 @@ exec.stop();
 ```cpp
 class LockFreeTaskExecutor {
 public:
-    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024);
+    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024,
+                                  size_t backoff_multiplier = 2,
+                                  bool enable_stats = false);
     ~LockFreeTaskExecutor();
 
     bool start();                                    // 启动消费者线程
     void stop();                                     // 停止并等待
     bool is_running() const;                         // 检查运行状态
 
-    bool push_task(std::function<void()> task);      // 提交任务（线程安全）
+    // 单任务提交（线程安全，支持多生产者并发）
+    bool push_task(std::function<void()> task);
+
+    // 批量提交（尽力推送，可能部分成功）
+    // tasks: 任务数组指针；count: 数组长度；pushed: 实际入队任务数（输出）
+    // 返回值：true = 所有内部资源申请成功（pushed 可能 < count）；
+    //         false = 内部对象池耗尽，已申请的部分已回收，pushed 保持 0
+    bool push_tasks_batch(const std::function<void()>* tasks,
+                          size_t count,
+                          size_t& pushed);
 
     size_t pending_count() const;                    // 队列中待处理任务数（近似值）
     uint64_t processed_count() const;                // 已处理任务总数
+
+    QueueStats get_queue_stats() const;              // 队列性能统计（需 enable_stats=true）
 };
 ```
 
-### 5.5 性能特性
+#### `push_tasks_batch` 详解
+
+| 项目 | 说明 |
+|------|------|
+| 时间复杂度 | O(count)，一次性申请所有 TaskWrapper，然后调用 `queue_->push_batch` |
+| 线程安全 | 与 `push_task` 相同，线程安全，可多生产者并发调用 |
+| 部分成功 | 队列剩余空间 < count 时，`pushed` 会小于 count；未入队的 wrapper 自动回收 |
+| 返回 false 时机 | 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；此时不会有任何任务入队 |
+
+**典型用法：**
+
+```cpp
+executor::LockFreeTaskExecutor exec(4096);
+exec.start();
+
+// 准备批量任务
+std::vector<std::function<void()>> tasks;
+tasks.reserve(100);
+for (int i = 0; i < 100; ++i) {
+    tasks.push_back([i]() { process(i); });
+}
+
+// 批量提交，检查实际入队数
+size_t pushed = 0;
+bool ok = exec.push_tasks_batch(tasks.data(), tasks.size(), pushed);
+if (!ok) {
+    // 对象池耗尽，没有任何任务入队，需要等待或降级处理
+} else if (pushed < tasks.size()) {
+    // 队列空间不足，部分任务未入队
+    // tasks[pushed..] 需要重试或丢弃
+}
+```
+
+### 5.5 软超时（Soft Timeout）语义
+
+> **适用范围**：本节描述 `ThreadPool`（`task_timeout_ms`）的软超时行为，`LockFreeTaskExecutor` 不涉及超时机制。
+
+`task_timeout_ms` 是**软超时（soft timeout）**：
+
+1. **仅在任务开始执行前检查**：线程池工作线程在执行任务前，计算 `now - submit_time`。若 elapsed ≥ timeout，则跳过该任务并将 `timeout_count` 加 1（记录在 `TaskStatistics::timeout_count`）。
+
+2. **不会中断正在运行的任务**：一旦任务函数开始执行，不论耗时多久，线程池都不会强制中断它。C++ 标准库没有安全的线程终止机制；强制 kill 线程会导致锁、内存等资源泄漏。
+
+3. **建议用户在任务内部检查取消条件**：若任务本身耗时较长，应在任务函数内部自行检查时间戳或取消标志：
+
+```cpp
+executor::ThreadPoolConfig cfg;
+cfg.task_timeout_ms = 100;  // 100 ms 软超时
+
+// 任务内部自检示例
+auto submit_time = std::chrono::steady_clock::now();
+exec.submit([submit_time]() {
+    // 长任务内部定期检查
+    for (int step = 0; step < 1000; ++step) {
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - submit_time).count() > 90) {
+            return;  // 主动退出，留 10 ms 余量
+        }
+        do_work_step(step);
+    }
+});
+```
+
+4. **实现依据**：见 `src/executor/thread_pool/thread_pool.cpp:172`，注释原文：
+
+> *P024 soft timeout: check elapsed time BEFORE execution. If elapsed >= timeout at execution start, skip the task entirely and record it as timed out. This is a pre-execution check only — C++ has no safe mechanism to forcefully kill a running thread, so in-progress tasks are never interrupted.*
+
+| 行为 | 是否触发 |
+|------|---------|
+| 任务排队超时，执行前检测到 | ✅ skip + timeout_count++ |
+| 任务已开始执行，运行中超时 | ❌ 不中断，继续执行至完成 |
+| `task_timeout_ms = 0` | ❌ 不检查超时（默认行为） |
+
+### 5.6 性能特性（LockFreeTaskExecutor）
 
 #### 单生产者性能（SPSC）
 
@@ -337,7 +423,7 @@ public:
 - 2个生产者性能下降可控（35% 效率）
 - 4+ 生产者因 CAS 竞争导致效率显著下降
 
-### 5.6 最佳实践
+### 5.7 最佳实践
 
 #### ✅ 推荐做法
 
@@ -498,7 +584,7 @@ public:
 };
 ```
 
-### 5.7 异常行为和故障排查
+### 5.8 异常行为和故障排查
 
 #### 常见问题
 
@@ -588,7 +674,7 @@ exec.push_task([&exec]() {
 exec.stop();
 ```
 
-### 5.8 性能调优建议
+### 5.9 性能调优建议
 
 1. **队列容量**：根据峰值任务频率设置，避免频繁队列满
 2. **生产者数量**：优先使用 1-2 个生产者
