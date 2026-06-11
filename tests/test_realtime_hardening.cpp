@@ -12,6 +12,7 @@
 // 包含线程工具头文件
 #include "executor/util/thread_utils.hpp"
 #include "executor/config.hpp"
+#include "executor/realtime_thread_executor.hpp"
 
 #ifdef __linux__
 #include <unistd.h>
