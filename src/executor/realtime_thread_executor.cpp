@@ -42,12 +42,19 @@ bool RealtimeThreadExecutor::start() {
         // 将定时器精度设置为1ms（默认是15.6ms）
         // 注意：这会增加系统功耗，但提高定时精度
         if (config_.cycle_period_ns < 20000000) {  // 如果周期小于20ms
-            timer_period_ms_ = 1;
+            timer_period_ms_.store(1, std::memory_order_relaxed);
             timeBeginPeriod(1);
         }
 #endif
         
         // 自适应 priority: 用户未显式设 (== 0) 时, 按周期建议
+        // 使用 pthread_self()/GetCurrentThread() 而非 thread_.native_handle()，
+        // 避免与主线程的 thread_ move-assign 产生 data race.
+#ifdef _WIN32
+        auto self_handle = static_cast<std::thread::native_handle_type>(GetCurrentThread());
+#else
+        auto self_handle = pthread_self();
+#endif
         if (config_.thread_priority == 0 && config_.cycle_period_ns > 0) {
             int auto_priority = 0;
             if (config_.cycle_period_ns <= 1'000'000) {        // <= 1ms
@@ -56,11 +63,11 @@ bool RealtimeThreadExecutor::start() {
                 auto_priority = 50;  // 软实时, 中周期
             }  // > 10ms 保持 0 (普通调度够用)
             if (auto_priority > 0) {
-                util::set_thread_priority(thread_.native_handle(), auto_priority);
+                util::set_thread_priority(self_handle, auto_priority);
             }
         } else if (config_.thread_priority != 0) {
             // 用户显式设了, 尊重覆盖
-            util::set_thread_priority(thread_.native_handle(), config_.thread_priority);
+            util::set_thread_priority(self_handle, config_.thread_priority);
         }
 
         // CPU 亲和性: 空 = 自适应 sentinel, 按 hw_concurrency 自动选核; 显式设值尊重覆盖
@@ -69,10 +76,10 @@ bool RealtimeThreadExecutor::start() {
             if (hw >= 2) {
                 // 简单策略: 绑到核 0. 多 rt 线程场景用户可显式覆盖 cpu_affinity.
                 // hw == 1 不绑, 避免争抢唯一核心; hw == 0 (探测失败) 同样不绑.
-                util::set_cpu_affinity(thread_.native_handle(), {0});
+                util::set_cpu_affinity(self_handle, {0});
             }
         } else {
-            util::set_cpu_affinity(thread_.native_handle(), config_.cpu_affinity);
+            util::set_cpu_affinity(self_handle, config_.cpu_affinity);
         }
 
         // 锁定内存，避免分页到 swap 引入抖动（默认开启，失败静默回退；用户可显式设 false 关闭）
@@ -133,9 +140,9 @@ void RealtimeThreadExecutor::stop() {
         
 #ifdef _WIN32
         // 恢复Windows定时器精度
-        if (timer_period_ms_ > 0) {
-            timeEndPeriod(timer_period_ms_);
-            timer_period_ms_ = 0;
+        if (timer_period_ms_.load(std::memory_order_relaxed) > 0) {
+            timeEndPeriod(timer_period_ms_.load(std::memory_order_relaxed));
+            timer_period_ms_.store(0, std::memory_order_relaxed);
         }
 #endif
     }

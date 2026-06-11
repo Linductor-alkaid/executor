@@ -26,6 +26,18 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)
 
+# ThreadSanitizer 顶层开关（不依赖 Debug 构建类型）
+option(EXECUTOR_ENABLE_TSAN "Enable ThreadSanitizer (-fsanitize=thread)" OFF)
+if(EXECUTOR_ENABLE_TSAN)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
+        add_link_options(-fsanitize=thread)
+        message(STATUS "ThreadSanitizer enabled")
+    else()
+        message(WARNING "EXECUTOR_ENABLE_TSAN is only supported with GCC/Clang")
+    endif()
+endif()
+
 # 可选：包含 Sanitizers（用于调试构建）
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     include(Sanitizers OPTIONAL)
