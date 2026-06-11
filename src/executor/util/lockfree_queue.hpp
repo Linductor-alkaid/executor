@@ -210,6 +210,19 @@ public:
         return popped;
     }
 
+    /**
+     * @brief 判断队列是否为空（消费者就绪检查，近似值）
+     *
+     * 实现基于 sequences_ 视角：检查下一个待消费槽位的序列号。
+     * 在 push 完成后（sequences_[i] 已 release store 新值）且该槽位尚未被 pop 消费时，
+     * 此方法返回 false；在 pop 完成（sequences_[i] 被回填为 pos+capacity）后返回 true。
+     *
+     * **与 size() 的语义差异（260611P007 文档化）**：
+     *   - `empty()` 是消费者就绪检查（用于 pop 前判空），基于 sequences_ 视角
+     *   - `size()`  是容量统计（基于 enqueue_pos_ - dequeue_pos_ 计数）
+     *   - 两者均为近似值，在并发下可能短暂给出不一致结论（empty() 为 true 时 size() 仍 > 0，
+     *     或反之），不可用于精确同步。若需严格判空，应使用 `pop()` 的返回值而非 `empty()`。
+     */
     bool empty() const {
         size_t pos = dequeue_pos_.load(std::memory_order_relaxed);
         size_t index = pos & mask_;
@@ -234,6 +247,11 @@ public:
      *
      * 在弱序架构 (ARM/POWER) 上的端到端正确性需要 CI 验证,本机 x86_64
      * TSO 模型下能掩盖此问题。
+     *
+     * **与 empty() 的语义差异（260611P007 文档化）**：本方法基于 enqueue_pos_/dequeue_pos_
+     * 计数（容量统计视角），而 `empty()` 基于 sequences_（消费者就绪视角）。两者均为近似值，
+     * 并发下可能短暂不一致。LockFreeTaskExecutor::pending_count() 本质上即调用本方法，
+     * 故 pending_count() 也是近似值，不可用于精确同步。
      */
     size_t size() const {
         size_t enq = enqueue_pos_.load(std::memory_order_acquire);
