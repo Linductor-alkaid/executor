@@ -32,15 +32,21 @@ class RealtimeThreadExecutor : public IRealtimeExecutor {
 public:
     /**
      * @brief 构造函数
-     * 
+     *
      * @param name 执行器名称
      * @param config 实时线程配置
+     * @param enable_stats 是否启用 LockFreeQueue 内部统计 (failed_pushes / peak_queue_size).
+     *                     默认 false (零开销路径); P-001 (260615) 测试与生产监控建议 true.
+     * @param queue_capacity RT 无锁队列容量 (默认 1024, 与既有行为兼容).
      */
-    RealtimeThreadExecutor(const std::string& name, const RealtimeThreadConfig& config);
+    explicit RealtimeThreadExecutor(const std::string& name,
+                                    const RealtimeThreadConfig& config,
+                                    bool enable_stats = false,
+                                    size_t queue_capacity = 1024);
 
     /**
      * @brief 析构函数
-     * 
+     *
      * 自动停止执行器并等待线程结束
      */
     ~RealtimeThreadExecutor();
@@ -69,12 +75,23 @@ public:
 
     /**
      * @brief 推送任务到无锁队列（在周期回调中处理）
-     * 
+     *
      * 任务通过无锁队列传递，在实时线程的下一个周期回调中执行。
-     * 
+     * P-001 (260615): 队列满 或 对象池耗尽 时静默丢弃, dropped_task_count_++
+     * (始终累计, 不依赖 enable_stats). 调用方必须通过 get_status()
+     * 观察 dropped_task_count 与 failed_pushes.
+     *
      * @param task 任务函数
      */
     void push_task(std::function<void()> task) override;
+
+    /**
+     * @brief 推送任务并回传是否成功 (P-001 260615)
+     *
+     * 走与 push_task 完全相同的路径, 但返回值真实反映该次 push 的成败
+     * (无 toctou). 同时 dropped_task_count_ 同步累加 (失败时).
+     */
+    bool push_task_ex(std::function<void()> task) override;
 
     /**
      * @brief 获取执行器名称
@@ -146,6 +163,12 @@ private:
     std::atomic<int64_t> cycle_timeout_count_{0};   // 周期超时计数
     std::atomic<double> avg_cycle_time_ns_{0.0};    // 平均周期执行时间（纳秒）
     std::atomic<double> max_cycle_time_ns_{0.0};   // 最大周期执行时间（纳秒）
+
+    // P-001 (260615): 背压可见性 — 始终累计, 与 enable_stats 无关.
+    // 队列满 / 对象池耗尽 任一路径触发 drop 时 +1.
+    std::atomic<uint64_t> dropped_task_count_{0};
+    // P-001 (260615): 构造时指定的统计开关, push_task() 路径不依赖此开关.
+    const bool enable_stats_;
     
 #ifdef _WIN32
     std::atomic<unsigned int> timer_period_ms_{0};  // Windows定时器精度设置（毫秒），用于timeBeginPeriod/timeEndPeriod
