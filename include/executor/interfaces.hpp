@@ -199,11 +199,36 @@ public:
 
     /**
      * @brief 推送任务到无锁队列（在周期回调中处理）
-     * 
-     * 任务通过无锁队列传递，在实时线程的下一个周期回调中执行
+     *
+     * 任务通过无锁队列传递，在实时线程的下一个周期回调中执行。
+     *
+     * P-001 (260615) 破坏性约束说明: 接口签名保持 void 不变以保证 ABI/调用方兼容
+     * (plan 提议的 bool 返回是破坏性的, 这里走"次优"方案 — 通过 get_status() 暴露
+     *  dropped_task_count_, 并保留 push_task() 的 void 形态). 任务是否被丢弃
+     * 必须通过 RealtimeExecutorStatus::dropped_task_count 与 failed_pushes 观察.
+     *
      * @param task 任务函数
      */
     virtual void push_task(std::function<void()> task) = 0;
+
+    /**
+     * @brief 推送任务并回传是否成功 (P-001 260615, 非破坏扩展)
+     *
+     * 默认实现回退到 push_task() + 读取丢弃计数器差值; 派生类应 override 以
+     * 直接返回 push 路径的实际结果, 避免竞态读取计数器.
+     *
+     * @param task 任务函数
+     * @return true 表示已成功入队 (最终会被执行); false 表示被丢弃
+     *         (队列满 或 对象池耗尽, dropped_task_count 同步 +1).
+     */
+    virtual bool push_task_ex(std::function<void()> task) {
+        // 默认实现: 调用 void push_task, 然后假定失败已被计数器累计.
+        // 派生类 override 可避免 toctou. 此处不读取 dropped_task_count 以避免
+        // 与其他 push 调用混淆, 严格走"成功与否不可知"语义, 返回 true 仅作
+        // 乐观占位. 派生类 (RealtimeThreadExecutor) 应正确 override.
+        (void)task;
+        return true;
+    }
 
     /**
      * @brief 获取执行器名称

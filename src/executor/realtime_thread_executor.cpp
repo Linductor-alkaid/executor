@@ -15,11 +15,15 @@ static std::atomic<unsigned> g_next_rt_cpu_hint{0};
 
 namespace executor {
 
-RealtimeThreadExecutor::RealtimeThreadExecutor(const std::string& name, const RealtimeThreadConfig& config)
+RealtimeThreadExecutor::RealtimeThreadExecutor(const std::string& name,
+                                             const RealtimeThreadConfig& config,
+                                             bool enable_stats,
+                                             size_t queue_capacity)
     : name_(name)
     , config_(config)
-    , lockfree_queue_(1024)
-    , task_pool_(1024)
+    , lockfree_queue_(queue_capacity, 1, enable_stats)
+    , task_pool_(queue_capacity)
+    , enable_stats_(enable_stats)
 {
     // 验证配置
     if (config_.cycle_period_ns <= 0) {
@@ -160,20 +164,38 @@ std::string RealtimeThreadExecutor::get_name() const {
 }
 
 void RealtimeThreadExecutor::push_task(std::function<void()> task) {
-    if (task) {
-        // 从对象池获取任务对象
-        TaskWrapper* task_wrapper = task_pool_.acquire();
-        if (task_wrapper) {
-            task_wrapper->func = std::move(task);
+    // P-001 (260615): 保留 void 接口, 调用方应改用 push_task_ex 或 get_status().
+    (void)push_task_ex(std::move(task));
+}
 
-            // 推送到无锁队列
-            if (!lockfree_queue_.push(task_wrapper)) {
-                // 队列满，释放回对象池
-                task_pool_.release(task_wrapper);
-            }
-        }
-        // 如果对象池耗尽，任务被丢弃
+bool RealtimeThreadExecutor::push_task_ex(std::function<void()> task) {
+    // P-001 (260615): 三条失败路径全部计入 dropped_task_count_ —
+    //   (1) task 为空 (无效输入)
+    //   (2) 对象池耗尽 (task_pool_.acquire() == nullptr)
+    //   (3) 队列满 (lockfree_queue_.push() == false)
+    // 此计数器独立于 enable_stats, 是背压可见性的核心契约.
+    if (!task) {
+        dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
+        return false;
     }
+
+    // 从对象池获取任务对象
+    TaskWrapper* task_wrapper = task_pool_.acquire();
+    if (!task_wrapper) {
+        // 对象池耗尽: 任务被静默丢弃
+        dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    task_wrapper->func = std::move(task);
+
+    // 推送到无锁队列
+    if (!lockfree_queue_.push(task_wrapper)) {
+        // 队列满: 释放回对象池, 任务被静默丢弃
+        task_pool_.release(task_wrapper);
+        dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    return true;
 }
 
 void RealtimeThreadExecutor::simple_cycle_loop() {
@@ -308,6 +330,19 @@ RealtimeExecutorStatus RealtimeThreadExecutor::get_status() const {
     status.cycle_timeout_count = cycle_timeout_count_.load(std::memory_order_acquire);
     status.avg_cycle_time_ns = avg_cycle_time_ns_.load(std::memory_order_acquire);
     status.max_cycle_time_ns = max_cycle_time_ns_.load(std::memory_order_acquire);
+    // P-001 (260615): 背压可见性
+    status.dropped_task_count = dropped_task_count_.load(std::memory_order_acquire);
+    // failed_pushes / peak_queue_size 仅在 enable_stats=true 时有意义;
+    // LockFreeQueue 内部在 stats 关闭时 get_stats() 返回零结构.
+    if (enable_stats_) {
+        auto qstats = lockfree_queue_.get_stats();
+        status.failed_pushes = qstats.failed_pushes;
+        status.peak_queue_size = qstats.peak_size;
+    }
+    // queue_capacity 永远等于构造时的固定容量; 暴露以方便比率分析
+    // (dropped / capacity 间接表达"队列满导致丢弃"的最小次数, 因对象池
+    //  容量 == 队列容量, 池耗尽与队列满通常同时发生).
+    status.queue_capacity = lockfree_queue_.capacity();
     return status;
 }
 
