@@ -104,10 +104,6 @@ TEST(LockFreeTaskExecutorTest, StopWithPendingTasks) {
     EXPECT_EQ(exec.processed_count(), 50);
 }
 
-// Verify that push_tasks_batch is exception-safe:
-// - no pool leak when std::function copy throws during assignment
-// - no crash (ASAN: no heap-use-after-free)
-// - partial-push returns pushed > 0 and executor remains usable
 TEST(LockFreeTaskExecutorTest, BatchExceptionSafety) {
     // The original P-004 design used a custom ThrowOnCopy wrapper that
     // threw from its copy ctor to simulate an exception during
@@ -167,4 +163,18 @@ TEST(LockFreeTaskExecutorTest, BatchExceptionSafety) {
     EXPECT_EQ(ran.load(), 8);
 
     exec.stop();
+}
+
+// Verify that passing capacity=0 throws before any resource is committed,
+// and that no memory is leaked when the second allocation in the constructor
+// initializer list would fail (unique_ptr ensures the first allocation is
+// freed automatically if the second throws).
+TEST(LockFreeTaskExecutorTest, ConstructorLeakTest) {
+    // capacity=0 causes ObjectPool to throw std::invalid_argument.
+    // With unique_ptr ownership, LockFreeQueue is destroyed automatically
+    // before the exception propagates — no leak.
+    EXPECT_THROW(
+        { LockFreeTaskExecutor exec(0); },
+        std::invalid_argument
+    );
 }
