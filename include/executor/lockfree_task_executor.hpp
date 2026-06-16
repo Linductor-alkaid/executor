@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <thread>
 #include <atomic>
 #include <cstddef>
@@ -110,8 +111,8 @@ private:
 
     void worker_thread();
 
-    util::LockFreeQueue<TaskWrapper*>* queue_;
-    util::ObjectPool<TaskWrapper>* task_pool_;
+    std::unique_ptr<util::LockFreeQueue<TaskWrapper*>> queue_;
+    std::unique_ptr<util::ObjectPool<TaskWrapper>> task_pool_;
 
     std::thread worker_;
     std::atomic<bool> running_{false};

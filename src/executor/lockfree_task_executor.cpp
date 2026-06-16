@@ -16,14 +16,12 @@
 namespace executor {
 
 LockFreeTaskExecutor::LockFreeTaskExecutor(size_t queue_capacity, size_t backoff_multiplier, bool enable_stats)
-    : queue_(new util::LockFreeQueue<TaskWrapper*>(queue_capacity, backoff_multiplier, enable_stats))
-    , task_pool_(new util::ObjectPool<TaskWrapper>(queue_capacity)) {
+    : queue_(std::make_unique<util::LockFreeQueue<TaskWrapper*>>(queue_capacity, backoff_multiplier, enable_stats))
+    , task_pool_(std::make_unique<util::ObjectPool<TaskWrapper>>(queue_capacity)) {
 }
 
 LockFreeTaskExecutor::~LockFreeTaskExecutor() {
     stop();
-    delete queue_;
-    delete task_pool_;
 }
 
 bool LockFreeTaskExecutor::start() {
