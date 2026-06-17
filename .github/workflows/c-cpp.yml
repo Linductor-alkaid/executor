@@ -70,6 +70,41 @@ jobs:
           build/tests/executor_*_test
         retention-days: 7
 
+  lockfree-tsan:
+    name: Ubuntu - GCC 11 - ThreadSanitizer lockfree
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 安装依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build g++-11
+        echo "CC=gcc-11" >> $GITHUB_ENV
+        echo "CXX=g++-11" >> $GITHUB_ENV
+
+    - name: 配置 CMake (ThreadSanitizer)
+      run: |
+        cmake -B build-tsan -G Ninja \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DEXECUTOR_BUILD_TESTS=ON \
+          -DEXECUTOR_BUILD_EXAMPLES=OFF \
+          -DEXECUTOR_ENABLE_GPU=OFF \
+          -DEXECUTOR_ENABLE_CUDA=OFF \
+          -DEXECUTOR_ENABLE_COVERAGE=OFF \
+          -DEXECUTOR_ENABLE_TSAN=ON
+
+    - name: 编译 LockFreeQueue 测试
+      run: cmake --build build-tsan --target test_lockfree_queue_size test_lockfree_mpsc_arm_stress -j
+
+    - name: 运行 LockFreeQueue TSAN 测试
+      working-directory: build-tsan
+      env:
+        TSAN_OPTIONS: halt_on_error=1:history_size=7:second_deadlock_stack=1
+      run: ctest --output-on-failure --verbose -R "test_lockfree_(queue_size|mpsc_arm_stress)"
+
   # 可选：代码覆盖率任务
   coverage:
     name: Code Coverage
