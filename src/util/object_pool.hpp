@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -61,11 +62,27 @@ public:
     void release(T* obj) {
         if (!obj) return;
 
-        Node* node = reinterpret_cast<Node*>(
-            reinterpret_cast<char*>(obj) - offsetof(Node, data)
-        );
-
         std::lock_guard<std::mutex> lock(mutex_);
+        Node* node = nullptr;
+        for (const auto& stored_node : storage_) {
+            if (&stored_node->data == obj) {
+                node = stored_node.get();
+                break;
+            }
+        }
+        assert(node && "ObjectPool::release called with a foreign pointer");
+        if (!node) return;
+
+        bool already_free = false;
+        for (Node* current = free_list_; current; current = current->next) {
+            if (current == node) {
+                already_free = true;
+                break;
+            }
+        }
+        assert(!already_free && "ObjectPool::release called more than once");
+        if (already_free) return;
+
         node->next = free_list_;
         free_list_ = node;
     }
