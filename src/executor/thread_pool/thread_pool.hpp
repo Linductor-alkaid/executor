@@ -124,10 +124,29 @@ public:
 
     /**
      * @brief 关闭线程池
-     * 
+     *
      * @param wait_for_tasks 是否等待所有任务完成（默认true）
      */
     void shutdown(bool wait_for_tasks = true);
+
+    /**
+     * @brief 重建工作线程本地队列（动态扩缩容 API）
+     *
+     * P-260617-002: 在 unique_lock(local_queues_mutex_) 排他窗口内重建
+     * local_queues_ 与 worker_ids_，与 worker_thread 的 shared_lock
+     * 配对，防止 vector reallocation 期间 worker 访问到悬空引用 / UAF。
+     *
+     * 调用方应先通过 resizer / 外部逻辑保证无 worker 正在访问旧 vector。
+     * 当前实现：在 unique_lock 下将旧 vector 与新 vector 整体 swap，
+     * 旧 vector 在持锁窗口结束后被析构（WorkerQueueImpl 的不可移动 mutex
+     * 通过 placement-new 重建的初始化路径由 initialize() 提供；运行时
+     * 仅做 clear + 重新构造 placement-new 元素，保持接口简单且与
+     * initialize() 路径一致）。
+     *
+     * @param new_num_queues 新的本地队列数量（与 worker 数一致）
+     * @return 成功返回 true
+     */
+    bool resize_local_queues(size_t new_num_queues);
 
     /**
      * @brief 等待所有任务完成
@@ -191,14 +210,23 @@ private:
 
     /**
      * @brief 尝试工作窃取
-     * 
+     *
      * 当本地队列为空时，从其他线程的本地队列窃取任务。
-     * 
+     *
      * @param worker_id 当前工作线程ID
      * @param task 用于接收窃取的任务
      * @return 成功窃取返回 true
      */
     bool try_steal_task(size_t worker_id, Task& task);
+
+    /**
+     * @brief try_steal_task 的内部实现
+     *
+     * P-260617-002: 假设调用方已持 shared_lock(local_queues_mutex_)。
+     * worker_thread 的 condition_.wait 谓词需要"已持 shared_lock 时
+     * 也能调窃取逻辑"，因此拆出本函数避免 std::shared_mutex 重入 UB。
+     */
+    bool try_steal_task_impl(size_t worker_id, Task& task);
 
     /**
      * @brief 检查线程是否需要退出（用于缩容）
@@ -232,7 +260,7 @@ private:
     // 工作线程本地队列
     std::vector<WorkerQueueImpl> local_queues_;
     // 260610P012: 专门保护 local_queues_ 的 shared_mutex
-    // - steal 持 shared_lock(并发读)
+    // - steal / worker 持 shared_lock(并发读)
     // - resize / shutdown 持 unique_lock(排他写)
     // 这样既消除 UAF,又允许多个 steal 线程并发。
     mutable std::shared_mutex local_queues_mutex_;

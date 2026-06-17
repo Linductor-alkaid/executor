@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <memory>
 #include <tuple>
+#include <shared_mutex>
 
 namespace executor {
 
@@ -50,13 +51,18 @@ public:
      * @param balancer 负载均衡器引用
      * @param scheduler 优先级调度器引用
      * @param local_queues 工作线程本地队列数组引用
+     * @param local_queues_mutex 保护 local_queues_ 的 shared_mutex 指针
+     *        (P-260617-002: dispatch 路径持 shared_lock，与 resize 路径
+     *        的 unique_lock 配对，防 vector element 重建期间悬空访问)
      */
     TaskDispatcher(LoadBalancer& balancer,
                    PriorityScheduler& scheduler,
-                   std::vector<QueueT>& local_queues)
+                   std::vector<QueueT>& local_queues,
+                   std::shared_mutex* local_queues_mutex = nullptr)
         : balancer_(balancer)
         , scheduler_(scheduler)
-        , local_queues_(local_queues) {}
+        , local_queues_(local_queues)
+        , local_queues_mutex_(local_queues_mutex) {}
 
     /**
      * @brief 析构函数
@@ -78,6 +84,13 @@ public:
      * @return 成功分发返回 true，调度器为空返回 false
      */
     bool dispatch() {
+        // P-260617-002: 持 shared_lock 保护 local_queues_ 访问，与 resize 路径的
+        // unique_lock 配对。注意：RAII wrapper 保证所有 return 路径都释放锁。
+        std::unique_ptr<std::shared_lock<std::shared_mutex>> lq_lock;
+        if (local_queues_mutex_) {
+            lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
+        }
+
         Task task;
 
         // 从调度器获取任务
@@ -119,6 +132,12 @@ public:
      * @return 成功分发返回 true
      */
     bool dispatch_task(const Task& task) {
+        // P-260617-002: 持 shared_lock 保护 local_queues_ 访问
+        std::unique_ptr<std::shared_lock<std::shared_mutex>> lq_lock;
+        if (local_queues_mutex_) {
+            lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
+        }
+
         // 使用负载均衡器选择目标工作线程
         size_t worker_id = balancer_.select_worker();
 
@@ -149,6 +168,13 @@ public:
      */
     size_t dispatch_batch(size_t max_tasks = 10) {
         if (max_tasks == 0 || local_queues_.empty()) return 0;
+
+        // P-260617-002: 持 shared_lock 保护 local_queues_ 访问整个函数体。
+        // 早返回的 0 路径不需要锁（仅读 size，无 race 风险）。
+        std::unique_ptr<std::shared_lock<std::shared_mutex>> lq_lock;
+        if (local_queues_mutex_) {
+            lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
+        }
 
         std::unique_ptr<Task[]> batch(new Task[max_tasks]);
         const size_t n = scheduler_.dequeue_batch(batch.get(), max_tasks);
@@ -202,6 +228,7 @@ private:
     LoadBalancer& balancer_;                      // 负载均衡器
     PriorityScheduler& scheduler_;                // 优先级调度器
     std::vector<QueueT>& local_queues_;           // 工作线程本地队列数组
+    std::shared_mutex* local_queues_mutex_;       // P-260617-002: 保护 local_queues_ 的 shared_mutex
 };
 
 } // namespace executor
