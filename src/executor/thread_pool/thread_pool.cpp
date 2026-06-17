@@ -65,8 +65,10 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
 #endif
     
     // 初始化任务分发器（TaskDispatcher 是模板类，需要显式指定实例化类型）
+    // P-260617-002: 传入 local_queues_mutex_ 指针,dispatcher 内部 dispatch
+    // 路径会持 shared_lock，与 resize 路径的 unique_lock 配对防 UAF。
     dispatcher_ = std::make_unique<TaskDispatcher<WorkerQueueImpl>>(
-        *load_balancer_, scheduler_, local_queues_
+        *load_balancer_, scheduler_, local_queues_, &local_queues_mutex_
     );
     
     // 初始化动态扩缩容控制器
@@ -94,26 +96,39 @@ void ThreadPool::worker_thread(size_t worker_id) {
     while (true) {
         Task task;
         bool has_task = false;
-        
+
         // 1. 优先从本地队列获取任务
-        if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
-            has_task = true;
+        // P-260617-002: 持 shared_lock(local_queues_mutex_)，与 resize/shutdown
+        // 路径的 unique_lock 配对，防止 vector reallocation 期间悬空访问。
+        {
+            std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+            if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
+                has_task = true;
+            }
         }
         // 2. 如果本地队列为空，尝试工作窃取
-        else if (config_.enable_work_stealing) {
+        // try_steal_task 内部已自行持 shared_lock(local_queues_mutex_)，
+        // 这里的 shared_lock 已释放，无嵌套问题。
+        if (!has_task && config_.enable_work_stealing) {
             has_task = try_steal_task(worker_id, task);
         }
-        
+
         // 3. 若无任务，加锁后等待；谓词内再次检查本地队列、窃取、全局队列、退出条件
+        // P-260617-002: 谓词持 shared_lock(local_queues_mutex_)。try_steal_task
+        // 拆为公开入口(持 shared_lock)与 impl(假设调用方已持)两个版本，谓词
+        // 调 impl 避免 std::shared_mutex 重入 UB。unique_lock(mutex_) 与
+        // shared_lock(shared_mutex) 是不同互斥量，不存在互感知。
         if (!has_task) {
             std::unique_lock<std::mutex> lock(mutex_);
             condition_.wait(lock, [this, &has_task, &task, worker_id]() {
+                std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
                 if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
                     has_task = true;
                     return true;
                 }
                 if (config_.enable_work_stealing) {
-                    has_task = try_steal_task(worker_id, task);
+                    // 调 impl: 当前线程已持 shared_lock，impl 不会再获取
+                    has_task = try_steal_task_impl(worker_id, task);
                     if (has_task) return true;
                 }
                 has_task = scheduler_.dequeue(task);
@@ -123,11 +138,14 @@ void ThreadPool::worker_thread(size_t worker_id) {
             });
             // 被 notify 唤醒但谓词未取到任务时，再试一次本地队列（可能刚被分发）
             // 即使 stop_ 为 true，也要检查本地队列以排空任务
+            // P-260617-002: predicate 内的 lq_lock 已随 lambda 析构，
+            // 此处重新加 shared_lock 后再访问。
             if (!has_task && worker_id < local_queues_.size()) {
+                std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
                 has_task = local_queues_[worker_id].pop(task);
             }
         }
-        
+
         // 执行任务（即使 stop_ 为 true，也要执行已获取的任务以排空队列）
         if (has_task) {
             // 检查任务是否已取消
@@ -139,20 +157,24 @@ void ThreadPool::worker_thread(size_t worker_id) {
                 // 任务被取消，也需要更新统计信息
                 completed_tasks_.fetch_add(1, std::memory_order_relaxed);
             }
-            
+
             // 更新负载信息
+            // P-260617-002: size() 必须持 shared_lock 访问 local_queues_
             if (worker_id < local_queues_.size() && load_balancer_) {
+                std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
                 size_t queue_size = local_queues_[worker_id].size();
                 load_balancer_->update_load(worker_id, queue_size, 0);
             }
         }
-        
+
         // 检查是否需要退出（缩容时）
         if (should_exit(worker_id) || (stop_.load() && !has_task)) {
             break;
         }
-        
+
         // 触发任务分发（从全局调度器分发到本地队列）
+        // P-260617-002: dispatcher 内部 dispatch_batch 自身已持 shared_lock，
+        // 此处不能再加 shared_lock（std::shared_mutex 不可重入 -> UB）。
         if (dispatcher_ && !stop_.load()) {
             size_t dispatched = dispatcher_->dispatch_batch(5);  // 批量分发，减少锁竞争
             // 如果成功分发了任务，唤醒等待的线程
@@ -245,9 +267,13 @@ ThreadPoolStatus ThreadPool::get_status() const {
                               : 0;
     
     // 队列大小 = 全局调度器 + 所有本地队列
+    // P-260617-002: 持 shared_lock 防止与并发 resize 数据竞争
     size_t local_queue_size = 0;
-    for (const auto& queue : local_queues_) {
-        local_queue_size += queue.size();
+    {
+        std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+        for (const auto& queue : local_queues_) {
+            local_queue_size += queue.size();
+        }
     }
     status.queue_size = scheduler_.size() + local_queue_size;
     
@@ -306,8 +332,50 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
 
         workers_.clear();
         worker_ids_.clear();
-        local_queues_.clear();
+        // P-260617-002: shutdown 时所有 worker 已 join 完毕，无并发 reader，
+        // 仍持 unique_lock 清空 local_queues_ 以与 worker 路径的 shared_lock
+        // 保持配对语义（reader 一律持 shared_lock，写者一律持 unique_lock）。
+        {
+            std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+            local_queues_.clear();
+        }
     });
+}
+
+bool ThreadPool::resize_local_queues(size_t new_num_queues) {
+    // P-260617-002: 公开 resize 入口。持 unique_lock(local_queues_mutex_)
+    // 排他窗口，与 worker_thread / dispatcher 的 shared_lock 配对。
+    //
+    // 设计取舍（已知局限，注释化保留供后续 plan 优化）:
+    // - WorkerQueueImpl 含 std::mutex 不可移动 / 不可拷贝。
+    //   std::vector<WorkerQueueImpl> 的 swap() 不要求 move/copy 元素，
+    //   但 TaskDispatcher 内部持有 `std::vector<QueueT>&` 引用，swap 后
+    //   dispatcher 仍引用旧 vector，触发"双 vector"不一致。完整修复需
+    //   把 local_queues_ 改 std::unique_ptr<std::vector<...>>，超出
+    //   P-002 范围，留作后续 plan。
+    // - 当前实现: P-002 范围内仅做"持 unique_lock 排他窗口"演示
+    //   writer-reader 互斥，不实际重建 element。重建 element 会
+    //   析构旧 WorkerLocalQueue 内的任务（P-002 测试不希望破坏既有
+    //   任务，原始 UAF 风险已被 shared_lock 防护消解）。
+    // - 真扩缩容（size 变化）在 P-002 范围内拒绝并返回 false，留给
+    //   后续 plan 重构为 unique_ptr<vector> 后再开放。
+    if (new_num_queues == 0) {
+        return false;
+    }
+    if (new_num_queues != local_queues_.size()) {
+        return false;
+    }
+
+    // 持 unique_lock 等待所有 shared_lock 释放：与 worker_thread / dispatcher
+    // 的 shared_lock 互斥。窗口内不做 element 重建（会摧毁任务），仅同步
+    // LoadBalancer 内部负载数组。
+    std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+
+    if (load_balancer_) {
+        load_balancer_->resize(new_num_queues);
+    }
+
+    return true;
 }
 
 void ThreadPool::wait_for_completion() {
@@ -333,9 +401,13 @@ void ThreadPool::wait_for_completion() {
             bool scheduler_empty = scheduler_.empty();
 
             // 检查所有本地队列是否为空
+            // P-260617-002: 持 shared_lock 防止与并发 resize 数据竞争
             size_t local_queue_total = 0;
-            for (const auto& queue : local_queues_) {
-                local_queue_total += queue.size();
+            {
+                std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+                for (const auto& queue : local_queues_) {
+                    local_queue_total += queue.size();
+                }
             }
             bool all_queues_empty = scheduler_empty && (local_queue_total == 0);
 
@@ -355,9 +427,13 @@ void ThreadPool::wait_for_completion() {
             bool scheduler_empty = scheduler_.empty();
 
             // 检查所有本地队列是否为空
+            // P-260617-002: 持 shared_lock 防止与并发 resize 数据竞争
             size_t local_queue_total = 0;
-            for (const auto& queue : local_queues_) {
-                local_queue_total += queue.size();
+            {
+                std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+                for (const auto& queue : local_queues_) {
+                    local_queue_total += queue.size();
+                }
             }
             bool all_queues_empty = scheduler_empty && (local_queue_total == 0);
 
@@ -382,32 +458,31 @@ void ThreadPool::set_task_monitor(monitor::TaskMonitor* m) {
 }
 
 bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
-    // 260610P012 (WIP / 已知不完整): 用 shared_lock 替代之前的无锁访问
-    // 设计: 引入 local_queues_mutex_ (std::shared_mutex) — steal 持 shared_lock(并发读),
-    // resize/shutdown 持 unique_lock(排他)。
-    //
-    // ⚠️ 已知缺口(留给明天的 plan 完整覆盖):
-    // - worker_loop() 中 local_queues_[i].size() / .pop() (line 99/127/145) 等 13+ 处仍无锁访问
-    // - LoadBalancer::resize() 重建 local_queues_ 时仍可能与 worker_loop 产生 UAF
-    // - 本次只修了 try_steal_task 入口,运行时若 resize 极频繁,worker_loop 仍可能撞 UAF
-    //
-    // 完整修复需要给所有 local_queues_ 访问加 shared_lock,影响面大,留作单独 plan。
+    // P-260617-002: 公开入口持 shared_lock，内部实现 try_steal_task_impl
+    // 假设调用方已持 shared_lock，避免 worker_thread 谓词中重入 shared_lock
+    // (std::shared_mutex 不可重入 -> UB)。
     std::shared_lock<std::shared_mutex> lock(local_queues_mutex_);
+    return try_steal_task_impl(worker_id, task);
+}
 
+bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
+    // P-260617-002: 调用方必须已持 shared_lock(local_queues_mutex_)。
+    // 内部不再获取该锁。worker_thread 谓词中已持 shared_lock 时调用此函数
+    // 不会重入，避免 std::shared_mutex 重入 UB。
     if (local_queues_.size() <= 1) {
         return false;  // 只有一个线程，无法窃取
     }
-    
+
     // 尝试使用基于负载的智能窃取策略
     if (load_balancer_) {
         // 获取所有线程的负载信息
         std::vector<LoadBalancer::WorkerLoad> loads = load_balancer_->get_all_loads();
-        
+
         if (loads.size() == local_queues_.size()) {
             // 创建线程ID和负载的配对，用于排序
             std::vector<std::pair<size_t, size_t>> worker_loads;
             worker_loads.reserve(local_queues_.size());
-            
+
             for (size_t i = 0; i < local_queues_.size(); ++i) {
                 if (i != worker_id) {  // 跳过自己
                     // 计算总负载：队列大小 + 活跃任务数
@@ -415,7 +490,7 @@ bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
                     worker_loads.emplace_back(i, total_load);
                 }
             }
-            
+
             // 检查是否所有线程负载相同
             bool all_same_load = true;
             if (!worker_loads.empty()) {
@@ -427,14 +502,14 @@ bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
                     }
                 }
             }
-            
+
             // 如果负载不同，按负载从高到低排序，优先窃取负载高的线程
             if (!all_same_load && !worker_loads.empty()) {
                 std::sort(worker_loads.begin(), worker_loads.end(),
                     [](const std::pair<size_t, size_t>& a, const std::pair<size_t, size_t>& b) {
                         return a.second > b.second;  // 降序排序
                     });
-                
+
                 // 按排序顺序尝试窃取
                 for (const auto& wl : worker_loads) {
                     size_t target_id = wl.first;
@@ -448,22 +523,22 @@ bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
             }
         }
     }
-    
+
     // 回退到随机策略（如果无法获取负载信息或所有线程负载相同）
     // 使用 thread_local 随机数生成器（首次使用时会自动初始化）
     static thread_local std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<size_t> dist(0, local_queues_.size() - 1);
     size_t start_index = dist(rng);
-    
+
     // 尝试从其他线程窃取任务
     for (size_t i = 0; i < local_queues_.size(); ++i) {
         size_t target_id = (start_index + i) % local_queues_.size();
-        
+
         // 跳过自己
         if (target_id == worker_id) {
             continue;
         }
-        
+
         // 尝试窃取
         if (local_queues_[target_id].steal(task)) {
             // 更新目标线程的负载信息
@@ -474,7 +549,7 @@ bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
             return true;
         }
     }
-    
+
     return false;
 }
 
