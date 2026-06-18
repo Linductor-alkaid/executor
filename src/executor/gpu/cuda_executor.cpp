@@ -992,9 +992,9 @@ void CudaExecutor::worker_thread_func() {
             }
             task = task_queue_.top();
             task_queue_.pop();
+            active_kernels_++;
             queue_not_full_cv_.notify_one();
         }
-        active_kernels_++;
         run_one_task(task);
         active_kernels_--;
         {
