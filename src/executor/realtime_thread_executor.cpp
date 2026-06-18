@@ -232,6 +232,20 @@ void RealtimeThreadExecutor::simple_cycle_loop() {
         // 计算下一个周期时间点
         next_cycle_time += period_ns;
 
+        // P-260618-004: skip-late. If a callback ran long and next_cycle_time
+        // has fallen into the past, sleeping until it would return immediately
+        // and we'd burn through every missed phase with zero sleep. Instead,
+        // re-phase to "now + period" so the thread guarantees at least one
+        // real sleep and a fresh period. Documented behavior is "skip
+        // missed phases" rather than "catch up" — the latter produced
+        // jitter storms under load.
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now > next_cycle_time) {
+                next_cycle_time = now + period_ns;
+            }
+        }
+
         // 等待下一个周期（使用 sleep_until 实现精确周期控制）
         std::this_thread::sleep_until(next_cycle_time);
     }
