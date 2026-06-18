@@ -101,6 +101,14 @@ uint64_t LockFreeTaskExecutor::processed_count() const {
     return processed_count_.load(std::memory_order_relaxed);
 }
 
+uint64_t LockFreeTaskExecutor::exception_count() const {
+    return exception_count_.load(std::memory_order_relaxed);
+}
+
+void LockFreeTaskExecutor::set_exception_handler(std::function<void(std::exception_ptr)> handler) {
+    exception_handler_ = std::move(handler);
+}
+
 LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     auto raw = queue_->get_stats();
     QueueStats result;
@@ -112,6 +120,9 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     result.batch_pops = raw.batch_pops;
     result.current_size = raw.current_size;
     result.peak_size = raw.peak_size;
+    // P-260618-006: expose the exception count alongside the existing queue
+    // stats so monitoring code can correlate exceptions with queue state.
+    result.exception_count = exception_count_.load(std::memory_order_relaxed);
     result.success_rate = raw.total_pushes > 0
         ? static_cast<double>(raw.total_pushes - raw.failed_pushes) / static_cast<double>(raw.total_pushes)
         : 0.0;
@@ -130,6 +141,19 @@ void LockFreeTaskExecutor::worker_thread() {
                 try {
                     batch[i]->func();
                 } catch (...) {
+                    // P-260618-006: surface task exceptions via the
+                    // exception_count counter and (optionally) a registered
+                    // handler. Default behavior is "count only" — no rethrow,
+                    // no crash — preserving back-compat.
+                    exception_count_.fetch_add(1, std::memory_order_relaxed);
+                    if (exception_handler_) {
+                        try {
+                            exception_handler_(std::current_exception());
+                        } catch (...) {
+                            // Swallow exceptions from the handler itself;
+                            // the worker must keep draining the queue.
+                        }
+                    }
                 }
                 task_pool_->release(batch[i]);
             }
@@ -158,6 +182,14 @@ void LockFreeTaskExecutor::worker_thread() {
             try {
                 batch[i]->func();
             } catch (...) {
+                // P-260618-006: same handling as in the running loop.
+                exception_count_.fetch_add(1, std::memory_order_relaxed);
+                if (exception_handler_) {
+                    try {
+                        exception_handler_(std::current_exception());
+                    } catch (...) {
+                    }
+                }
             }
             task_pool_->release(batch[i]);
         }

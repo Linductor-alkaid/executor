@@ -89,6 +89,27 @@ public:
     uint64_t processed_count() const;
 
     /**
+     * @brief 获取任务执行过程中累计捕获的异常次数
+     *
+     * P-260618-006: 之前 LockFreeTaskExecutor 对任务抛出的异常是完全
+     * 静默吞噬 (catch (...) {}), 与 ThreadPool/RealtimeThreadExecutor 行为
+     * 不一致, 属于可观测性盲区. 该计数器始终累计, 不受 enable_stats
+     * 影响, 是核心可观测性指标.
+     */
+    uint64_t exception_count() const;
+
+    /**
+     * @brief 注册异常处理器(可选). 任务抛出异常时, worker 线程会调用
+     *        此回调, 传入 std::exception_ptr.
+     *
+     * P-260618-006: 即使没有注册 handler, exception_count 也会递增;
+     * handler 是可选的扩展点, 让用户可以拿到 exception_ptr 并自定义
+     * 日志/上报/重试逻辑. 默认行为(无 handler)与修复前完全一致
+     * (不抛、不重试), 仅多了一个计数器.
+     */
+    void set_exception_handler(std::function<void(std::exception_ptr)> handler);
+
+    /**
      * @brief 获取队列性能统计
      */
     struct QueueStats {
@@ -100,6 +121,9 @@ public:
         uint64_t batch_pops;
         uint64_t current_size;
         uint64_t peak_size;
+        // P-260618-006: 暴露异常计数, 与 processed_count() 一起是任务执行
+        // 端到端可观测性的两个核心指标.
+        uint64_t exception_count;
         double success_rate;
     };
     QueueStats get_queue_stats() const;
@@ -117,6 +141,10 @@ private:
     std::thread worker_;
     std::atomic<bool> running_{false};
     std::atomic<uint64_t> processed_count_{0};
+    // P-260618-006: 累计异常计数, 始终累计, worker 线程写, 读取方任意线程.
+    std::atomic<uint64_t> exception_count_{0};
+    // P-260618-006: 可选异常回调. 在 worker 线程中调用, 需自行保证线程安全.
+    std::function<void(std::exception_ptr)> exception_handler_;
     uint32_t idle_count_{0};  // only accessed from worker_thread
 };
 
