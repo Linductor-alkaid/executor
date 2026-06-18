@@ -133,28 +133,50 @@ void set_current_thread_timer_slack_ns(uint64_t /*slack_ns*/) {
 bool set_thread_priority(std::thread::native_handle_type handle, int priority) {
     struct sched_param param;
     param.sched_priority = priority;
-    
+
     // 如果优先级在1-99范围内，使用SCHED_FIFO实时调度策略
     // 否则使用SCHED_OTHER普通调度策略
     int policy = (priority >= 1 && priority <= 99) ? SCHED_FIFO : SCHED_OTHER;
-    
+
     // 对于SCHED_OTHER，优先级必须为0
     if (policy == SCHED_OTHER) {
         param.sched_priority = 0;
         // 使用nice值设置优先级（-20到19）
         if (priority < -20) priority = -20;
         if (priority > 19) priority = 19;
-        // 注意：nice值需要通过setpriority设置，这里只设置调度策略
     }
-    
+
     int result = pthread_setschedparam(handle, policy, &param);
-    if (result == 0 && policy == SCHED_OTHER && priority != 0) {
-        // 对于普通优先级，还需要设置nice值
-        // 注意：这需要在调用线程中设置，不能直接设置其他线程的nice值
-        // 这里简化处理，只设置调度策略
+    if (result != 0) {
+        return false;
     }
-    
-    return result == 0;
+
+    // P-260618-007: previously the SCHED_OTHER branch silently dropped the
+    // priority argument (the comment said "这里简化处理,只设置调度策略").
+    // Callers (ThreadPool, RealtimeThreadExecutor) treated the resulting
+    // "true" as "priority applied", but nice was never touched — a non-root
+    // user setting thread_priority=10 got a false success and no effect.
+    //
+    // We now actually call setpriority(PRIO_PROCESS, ..., clamped_nice) so
+    // the priority argument has a real effect. Note: Linux's setpriority is
+    // process-level (PRIO_PROCESS) and applies to the entire process, not
+    // a single thread — there is no per-thread nice on Linux. The caller
+    // is therefore expected to set priority from a fresh forked process
+    // dedicated to one thread, or accept that the entire process nice is
+    // adjusted. setpriority returns 0 on success, -1 on failure
+    // (EACCES/EPERM for non-root). For priority == 0 we skip this path
+    // entirely (no nice adjustment is needed).
+    if (policy == SCHED_OTHER && priority != 0) {
+        if (setpriority(PRIO_PROCESS, 0, priority) != 0) {
+            // Permission denied or other error: return false honestly
+            // instead of pretending success. Callers that want "best
+            // effort" can ignore the return code; callers that want strict
+            // application will now be told the truth.
+            return false;
+        }
+    }
+
+    return true;
 }
 
 bool set_cpu_affinity(std::thread::native_handle_type handle,
