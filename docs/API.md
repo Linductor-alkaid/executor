@@ -762,7 +762,18 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 ### 7.3 状态与统计类型
 
 - **AsyncExecutorStatus**：`name`、`is_running`、`active_tasks`、`completed_tasks`、`failed_tasks`、`queue_size`、`avg_task_time_ms`。
-- **RealtimeExecutorStatus**：`name`、`is_running`、`cycle_period_ns`、`cycle_count`、`cycle_timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`。
+- **RealtimeExecutorStatus**：
+  - `name` (std::string)：执行器名称。
+  - `is_running` (bool)：是否运行中。
+  - `cycle_period_ns` (int64_t)：配置周期（纳秒）。
+  - `cycle_count` (int64_t)：累计周期计数。
+  - `cycle_timeout_count` (int64_t)：超时周期计数。
+  - `avg_cycle_time_ns` (double)：平均周期执行时间（纳秒）。
+  - `max_cycle_time_ns` (double)：最大周期执行时间（纳秒）。
+  - `dropped_task_count` (uint64_t)：累计丢任务数（队列满 + 对象池耗尽，**始终累计**，不受 `enable_stats` 影响；P-001 260615 引入的背压可见性核心指标，应作为告警依据）。
+  - `failed_pushes` (uint64_t)：LockFreeQueue 失败入队数（仅 `enable_stats=true` 时由底层队列统计；与 `dropped_task_count` 的子集：仅含"队列满"那一部分）。
+  - `peak_queue_size` (uint64_t)：队列峰值长度（仅 `enable_stats=true`）。
+  - `queue_capacity` (uint64_t)：RT 无锁队列固定容量（用于 `dropped/queue_capacity` 比率分析）。
 - **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。
 - **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
