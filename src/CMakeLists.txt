@@ -180,3 +180,12 @@ install(EXPORT executorTargets
     NAMESPACE executor::
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/executor
 )
+
+# 安装 src/executor/ 下的公开头文件（CudaExecutor / OpenCLExecutor 等公开 API）
+# 这些头文件 src 内部依赖 include/ 下的核心头，用户安装后通过 find_package(executor)
+# 即可获得完整 include path（CudaExecutor 的 include path = ${INSTALL_INCLUDEDIR}）
+install(DIRECTORY executor/gpu/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/executor/gpu
+    FILES_MATCHING PATTERN "*.hpp"
+    PATTERN "*.cpp" EXCLUDE
+)
