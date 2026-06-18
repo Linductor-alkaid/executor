@@ -308,7 +308,11 @@ void CudaExecutor::stop() {
     join_pending_waiters();
 
     is_running_.store(false);
+    // P-260618-005: also notify the queue_not_full_cv_ waiters so submitters
+    // blocked on a full queue wake up, observe !is_running_, and return
+    // a failed future instead of deadlocking.
     queue_not_empty_cv_.notify_all();
+    queue_not_full_cv_.notify_all();
 
     wait_for_completion();
 
@@ -1082,9 +1086,20 @@ std::future<void> CudaExecutor::submit_kernel_impl(
     task.submit_time_ns = std::chrono::steady_clock::now().time_since_epoch().count();
     {
         std::unique_lock<std::mutex> lock(queue_mutex_);
+        // P-260618-005: also exit the wait when the executor is no longer
+        // running, otherwise a stop() arriving while submitter is parked
+        // here can deadlock (stop() only notifies queue_not_empty_cv_).
         queue_not_full_cv_.wait(lock, [this] {
-            return task_queue_.size() < config_.max_queue_size;
+            return !is_running_.load(std::memory_order_acquire)
+                || task_queue_.size() < config_.max_queue_size;
         });
+        if (!is_running_.load(std::memory_order_acquire)) {
+            // Shutdown happened while we were waiting for room. Return a
+            // failed future without enqueuing.
+            promise->set_exception(std::make_exception_ptr(
+                std::runtime_error("CudaExecutor: submit aborted because executor is stopping")));
+            return future;
+        }
         task_queue_.push(std::move(task));
     }
     queue_not_empty_cv_.notify_one();
@@ -1119,9 +1134,23 @@ std::vector<std::future<void>> CudaExecutor::submit_kernels_batch(
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
             for (size_t i = off; i < end; ++i) {
+                // P-260618-005: see submit_kernel_impl. Break out of the
+                // wait early when stop() arrives mid-batch; remaining
+                // tasks in the batch become failed futures.
                 queue_not_full_cv_.wait(lock, [this] {
-                    return task_queue_.size() < config_.max_queue_size;
+                    return !is_running_.load(std::memory_order_acquire)
+                        || task_queue_.size() < config_.max_queue_size;
                 });
+                if (!is_running_.load(std::memory_order_acquire)) {
+                    auto eptr = std::make_exception_ptr(
+                        std::runtime_error("CudaExecutor: submit aborted because executor is stopping"));
+                    for (size_t j = i; j < end; ++j) {
+                        auto prom = std::make_shared<std::promise<void>>();
+                        prom->set_exception(eptr);
+                        result.push_back(prom->get_future());
+                    }
+                    return result;
+                }
                 const auto& p = tasks[i];
                 GpuQueuedTask task;
                 task.kernel_func = p.first;
