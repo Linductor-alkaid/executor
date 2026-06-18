@@ -22,6 +22,11 @@
   - **自适应实时线程优先级**（`thread_priority` = 0 → 自动建议：cycle ≤ 1 ms → 80，≤ 10 ms → 50，> 10 ms → 0）
   所有自动决策**失败静默**，用户显式设值**始终保留**。
 
+- **软任务超时（P024）**
+  `task_timeout_ms` 是执行前软超时：任务在队列中等待超过配置阈值后，worker 开始执行前会跳过该任务并递增 `timeout_count`。
+  已经开始执行的任务不会被强制中断，因为 C++ 没有安全的线程强杀机制。
+  长耗时任务应在任务内部自行检查取消条件或 deadline。
+
 - **Linux 实时性加固（P016 + P019-A）**
   `RealtimeThreadConfig` 默认值已改为 opt-out：
   - `enable_memory_lock`（默认 `true` — `mlockall` 锁定内存避免分页抖动；失败静默）
@@ -34,6 +39,9 @@
 
 - **批量任务提交**
   `submit_batch()` 和 `submit_batch_no_future()` 高效提交大量任务，单线程场景性能提升 **5-16x**（500-2000 个任务）
+
+- **push_task 背压计数器（P-001）**
+  实时执行器提供 `push_task_ex()` 以及 `dropped_task_count` 等状态计数器，可观察队列满或对象池耗尽导致的丢任务，同时保留既有 `push_task()` API 兼容。
 
 - **可选 GPU（CUDA/OpenCL）**
   GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端

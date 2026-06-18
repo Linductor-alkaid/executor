@@ -20,6 +20,16 @@
 3. 打包成 tar.gz 格式
 4. 打包成 deb 包（开发包和运行时包）
 
+### 在带 CUDA 的环境下
+
+发布 v0.2.2 的 deb 包建议在带 CUDA Toolkit 的构建机上完成完整构建。CUDA 执行器运行时通过动态加载 `libcuda` 降级，用户机器没有 CUDA 驱动时不会阻止 CPU 路径使用。
+
+```bash
+# 在带 CUDA Toolkit 的环境下
+cmake -B build -DEXECUTOR_ENABLE_CUDA=ON
+sudo ./scripts/build_and_package_deb.sh --version 0.2.2 --maintainer "Your Name <your.email@example.com>"
+```
+
 ### 自定义构建选项
 
 ```bash
@@ -299,12 +309,14 @@ reprepro -b repo includedeb focal dist/*.deb
 
 在发布 deb 包前，请确认：
 
-- [ ] 版本号正确（在 `CMakeLists.txt` 和打包脚本中）
+- [ ] 版本号正确：`CMakeLists.txt`、README 与打包命令均为 `0.2.2`
 - [ ] 维护者信息正确
 - [ ] 静态库和动态库都已成功构建
+- [ ] v0.2.2 发布包在带 CUDA Toolkit 的环境下完成完整构建（`EXECUTOR_ENABLE_CUDA=ON`）
+- [ ] 无 CUDA 用户机器验证运行时降级路径：CPU 功能可用，CUDA 后端不可用时不崩溃
 - [ ] 所有头文件都已包含在开发包中
 - [ ] CMake 配置文件已正确生成
-- [ ] 文档文件（README.md, LICENSE, CHANGELOG.md）已包含
+- [ ] 文档文件（README.md, README_zh.md, LICENSE, CHANGELOG.md, docs/API.md, docs/MIGRATION.md）已包含
 - [ ] deb 包已创建
 - [ ] 在测试环境中验证了 deb 包的安装和使用
 - [ ] 验证了包的依赖关系正确
@@ -322,6 +334,15 @@ reprepro -b repo includedeb focal dist/*.deb
 ---
 
 ## 高级用法
+
+### 在无 CUDA 环境下
+
+如果用户机器没有 CUDA Toolkit，可以关闭 CUDA 构建；executor 的 CPU 功能和 OpenCL 可选路径不受影响。使用 v0.2.2 CUDA 完整包时，CUDA 后端也会在运行时检测不可用并自动降级。
+
+```bash
+# 用户机器没有 CUDA Toolkit: 运行时自动降级
+cmake -B build -DEXECUTOR_ENABLE_CUDA=OFF
+```
 
 ### 自定义包描述
 
