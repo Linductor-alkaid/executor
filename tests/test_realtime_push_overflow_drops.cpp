@@ -257,6 +257,70 @@ bool test_realtime_push_overflow_without_stats() {
     return true;
 }
 
+// ========== 辅助测试: 单周期任务预算 (P-260618-002) ==========
+// 预算机制下, 即使队列里堆了大量任务, 每周期处理量有界 → cycle_time 不会爆涨,
+// cycle_timeout_count 稳态不尖刺. 关键: cycle_callback 用 fast noop,
+// 不能用 block-while-gate 模式 (那样会触发丢任务, 偏离预算语义).
+
+bool test_realtime_push_overflow_drops_budget() {
+    std::cout << "Testing RealtimeThreadExecutor max_tasks_per_cycle budget (P-260618-002)...\n";
+
+    // 短周期 (5ms), 让测试在 ~200ms 内跑完数十个周期.
+    constexpr int64_t kBudgetPeriodNs = 5'000'000;  // 5ms
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_p002_budget";
+    config.cycle_period_ns = kBudgetPeriodNs;
+    config.thread_priority = 0;
+    // fast noop 回调: 不能阻塞 RT 线程, 否则会触发丢任务路径而非验证预算.
+    config.cycle_callback = []() { /* fast noop */ };
+    // 小预算: 每周期最多处理 8 个任务.
+    config.max_tasks_per_cycle = 8;
+
+    // enable_stats=true 便于观察 peak_queue_size; 容量保持默认 kCapacity(1024).
+    RealtimeThreadExecutor executor("p002_budget", config,
+                                    /*enable_stats=*/true,
+                                    /*queue_capacity=*/kCapacity);
+
+    // 启动前一次性灌入大量任务 (远超每周期预算 8). 短周期 + 容量 1024 下,
+    // 成功入队 ~1024 个, 余者被静默丢弃 (P-001 已覆盖丢任务计数, 此处不重复断言).
+    // 灌入后队列持续满载, 每个周期都会正好处理 8 个 → 验证预算对 cycle_time 的约束.
+    constexpr int kBulkPushes = 2000;
+    int pushed_ok = 0;
+    for (int i = 0; i < kBulkPushes; ++i) {
+        if (executor.push_task_ex([]() { /* noop */ })) {
+            ++pushed_ok;
+        }
+    }
+    std::cout << "  pre-start pushed_ok=" << pushed_ok << "/" << kBulkPushes << "\n";
+
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+
+    // 跑约 200ms (~40 个周期). 期间队列始终非空, 每周期正好处理 8 个 noop 任务.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    auto status = executor.get_status();
+    std::cout << "  cycle_count=" << status.cycle_count
+              << " max_cycle_time_ns=" << static_cast<int64_t>(status.max_cycle_time_ns)
+              << " period=" << kBudgetPeriodNs
+              << " timeout_count=" << status.cycle_timeout_count
+              << " dropped=" << status.dropped_task_count << "\n";
+
+    // 关键断言 1: 没有周期的执行时间超过 cycle_period_ns * 1.2 (允许 20% 调度抖动).
+    //   预算限制使单周期处理量有界 (8 个 noop 任务仅几微秒), 故 cycle_time 应远小于周期.
+    TEST_ASSERT(static_cast<int64_t>(status.max_cycle_time_ns) <= kBudgetPeriodNs * 1.2,
+                "max_cycle_time_ns must stay within period (20% margin) under bounded budget");
+
+    // 关键断言 2: 稳态下 cycle_timeout_count 几乎不增长 (允许极少数调度抖动 < 10).
+    TEST_ASSERT(status.cycle_timeout_count < 10,
+                "cycle_timeout_count must not spike in steady state under bounded budget");
+
+    executor.stop();
+
+    std::cout << "  test_realtime_push_overflow_drops_budget: PASSED\n";
+    return true;
+}
+
 // ========== 主函数 ==========
 
 int main() {
@@ -266,6 +330,7 @@ int main() {
     all_passed &= test_realtime_push_overflow_drops();
     all_passed &= test_realtime_push_overflow_via_void_push();
     all_passed &= test_realtime_push_overflow_without_stats();
+    all_passed &= test_realtime_push_overflow_drops_budget();
 
     std::cout << "\n";
     if (all_passed) {

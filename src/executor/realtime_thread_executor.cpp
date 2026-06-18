@@ -266,8 +266,17 @@ void RealtimeThreadExecutor::cycle_loop() {
 void RealtimeThreadExecutor::process_tasks() {
     TaskWrapper* task_wrapper = nullptr;
 
-    // 从无锁队列中弹出所有任务并执行
-    while (lockfree_queue_.pop(task_wrapper)) {
+    // P-260618-002: 单周期任务预算. 每周期最多处理 max_tasks_per_cycle 个任务,
+    // 避免生产速率短暂超过消费速率时单周期一口气耗尽整条队列, 打破"周期确定性"契约
+    // (cycle_time 爆涨 / cycle_timeout_count 尖刺). 剩余任务自然滚到下一周期处理
+    // (MPSC 无锁队列, 无需额外锁). max_tasks_per_cycle == 0 表示不限 (保留旧行为,
+    // 向后兼容) — 此时循环条件第一段恒真, 仅靠 pop() 返回 false 退出.
+    const uint64_t budget = config_.max_tasks_per_cycle;
+    for (uint64_t processed = 0; budget == 0 || processed < budget; ++processed) {
+        if (!lockfree_queue_.pop(task_wrapper)) {
+            break;  // 队列为空
+        }
+
         if (task_wrapper && task_wrapper->func) {
             try {
                 task_wrapper->func();
