@@ -22,6 +22,11 @@
   - **Adaptive real-time thread priority** (`thread_priority` = 0 → auto-recommend 80 if cycle ≤ 1 ms, 50 if ≤ 10 ms, 0 if > 10 ms)
   All auto-decisions **fail silent** and user-supplied values are **always preserved**.
 
+- **Soft Task Timeout (P024)**
+  `task_timeout_ms` is a pre-execution soft timeout: if a queued task has waited longer than the configured timeout before a worker starts it, the task is skipped and `timeout_count` is incremented.
+  In-progress tasks are never forcefully interrupted because C++ has no safe thread-kill mechanism.
+  Long-running tasks should check their own cancellation or deadline condition internally.
+
 - **Linux Real-Time Hardening (P016 + P019-A)**
   `RealtimeThreadConfig` defaults are now opt-out:
   - `enable_memory_lock` (default `true` — `mlockall` to avoid page-fault jitter; failure silent)
@@ -34,6 +39,9 @@
 
 - **Batch Task Submission**
   `submit_batch()` and `submit_batch_no_future()` efficiently submit large numbers of tasks, with **5–16x** throughput improvement in single-threaded scenarios (500–2000 tasks)
+
+- **Push-Task Backpressure Counter (P-001)**
+  Real-time executors expose `push_task_ex()` and status counters such as `dropped_task_count`, making queue-full and object-pool-exhaustion drops observable without breaking the existing `push_task()` API.
 
 - **Optional GPU (CUDA/OpenCL)**
   GPU executor interface with CUDA/OpenCL implementations: kernel submission, device memory and stream management, multi-device, memory pool, monitoring. Runtime dynamic loading with safe graceful degradation when no GPU is available. Device query API automatically recommends the best backend.
@@ -227,7 +235,7 @@ Full JSON: [docs/optimization/realtime_precision_windows.json](docs/optimization
 
 ## Version
 
-Current version: **v0.2.1**
+Current version: **v0.2.2**
 
 See [CHANGELOG.md](CHANGELOG.md) for the change log.
 
