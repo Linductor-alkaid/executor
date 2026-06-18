@@ -44,7 +44,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     
     # 如果是 CUDA/GPU 测试，添加 CUDA 头文件支持（不链接库，使用动态加载）
-    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*" OR TEST_NAME MATCHES ".*gpu_dep_async.*" OR TEST_NAME MATCHES ".*unified_memory.*") AND EXECUTOR_CUDA_ENABLED)
+    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*" OR TEST_NAME MATCHES ".*gpu_dep_async.*" OR TEST_NAME MATCHES ".*gpu_wait_for_completion.*" OR TEST_NAME MATCHES ".*unified_memory.*") AND EXECUTOR_CUDA_ENABLED)
         if(CUDA_INCLUDE_DIRS)
             target_include_directories(${TEST_NAME} PRIVATE ${CUDA_INCLUDE_DIRS})
         elseif(CUDAToolkit_INCLUDE_DIRS)
