@@ -37,6 +37,11 @@ struct RealtimeThreadConfig {
     ICycleManager* cycle_manager = nullptr;               // 可选的周期管理器接口（用于更精确的周期控制）
     bool enable_memory_lock = true;                       // 默认开, mlockall 防分页抖动, 失败静默; 显式设 false 关闭
     uint64_t timer_slack_ns = 1;                          // 默认 1ns, 几乎消除 50us 内核 timer slack; 显式设 0 表示保留内核默认
+    // P-260618-002: 单周期任务预算. process_tasks() 每周期最多处理这么多个任务,
+    // 防止生产速率短暂超过消费速率时单周期一口气耗尽整条队列, 打破"周期确定性"契约
+    // (cycle_time 爆涨 / cycle_timeout_count 尖刺). 剩余任务自然滚到后续周期处理
+    // (MPSC 无锁队列, 无需额外锁). 0 = 不限 (保留旧行为, 向后兼容); 默认 64.
+    uint64_t max_tasks_per_cycle = 64;
 };
 
 /**
