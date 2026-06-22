@@ -150,9 +150,13 @@ void ThreadPool::worker_thread(size_t worker_id) {
         if (has_task) {
             // 检查任务是否已取消
             if (!is_task_cancelled(task)) {
-                active_threads_.fetch_add(1, std::memory_order_relaxed);
+                // P-001 (2026-06-22): RAII guard guarantees active_threads_
+                // is decremented even if monitor_ callbacks throw inside
+                // execute_task. Previously a fetch_add/fetch_sub pair leaked
+                // the decrement on monitor exception, killing the worker
+                // and hanging wait_for_completion().
+                ThreadPool::ActiveCounter active_guard(active_threads_);
                 execute_task(task);
-                active_threads_.fetch_sub(1, std::memory_order_relaxed);
             } else {
                 // 任务被取消，也需要更新统计信息
                 completed_tasks_.fetch_add(1, std::memory_order_relaxed);
@@ -187,6 +191,18 @@ void ThreadPool::worker_thread(size_t worker_id) {
 }
 
 void ThreadPool::execute_task(const Task& task) {
+    // P-001 (2026-06-22): catch-all guards against exceptions escaping
+    // monitor_->record_task_start/complete callbacks, which previously
+    // propagated out of execute_task, killed the worker thread, and
+    // leaked the active_threads_ decrement (now fixed by ActiveCounter
+    // RAII in worker_thread).
+    //
+    // start_time is declared BEFORE the try so the catch-all can still
+    // reference it when computing execution_time_ns for the recovery
+    // update_statistics() call below.
+    auto start_time = std::chrono::steady_clock::now();
+
+    try {
     if (monitor_ && monitor_->is_enabled()) {
         monitor_->record_task_start(task.task_id, "default");
     }
@@ -207,7 +223,6 @@ void ThreadPool::execute_task(const Task& task) {
         }
     }
 
-    auto start_time = std::chrono::steady_clock::now();
     bool success = false;
 
     if (!timed_out) {
@@ -238,6 +253,29 @@ void ThreadPool::execute_task(const Task& task) {
         monitor_->record_task_complete(task.task_id, success, execution_time_ns);
     }
     update_statistics(execution_time_ns, success, timed_out);
+    } catch (...) {
+        // Monitor callbacks are user-supplied; their exceptions must not
+        // kill the worker. Report via the configured exception handler so
+        // operators see them, then return normally — ActiveCounter in
+        // worker_thread will still decrement active_threads_.
+        //
+        // CRITICAL: also fire update_statistics here. Otherwise
+        // completed_tasks_ never increments and wait_for_completion()
+        // hangs forever (or up to 300s) waiting for total ==
+        // completed+failed, which the invariant comment on line 229
+        // explicitly requires.
+        exception_handler_.handle_task_exception("ThreadPool::execute_task",
+                                                 std::current_exception());
+        // Best-effort stats: counted as completed but NOT failed (a
+        // monitor exception is not a task failure — the user code
+        // didn't even run). This matches the soft-timeout branch
+        // (timed_out=true) which also counts as completed without
+        // incrementing failed_, so wait_for_completion's invariant
+        // total == completed + failed stays true.
+        int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                         std::chrono::steady_clock::now() - start_time).count();
+        update_statistics(ns, /*success=*/false, /*timed_out=*/true);
+    }
 }
 
 void ThreadPool::update_statistics(int64_t execution_time_ns, bool success, bool timed_out) {
