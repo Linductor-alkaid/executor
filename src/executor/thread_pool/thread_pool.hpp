@@ -182,10 +182,38 @@ public:
 
 private:
     /**
+     * @brief RAII guard that increments active_threads_ on construction
+     *        and decrements on destruction. Guarantees that any exception
+     *        escaping the guarded scope (including monitor callbacks inside
+     *        execute_task) cannot leave active_threads_ permanently inflated
+     *        and hang wait_for_completion().
+     *
+     * P-001 (2026-06-22): replaces the prior fetch_add/fetch_sub pair around
+     * the execute_task call in worker_thread, which leaked the decrement on
+     * monitor-callback exception.
+     */
+    class ActiveCounter {
+    public:
+        explicit ActiveCounter(std::atomic<size_t>& counter) noexcept
+            : counter_(counter) {
+            counter_.fetch_add(1, std::memory_order_relaxed);
+        }
+        ~ActiveCounter() {
+            counter_.fetch_sub(1, std::memory_order_relaxed);
+        }
+        ActiveCounter(const ActiveCounter&) = delete;
+        ActiveCounter& operator=(const ActiveCounter&) = delete;
+        ActiveCounter(ActiveCounter&&) = delete;
+        ActiveCounter& operator=(ActiveCounter&&) = delete;
+    private:
+        std::atomic<size_t>& counter_;
+    };
+
+    /**
      * @brief 工作线程函数
-     * 
+     *
      * 循环从本地队列、工作窃取或全局调度器获取任务并执行。
-     * 
+     *
      * @param worker_id 工作线程ID
      */
     void worker_thread(size_t worker_id);

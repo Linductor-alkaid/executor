@@ -32,7 +32,7 @@ public:
      * @param task_id 任务 ID
      * @param task_type 任务类型（默认 "default"），用于聚合统计
      */
-    void record_task_start(const std::string& task_id,
+    virtual void record_task_start(const std::string& task_id,
                            const std::string& task_type = "default");
 
     /**
@@ -41,7 +41,7 @@ public:
      * @param success 是否成功
      * @param execution_time_ns 执行时间（纳秒）
      */
-    void record_task_complete(const std::string& task_id,
+    virtual void record_task_complete(const std::string& task_id,
                               bool success,
                               int64_t execution_time_ns);
 
