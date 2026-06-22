@@ -15,6 +15,10 @@ namespace executor {
  * 使用 LockFreeQueue (MPSC) + unique_ptr 包装实现高性能 push/pop。
  * Task 包含 std::function 和 atomic，不是 trivially copyable，
  * 因此使用 uintptr_t 存储指针，绕过类型限制。
+ *
+ * LockFreeQueue 是 MPSC 队列，消费端没有 CAS 抢占语义。为避免 owner pop
+ * 和 work-stealing steal 同时消费同一槽位，pop/steal 在本包装层用 mutex
+ * 串行化；push 路径仍不加该锁。
  */
 class LockFreeWorkerQueue {
 public:
@@ -59,6 +63,8 @@ public:
     }
 
     bool pop(Task& task) {
+        std::lock_guard<std::mutex> lock(consume_mx_);
+
         uintptr_t ptr;
         if (!main_queue_.pop(ptr)) {
             return false;
@@ -70,7 +76,7 @@ public:
     }
 
     bool steal(Task& task) {
-        std::lock_guard<std::mutex> lock(steal_mutex_);
+        std::lock_guard<std::mutex> lock(consume_mx_);
 
         if (steal_buffer_.empty()) {
             constexpr size_t STEAL_BATCH = 16;
@@ -103,11 +109,12 @@ public:
     }
 
     void clear() {
+        std::lock_guard<std::mutex> lock(consume_mx_);
+
         uintptr_t ptr;
         while (main_queue_.pop(ptr)) {
             delete reinterpret_cast<Task*>(ptr);
         }
-        std::lock_guard<std::mutex> lock(steal_mutex_);
         for (auto p : steal_buffer_) {
             delete reinterpret_cast<Task*>(p);
         }
@@ -135,7 +142,7 @@ private:
 
     util::LockFreeQueue<uintptr_t> main_queue_;
 
-    mutable std::mutex steal_mutex_;
+    mutable std::mutex consume_mx_;
     std::vector<uintptr_t> steal_buffer_;
 };
 
