@@ -139,6 +139,69 @@ bool test_concurrent_push_pop() {
     return true;
 }
 
+bool test_steal_no_double_consume() {
+    std::cout << "Testing pop/steal no double consume..." << std::endl;
+
+    constexpr int ITERATIONS = 10000;
+
+    for (int i = 0; i < ITERATIONS; ++i) {
+        LockFreeWorkerQueue queue(8);
+
+        Task task;
+        task.task_id = "race_task_" + std::to_string(i);
+        task.priority = TaskPriority::NORMAL;
+        task.function = []() {};
+
+        if (!queue.push(task)) {
+            std::cerr << "FAILED: push failed at iteration " << i << std::endl;
+            return false;
+        }
+
+        std::atomic<int> ready{0};
+        std::atomic<bool> start{false};
+        std::atomic<bool> pop_result{false};
+        std::atomic<bool> steal_result{false};
+
+        std::thread owner([&]() {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            Task popped;
+            pop_result.store(queue.pop(popped), std::memory_order_release);
+        });
+
+        std::thread stealer([&]() {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            Task stolen;
+            steal_result.store(queue.steal(stolen), std::memory_order_release);
+        });
+
+        while (ready.load(std::memory_order_acquire) != 2) {
+            std::this_thread::yield();
+        }
+        start.store(true, std::memory_order_release);
+
+        owner.join();
+        stealer.join();
+
+        const int consumed = (pop_result.load(std::memory_order_acquire) ? 1 : 0) +
+                             (steal_result.load(std::memory_order_acquire) ? 1 : 0);
+        if (consumed != 1) {
+            std::cerr << "FAILED: iteration " << i << " consumed " << consumed
+                      << " tasks; pop=" << pop_result.load()
+                      << " steal=" << steal_result.load() << std::endl;
+            return false;
+        }
+    }
+
+    std::cout << "PASSED: pop/steal no double consume" << std::endl;
+    return true;
+}
+
 int main() {
     bool all_passed = true;
 
@@ -146,6 +209,7 @@ int main() {
     all_passed &= test_batch_operations();
     all_passed &= test_steal();
     all_passed &= test_concurrent_push_pop();
+    all_passed &= test_steal_no_double_consume();
 
     if (all_passed) {
         std::cout << "\n✓ All tests passed!" << std::endl;
