@@ -161,6 +161,39 @@ bool test_worker_local_queue_steal() {
     return true;
 }
 
+// P-260623-001: capacity=0 必须回退到一个合理的默认容量,且行为可观察 (不能静默 cap 到 100 后
+// 假装 0=unlimited; hpp 文档现已明确化为 sentinel 语义,此测试固化该契约).
+bool test_worker_local_queue_capacity_zero_fallback() {
+    std::cout << "Testing WorkerLocalQueue(0) uses documented fallback capacity (P-260623-001)..." << std::endl;
+
+    // capacity=0 => 内部回退到 100 槽 (详见 worker_local_queue.cpp 的硬编码回退)
+    WorkerLocalQueue q0(0);
+    Task task;
+    task.task_id = "t";
+    task.priority = TaskPriority::NORMAL;
+    task.function = []() {};
+
+    int pushed = 0;
+    for (int i = 0; i < 200; ++i) {
+        if (q0.push(task)) ++pushed;
+        else break;
+    }
+    // 回退容量是 100,所以前 100 个 push 成功,第 101 个失败
+    TEST_ASSERT(pushed == 100, "capacity=0 must fall back to 100 slots (got " << pushed << ")");
+    TEST_ASSERT(q0.size() == 100, "queue size after filling fallback buffer must be 100");
+
+    // 对照:显式 capacity=100 行为一致
+    WorkerLocalQueue q100(100);
+    int pushed100 = 0;
+    for (int i = 0; i < 200; ++i) {
+        if (q100.push(task)) ++pushed100;
+        else break;
+    }
+    TEST_ASSERT(pushed100 == 100, "explicit capacity=100 must allow exactly 100 pushes (got " << pushed100 << ")");
+
+    return true;
+}
+
 // ========== TaskDispatcher 测试 ==========
 
 bool test_task_dispatcher_basic() {
@@ -259,7 +292,8 @@ int main() {
     // WorkerLocalQueue 测试
     all_passed &= test_worker_local_queue_basic();
     all_passed &= test_worker_local_queue_steal();
-    
+    all_passed &= test_worker_local_queue_capacity_zero_fallback();  // P-260623-001
+
     // TaskDispatcher 测试
     all_passed &= test_task_dispatcher_basic();
     
