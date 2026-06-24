@@ -178,3 +178,42 @@ TEST(LockFreeTaskExecutorTest, ConstructorLeakTest) {
         std::invalid_argument
     );
 }
+
+// P-260623-004: push_tasks_batch must drive a single batch_pushes++ and N
+// total_pushes (where N is the requested batch size). Before the fix, the
+// implementation called queue_->push() in a loop, so batch_pushes never
+// moved and monitoring that keyed on it saw zero batch activity.
+TEST(LockFreeTaskExecutorTest, BatchPushRecordsBatchStat) {
+    LockFreeTaskExecutor exec(/*queue_capacity=*/128,
+                              /*backoff_multiplier=*/1,
+                              /*enable_stats=*/true);
+    ASSERT_TRUE(exec.start());
+
+    std::function<void()> tasks[50];
+    for (int i = 0; i < 50; ++i) tasks[i] = [] {};
+
+    size_t pushed = 0;
+    EXPECT_TRUE(exec.push_tasks_batch(tasks, 50, pushed));
+    EXPECT_EQ(pushed, 50u);
+
+    auto stats = exec.get_queue_stats();
+    // One batched enqueue must show up as a single batch_pushes++.
+    EXPECT_EQ(stats.batch_pushes, 1u);
+    // And every wrapper that was handed to the queue must count in
+    // total_pushes.
+    EXPECT_EQ(stats.total_pushes, 50u);
+    // failed_pushes stays at zero because the queue had free slots.
+    EXPECT_EQ(stats.failed_pushes, 0u);
+
+    // Second batch: same shape, counters should accumulate monotonically.
+    size_t pushed2 = 0;
+    EXPECT_TRUE(exec.push_tasks_batch(tasks, 50, pushed2));
+    EXPECT_EQ(pushed2, 50u);
+
+    auto stats2 = exec.get_queue_stats();
+    EXPECT_EQ(stats2.batch_pushes, 2u);
+    EXPECT_EQ(stats2.total_pushes, 100u);
+    EXPECT_EQ(stats2.failed_pushes, 0u);
+
+    exec.stop();
+}

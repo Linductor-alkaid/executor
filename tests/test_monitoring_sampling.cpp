@@ -84,12 +84,14 @@ TEST(LockFreeQueueStatsTest, BatchStats) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     auto stats = executor.get_queue_stats();
-    // P-004 changed push_tasks_batch from a single queue_->push_batch() call
-    // to a per-item loop of queue_->push() (to support partial-success
-    // exception safety). So batch_pushes stays at 0 and total_pushes
-    // reflects per-item increments.
+    // P-260623-004 fixed push_tasks_batch to actually call queue_->push_batch()
+    // (the previous implementation looped queue_->push() per item, which kept
+    // batch_pushes at 0 and broke monitoring that keyed on it). With the fix:
+    //   - batch_pushes increments by 1 per push_tasks_batch() call
+    //   - total_pushes still reflects the number of wrappers handed to the queue
+    //   - batch_pops is independent of push path; worker_thread uses pop_batch
     EXPECT_EQ(stats.total_pushes, 50);
-    EXPECT_EQ(stats.batch_pushes, 0u);
+    EXPECT_EQ(stats.batch_pushes, 1u);
     // worker_thread still uses pop_batch, so batch_pops > 0.
     EXPECT_GE(stats.batch_pops, 1);
 
