@@ -385,10 +385,11 @@ public:
 
 | 项目 | 说明 |
 |------|------|
-| 时间复杂度 | O(count)，一次性申请所有 TaskWrapper，然后调用 `queue_->push_batch` |
+| 时间复杂度 | O(count)，一次性申请所有 TaskWrapper，组装后单次调用 `queue_->push_batch` 完成入队 |
 | 线程安全 | 与 `push_task` 相同，线程安全，可多生产者并发调用 |
-| 部分成功 | 队列剩余空间 < count 时，`pushed` 会小于 count；未入队的 wrapper 自动回收 |
-| 返回 false 时机 | 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；此时不会有任何任务入队 |
+| 部分成功 | 队列剩余空间 < count 时，`pushed` 会小于 count；未入队的 wrapper 自动回收到对象池 |
+| 返回 false 时机 | (a) 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；或 (b) 队列满且 `queue_->push_batch` 一次 CAS 也未预留到任何槽位。两种情况下都不会有任务入队 |
+| 批量统计 | 每次成功的 `push_tasks_batch` 调用会令 `get_queue_stats().batch_pushes` 递增 1，`total_pushes` 递增 `pushed`（P-260623-004：与 `queue_->push_batch` 的统计语义一致） |
 
 **典型用法：**
 
