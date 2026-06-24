@@ -1069,7 +1069,12 @@ bool test_cuda_executor_batch_submit_returns_future_per_input() {
     {
         // Path A: not initialised / not running. Exercises the early-return at
         // cuda_executor.cpp:1118-1128 (already correct; serves as a baseline).
-        CudaExecutor uninit;
+        GpuExecutorConfig pa_cfg;
+        pa_cfg.name = "test_p001_uninit";
+        pa_cfg.device_id = 0;
+        pa_cfg.max_queue_size = 64;
+        pa_cfg.default_stream_count = 1;
+        CudaExecutor uninit(pa_cfg.name, pa_cfg);  // not started -> is_available_/is_running_ false
         auto futs = uninit.submit_kernels_batch(tasks);
         if (futs.size() != N) {
             std::cerr << "  FAILED: uninit path returned " << futs.size()
