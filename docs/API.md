@@ -370,6 +370,14 @@ public:
     uint64_t processed_count() const;                // 已处理任务总数
 
     QueueStats get_queue_stats() const;              // 队列性能统计（需 enable_stats=true）
+
+    // 异常观测与自定义处理（require enable_stats=true）
+    // exception_count() 返回 get_queue_stats() 期间累积的 task 异常次数
+    // set_exception_handler() 允许替换默认「记录到 stats + 忽略」的行为,
+    // 改由用户回调处理(例如记录到全局 logger、计数、转发到 ThreadPool 兜底)
+    // QueueStats 字段参考下方 5.5 节。
+    uint64_t exception_count() const;
+    void set_exception_handler(std::function<void(std::exception_ptr)> handler);
 };
 ```
 
@@ -766,12 +774,14 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时绑核 0（hw >= 2）；显式设值保留 |
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
+| `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |
 | `enable_memory_lock` | `bool` | 是否调用 `mlockall` 锁定内存（避免分页抖动）；默认 `true`（opt-out，失败静默） |
 | `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，失败静默）；`0` = 显式 opt-out 保留内核默认 |
 
 ### 7.3 状态与统计类型
 
-- **AsyncExecutorStatus**：`name`、`is_running`、`active_tasks`、`completed_tasks`、`failed_tasks`、`queue_size`、`avg_task_time_ms`。
+- **AsyncExecutorStatus**：`name`、`is_running`、`active_tasks`、`completed_tasks`、`failed_tasks`、`queue_size`、`avg_task_time_ms`。`Executor::get_status()` 与 `ThreadPoolExecutor::get_status()` 均返回此类型。
+- **ThreadPoolStatus**：`include/executor/config.hpp:67` 仍定义此结构（与 `AsyncExecutorStatus` 字段几乎重合），但全仓库**当前无任何代码使用**它。视为已弃用的 alias，新代码请直接使用 `AsyncExecutorStatus`。未来版本会移除 `ThreadPoolStatus` 声明。
 - **RealtimeExecutorStatus**：
   - `name` (std::string)：执行器名称。
   - `is_running` (bool)：是否运行中。
@@ -830,13 +840,16 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 通过 `get_gpu_executor(name)` 获取指针后，可调用：
 
 - **内存**：`allocate_device_memory`、`free_device_memory`；`copy_to_device`、`copy_to_host`、`copy_device_to_device`（均支持异步与流 ID）
+- **统一内存**：`allocate_unified_memory`、`free_unified_memory`、`prefetch_memory`（host / device 方向均可）
+- **P2P 传输**：`copy_from_peer`（跨 GPU 设备对等拷贝）
+- **批量执行**：`submit_kernels_batch`（一次性提交一组 kernel+config，返回等长 `std::vector<std::future<void>>`；关停时每个输入均保证返回一个 future，详见 P-001 commit）
 - **流**：`create_stream`、`destroy_stream`、`synchronize_stream`、`add_stream_callback`
 - **执行**：`submit_kernel(kernel, config)`（返回 `std::future<void>`）、`synchronize`、`wait_for_completion`
 - **状态**：`get_name`、`get_device_info`、`get_status`、`start`、`stop`
 
 ### 8.4 配置与类型
 
-- **GpuExecutorConfig**：`name`、`backend`（如 CUDA/OpenCL）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`
+- **GpuExecutorConfig**：`name`、`backend`（如 CUDA/OpenCL）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`、`enable_unified_memory`（启用 `allocate_unified_memory` 等统一内存 API，CUDA 后端需要 `EXECUTOR_ENABLE_CUDA` 且硬件支持 managed memory）
 - **GpuTaskConfig**：`grid_size`、`block_size`、`shared_memory_bytes`、`stream_id`、`async`；可选 `priority`
 - **GpuDeviceInfo**：设备名称、后端、设备 ID、厂商、总/空闲内存、计算能力等
 - **GpuExecutorStatus**：名称、运行状态、活跃/完成/失败 kernel 数、队列大小、平均 kernel 时间、内存使用等
