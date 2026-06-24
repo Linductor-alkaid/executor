@@ -60,7 +60,7 @@ public:
 
     /**
      * @brief 标记任务完成
-     * 
+     *
      * @param task_id 任务ID
      */
     void mark_completed(const std::string& task_id);
@@ -69,6 +69,39 @@ public:
      * @brief 清除所有依赖关系和完成状态
      */
     void clear();
+
+    /**
+     * @brief 裁剪单个任务的所有状态(从 dependencies_ 与 completed_tasks_ 中移除)
+     *
+     * P-260623-002: 长生命周期服务(如常驻实时线程池)中,任务完成/失败后
+     * dependencies_ 与 completed_tasks_ 默认永不回收,会无限增长。
+     * 调用方在确认 task_id 不再被任何其它任务依赖时可调用本接口主动回收。
+     *
+     * @param task_id 任务ID(空字符串无操作)
+     * @return 实际移除了状态的条数
+     */
+    size_t prune(const std::string& task_id);
+
+    /**
+     * @brief 移除 task_id 对 depends_on 的单条依赖边
+     *
+     * 若不存在此边则 no-op。P-260623-002 配套接口。
+     *
+     * @param task_id 任务ID
+     * @param depends_on 被依赖的任务ID
+     * @return 是否实际移除了边
+     */
+    bool remove_dependency(const std::string& task_id, const std::string& depends_on);
+
+    /**
+     * @brief 内部统计信息(用于监控/测试)
+     */
+    struct Stats {
+        size_t task_count;       // dependencies_ 中的 task 数
+        size_t completed_count;  // completed_tasks_ 中的 task 数
+        size_t edge_count;       // 所有 task 依赖边的总数
+    };
+    Stats get_stats() const;
 
     /**
      * @brief 获取任务的依赖列表

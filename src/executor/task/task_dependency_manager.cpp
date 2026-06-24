@@ -70,6 +70,61 @@ void TaskDependencyManager::mark_completed(const std::string& task_id) {
     completed_tasks_.insert(task_id);
 }
 
+size_t TaskDependencyManager::prune(const std::string& task_id) {
+    if (task_id.empty()) {
+        return 0;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    size_t removed = 0;
+    auto it = dependencies_.find(task_id);
+    if (it != dependencies_.end()) {
+        removed += it->second.size();
+        dependencies_.erase(it);
+    }
+    auto cit = completed_tasks_.find(task_id);
+    if (cit != completed_tasks_.end()) {
+        completed_tasks_.erase(cit);
+        ++removed;
+    }
+    return removed;
+}
+
+bool TaskDependencyManager::remove_dependency(const std::string& task_id,
+                                               const std::string& depends_on) {
+    if (task_id.empty() || depends_on.empty()) {
+        return false;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    auto it = dependencies_.find(task_id);
+    if (it == dependencies_.end()) {
+        return false;
+    }
+    auto& deps = it->second;
+    auto dit = std::find(deps.begin(), deps.end(), depends_on);
+    if (dit == deps.end()) {
+        return false;
+    }
+    deps.erase(dit);
+    if (deps.empty()) {
+        dependencies_.erase(it);
+    }
+    return true;
+}
+
+TaskDependencyManager::Stats TaskDependencyManager::get_stats() const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    Stats s{};
+    s.task_count = dependencies_.size();
+    s.completed_count = completed_tasks_.size();
+    s.edge_count = 0;
+    for (const auto& [_, deps] : dependencies_) {
+        s.edge_count += deps.size();
+    }
+    return s;
+}
+
 void TaskDependencyManager::clear() {
     std::unique_lock<std::shared_mutex> lock(mutex_);
     dependencies_.clear();
