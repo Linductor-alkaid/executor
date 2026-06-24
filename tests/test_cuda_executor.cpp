@@ -50,6 +50,7 @@ bool test_cuda_exception_callback();
 bool test_cuda_executor_priority_queue();
 bool test_cuda_executor_batch_submit();
 bool test_cuda_executor_task_dependency();
+bool test_cuda_executor_batch_submit_returns_future_per_input();
 
 // ========== CUDA 执行器基本功能测试 ==========
 
@@ -1049,6 +1050,84 @@ struct EarlyInit {
 static EarlyInit g_early_init;
 #endif
 
+// P-260624-001: submit_kernels_batch must return exactly N futures for any
+// N-task input on every return path (not-running, CUDA-not-enabled, mid-batch
+// stop). Regression test for the early-return chunk loop bug at
+// src/executor/gpu/cuda_executor.cpp:1144-1152.
+bool test_cuda_executor_batch_submit_returns_future_per_input() {
+    std::cout << "Testing CudaExecutor::submit_kernels_batch returns future-per-input..." << std::endl;
+    bool ok = true;
+    const size_t N = 200;
+
+    std::vector<std::pair<std::function<void(void*)>, GpuTaskConfig>> tasks;
+    GpuTaskConfig cfg;
+    cfg.async = false;
+    for (size_t i = 0; i < N; ++i) {
+        tasks.push_back({[](void*){}, cfg});
+    }
+
+    {
+        // Path A: not initialised / not running. Exercises the early-return at
+        // cuda_executor.cpp:1118-1128 (already correct; serves as a baseline).
+        CudaExecutor uninit;
+        auto futs = uninit.submit_kernels_batch(tasks);
+        if (futs.size() != N) {
+            std::cerr << "  FAILED: uninit path returned " << futs.size()
+                      << " futures for " << N << " tasks" << std::endl;
+            ok = false;
+        } else {
+            for (size_t i = 0; i < futs.size(); ++i) {
+                if (!futs[i].valid()) {
+                    std::cerr << "  FAILED: uninit path future[" << i
+                              << "] is not valid" << std::endl;
+                    ok = false;
+                    break;
+                }
+            }
+        }
+    }
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    {
+        // Path B: stop-during-batch. With CUDA enabled, run a real executor and
+        // call stop() from another thread while submit_kernels_batch is
+        // iterating the chunk loop. The fix at cuda_executor.cpp:1147 turns
+        // `j < end` into `j < tasks.size()` so the result vector is always
+        // sized to N. This test is best-effort on hosts without a GPU (the
+        // outer block is compiled out below EXECUTOR_ENABLE_CUDA).
+        GpuExecutorConfig cfg2;
+        cfg2.name = "test_p001";
+        cfg2.device_id = 0;
+        cfg2.max_queue_size = 4;        // small queue to force queue_not_full_cv_ waits
+        cfg2.default_stream_count = 1;
+        CudaExecutor ex(cfg2.name, cfg2);
+        if (ex.start()) {
+            std::atomic<bool> stop_requested{false};
+            std::thread stopper([&ex, &stop_requested]() {
+                // Give the main thread a moment to start submitting.
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                ex.stop();
+                stop_requested.store(true);
+            });
+            auto futs = ex.submit_kernels_batch(tasks);
+            stopper.join();
+            if (futs.size() != N) {
+                std::cerr << "  FAILED: stop-during-batch returned "
+                          << futs.size() << " futures for " << N
+                          << " tasks (regression of P-001)" << std::endl;
+                ok = false;
+            }
+        } else {
+            std::cout << "  CUDA not available, skipping stop-during-batch path"
+                      << std::endl;
+        }
+    }
+#endif
+
+    if (ok) std::cout << "  PASSED" << std::endl;
+    return ok;
+}
+
 int main() {
     // 立即刷新输出，确保能看到
     std::cout.flush();
@@ -1085,6 +1164,7 @@ int main() {
         all_passed &= test_cuda_executor_priority_queue();
         all_passed &= test_cuda_executor_batch_submit();
         all_passed &= test_cuda_executor_task_dependency();
+        all_passed &= test_cuda_executor_batch_submit_returns_future_per_input();
         
         std::cout << "=========================================" << std::endl;
         if (all_passed) {

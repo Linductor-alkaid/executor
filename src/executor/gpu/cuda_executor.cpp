@@ -1144,7 +1144,7 @@ std::vector<std::future<void>> CudaExecutor::submit_kernels_batch(
                 if (!is_running_.load(std::memory_order_acquire)) {
                     auto eptr = std::make_exception_ptr(
                         std::runtime_error("CudaExecutor: submit aborted because executor is stopping"));
-                    for (size_t j = i; j < end; ++j) {
+                    for (size_t j = i; j < tasks.size(); ++j) {
                         auto prom = std::make_shared<std::promise<void>>();
                         prom->set_exception(eptr);
                         result.push_back(prom->get_future());
