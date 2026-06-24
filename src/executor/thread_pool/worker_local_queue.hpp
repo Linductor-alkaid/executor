@@ -23,8 +23,12 @@ class WorkerLocalQueue {
 public:
     /**
      * @brief 构造函数
-     * 
-     * @param capacity 队列容量（可选，用于限制队列大小）
+     *
+     * @param capacity 队列容量（默认 0）。当 capacity == 0 时,内部会回退到一个
+     *                 自适应最小值 (当前实现为 100 槽, 详见 worker_local_queue.cpp)。
+     *                 当 capacity > 0 时,严格按该值分配固定大小环形缓冲区。
+     *                 注: 0 并不表示"无限制",而是"使用默认最小容量"的 sentinel。
+     *                 P-260623-001: 此前的注释曾暗示 0 = 无限制,与实际行为不符,现已明确化。
      */
     explicit WorkerLocalQueue(size_t capacity = 0);
 

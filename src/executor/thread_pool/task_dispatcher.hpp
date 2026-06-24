@@ -120,6 +120,12 @@ public:
             // 更新负载信息
             size_t queue_size = local_queues_[worker_id].size();
             balancer_.update_load(worker_id, queue_size, 0);
+        } else {
+            // P-260623-001: 推送失败时(本地队列满)重新入队 scheduler,
+            // 避免任务从 scheduler 出队后既不在本地队列也不在 scheduler 而被永久丢弃。
+            // 镜像 dispatch_batch 中的回 enqueue 模式 (dispatch_batch 会回 enqueue 未推送的任务)。
+            // PriorityScheduler::enqueue 接受 const Task&,所以这里传 task 走 copy。
+            scheduler_.enqueue(task);
         }
 
         return success;
