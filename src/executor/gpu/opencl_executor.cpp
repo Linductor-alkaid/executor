@@ -43,6 +43,13 @@ void OpenCLExecutor::stop() {
         return;
     }
 
+    // P-260625-002 fix: signal + join all submit_kernel_after waiter threads
+    // before tearing down internal state. Mirrors the same P-002 fix on
+    // CudaExecutor (commit 159ab55) to eliminate the UAF where a detached
+    // waiter accesses this->submit_kernel_impl() after ~OpenCLExecutor()
+    // releases context_/queues_/streams_ via cleanup().
+    join_pending_waiters();
+
     running_ = false;
     queue_cv_.notify_all();
 
