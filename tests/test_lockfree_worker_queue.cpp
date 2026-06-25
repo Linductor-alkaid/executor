@@ -69,6 +69,65 @@ bool test_batch_operations() {
     return true;
 }
 
+// P-260625-001: 回归测试。push_batch 部分成功时必须清理未入队的 Task。
+// 在 ASan 下，该测试也充当泄漏断言；反复跑多次仍应零泄漏。
+bool test_push_batch_partial_fill_no_leak() {
+    std::cout << "Testing push_batch partial-fill cleanup (P-260625-001)..." << std::endl;
+
+    constexpr size_t CAP = 8;
+    constexpr size_t PRESEED = 6;
+    constexpr size_t BATCH = 5;
+    constexpr size_t ROUNDS = 200;
+
+    for (size_t round = 0; round < ROUNDS; ++round) {
+        LockFreeWorkerQueue queue(CAP);
+
+        for (size_t i = 0; i < PRESEED; ++i) {
+            Task t;
+            t.task_id = "seed_" + std::to_string(i);
+            t.priority = TaskPriority::NORMAL;
+            t.function = []() {};
+            if (!queue.push(t)) {
+                std::cerr << "FAILED round " << round
+                          << ": seed push " << i << " returned false" << std::endl;
+                return false;
+            }
+        }
+        if (queue.size() != PRESEED) {
+            std::cerr << "FAILED round " << round
+                      << ": size after seed = " << queue.size()
+                      << ", expected " << PRESEED << std::endl;
+            return false;
+        }
+
+        std::vector<Task> batch(BATCH);
+        for (size_t i = 0; i < BATCH; ++i) {
+            batch[i].task_id = "batch_" + std::to_string(i);
+            batch[i].priority = TaskPriority::NORMAL;
+            batch[i].function = []() {};
+        }
+
+        size_t pushed = queue.push_batch(batch.data(), BATCH);
+        if (pushed > 1) {
+            std::cerr << "FAILED round " << round
+                      << ": pushed = " << pushed
+                      << " > available 1" << std::endl;
+            return false;
+        }
+
+        if (queue.size() != PRESEED + pushed) {
+            std::cerr << "FAILED round " << round
+                      << ": size after batch = " << queue.size()
+                      << ", expected " << (PRESEED + pushed) << std::endl;
+            return false;
+        }
+    }
+
+    std::cout << "PASSED: push_batch partial-fill cleanup"
+              << " (" << ROUNDS << " rounds)" << std::endl;
+    return true;
+}
+
 bool test_steal() {
     std::cout << "Testing steal..." << std::endl;
 
@@ -210,6 +269,7 @@ int main() {
     all_passed &= test_steal();
     all_passed &= test_concurrent_push_pop();
     all_passed &= test_steal_no_double_consume();
+    all_passed &= test_push_batch_partial_fill_no_leak();
 
     if (all_passed) {
         std::cout << "\n✓ All tests passed!" << std::endl;
