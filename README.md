@@ -38,7 +38,7 @@
   `Executor` facade provides `submit`, `submit_priority`, `submit_delayed`, `submit_periodic`, `submit_batch`, `submit_batch_no_future`, and real-time task registration
 
 - **Batch Task Submission**
-  `submit_batch()` and `submit_batch_no_future()` efficiently submit large numbers of tasks, with **5–16x** throughput improvement in single-threaded scenarios (500–2000 tasks)
+  `submit_batch()` and `submit_batch_no_future()` efficiently submit large numbers of tasks, with **3–5x** throughput improvement in single-threaded scenarios (500–2000 tasks)
 
 - **Push-Task Backpressure Counter (P-001)**
   Real-time executors expose `push_task_ex()` and status counters such as `dropped_task_count`, making queue-full and object-pool-exhaustion drops observable without breaking the existing `push_task()` API.

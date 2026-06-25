@@ -38,7 +38,7 @@
   `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic`、`submit_batch`、`submit_batch_no_future` 及实时任务注册
 
 - **批量任务提交**
-  `submit_batch()` 和 `submit_batch_no_future()` 高效提交大量任务，单线程场景性能提升 **5-16x**（500-2000 个任务）
+  `submit_batch()` 和 `submit_batch_no_future()` 高效提交大量任务，单线程场景性能提升 **3-5x**（500-2000 个任务）
 
 - **push_task 背压计数器（P-001）**
   实时执行器提供 `push_task_ex()` 以及 `dropped_task_count` 等状态计数器，可观察队列满或对象池耗尽导致的丢任务，同时保留既有 `push_task()` API 兼容。
