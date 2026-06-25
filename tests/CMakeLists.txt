@@ -10,6 +10,7 @@ endif()
 
 # 收集测试源文件
 file(GLOB TEST_SOURCES "*.cpp")
+list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_dispatch_task_fallback\\.cpp$")
 
 # 如果未启用CUDA，排除CUDA/GPU相关测试（executor 不编译 gpu 源）
 if(NOT EXECUTOR_CUDA_ENABLED)
@@ -150,6 +151,30 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         )
     endif()
 endforeach()
+
+add_executable(test_dispatch_task_fallback test_dispatch_task_fallback.cpp)
+target_link_libraries(test_dispatch_task_fallback PRIVATE executor GTest::GTest GTest::Main)
+target_include_directories(test_dispatch_task_fallback PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+if(MSVC)
+    target_compile_options(test_dispatch_task_fallback PRIVATE /utf-8)
+endif()
+if(EXECUTOR_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(test_dispatch_task_fallback PRIVATE
+            --coverage
+            -fprofile-arcs
+            -ftest-coverage
+        )
+        target_link_options(test_dispatch_task_fallback PRIVATE --coverage)
+    endif()
+endif()
+add_test(NAME test_dispatch_task_fallback COMMAND test_dispatch_task_fallback)
+set_tests_properties(test_dispatch_task_fallback PROPERTIES
+    LABELS "unit"
+    TIMEOUT 30
+)
 
 # 如果使用 Google Test 或其他测试框架，可以在这里配置
 # 例如：
