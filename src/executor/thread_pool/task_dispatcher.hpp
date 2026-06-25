@@ -132,39 +132,6 @@ public:
     }
 
     /**
-     * @brief 分发指定任务
-     *
-     * @param task 要分发的任务
-     * @return 成功分发返回 true
-     */
-    bool dispatch_task(const Task& task) {
-        // P-260617-002: 持 shared_lock 保护 local_queues_ 访问
-        std::unique_ptr<std::shared_lock<std::shared_mutex>> lq_lock;
-        if (local_queues_mutex_) {
-            lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
-        }
-
-        // 使用负载均衡器选择目标工作线程
-        size_t worker_id = balancer_.select_worker();
-
-        // 检查 worker_id 是否有效
-        if (worker_id >= local_queues_.size()) {
-            return false;
-        }
-
-        // 分发任务到选定线程的本地队列
-        bool success = local_queues_[worker_id].push(task);
-
-        if (success) {
-            // 更新负载信息
-            size_t queue_size = local_queues_[worker_id].size();
-            balancer_.update_load(worker_id, queue_size, 0);
-        }
-
-        return success;
-    }
-
-    /**
      * @brief 批量分发任务
      *
      * 从调度器批量获取任务并分发，减少锁竞争。
