@@ -47,17 +47,30 @@ public:
         ptrs.reserve(n);
 
         for (size_t i = 0; i < n; ++i) {
-            auto* task_ptr = new Task();
-            copy_task(*task_ptr, tasks[i]);
+            Task* task_ptr = nullptr;
+            try {
+                task_ptr = new Task();
+                copy_task(*task_ptr, tasks[i]);
+            } catch (...) {
+                if (task_ptr) {
+                    delete task_ptr;
+                }
+                for (size_t k = 0; k < ptrs.size(); ++k) {
+                    delete reinterpret_cast<Task*>(ptrs[k]);
+                }
+                ptrs.clear();
+                throw;
+            }
             ptrs.push_back(reinterpret_cast<uintptr_t>(task_ptr));
         }
 
         size_t pushed = 0;
-        if (!main_queue_.push_batch(ptrs.data(), n, pushed)) {
-            // 清理未推入的任务
-            for (size_t i = pushed; i < n; ++i) {
-                delete reinterpret_cast<Task*>(ptrs[i]);
-            }
+        const bool ok = main_queue_.push_batch(ptrs.data(), n, pushed);
+        (void)ok;
+
+        // 清理未推入的任务；底层部分成功时也可能返回 true 且 pushed < n。
+        for (size_t i = pushed; i < n; ++i) {
+            delete reinterpret_cast<Task*>(ptrs[i]);
         }
         return pushed;
     }
