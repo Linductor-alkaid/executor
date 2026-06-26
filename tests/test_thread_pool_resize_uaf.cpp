@@ -20,12 +20,22 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <future>
 #include <iostream>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
+#include "executor/thread_pool/load_balancer.hpp"
+#include "executor/thread_pool/priority_scheduler.hpp"
+#include "executor/thread_pool/task_dispatcher.hpp"
 #include "executor/thread_pool/thread_pool.hpp"
+#include "executor/task/task.hpp"
 #include <executor/config.hpp>
 
 using namespace executor;
@@ -190,6 +200,142 @@ static bool test_get_status_during_resize() {
     return true;
 }
 
+
+// ----------------------------------------------------------------------------
+// Stub queue type for P-260626-004 dispatch_batch num_workers=0 guard test.
+//
+// Real WorkerLocalQueue is non-movable (contains std::mutex), which makes
+// constructing std::vector<WorkerLocalQueue> in test code painful (see
+// test_dispatch_task_fallback.cpp's placement-new hack).
+//
+// StubQueue implements only the minimum surface that TaskDispatcher<QueueT>
+// touches: push, push_batch, size.  The P-260626-004 fix path
+// (task_dispatcher.hpp:214-219) never calls push / push_batch -- it only
+// reads local_queues_.size() and re-enqueues the dequeued batch into the
+// scheduler -- so stub methods returning false / 0 are never exercised.
+// ----------------------------------------------------------------------------
+struct StubQueue {
+    bool push(const Task&) { return false; }
+    size_t push_batch(const Task*, size_t n) { (void)n; return 0; }
+    size_t size() const { return 0; }
+    bool pop(Task&) { return false; }
+    bool steal(Task&) { return false; }
+    bool try_steal(Task&) { return false; }
+};
+
+// ----------------------------------------------------------------------------
+// Test 4 (P-260626-004): dispatch_batch must not OOB-index local_queues_[w]
+// when local_queues_ is cleared (size==0) under the same shared_mutex that
+// guards the dispatcher's read path.
+//
+// Pre-fix: L210's `if (worker_id >= num_workers) worker_id = 0;` clamp falls
+// through to L225's `local_queues_[w].push_batch(...)` with num_workers==0
+// and worker_id==0 -- vector<QueueT>::operator[] at index >= size() is UB.
+// In practice: out-of-range access, silent mis-read, or SIGSEGV.
+//
+// Post-fix: L214-219 re-checks num_workers>0 *after* acquiring shared_lock.
+// When num_workers==0, the already-dequeued batch is re-enqueued into the
+// scheduler and the function returns 0.  Tasks are not lost, dispatcher
+// does not crash.
+//
+// Test strategy: ThreadPool::resize_local_queues(0) is rejected at the
+// public API (returns false on size change), so this test bypasses that
+// gate and constructs a TaskDispatcher<StubQueue> directly.  Main thread
+// holds unique_lock(lq_mutex) and clears the vector; worker thread is
+// blocked on shared_lock acquisition; once the unique_lock is released,
+// the worker resumes with an empty local_queues_ and hits the fix path.
+// ----------------------------------------------------------------------------
+static bool test_dispatch_batch_resize_zero_workers() {
+    std::cout << "[P-260626-004] dispatch_batch num_workers=0 guard: "
+                 "race vector-clear under unique_lock vs dispatch_batch "
+                 "shared_lock..." << std::endl;
+    std::cout.flush();
+
+    auto balancer_ptr = std::make_unique<LoadBalancer>(1);
+    PriorityScheduler scheduler;
+
+    std::vector<StubQueue> queues;
+    queues.emplace_back();
+
+    std::shared_mutex lq_mutex;
+
+    TaskDispatcher<StubQueue> dispatcher(
+        *balancer_ptr, scheduler, queues, &lq_mutex);
+
+    // Pre-fill scheduler with 100 tasks.
+    for (int i = 0; i < 100; ++i) {
+        Task t;
+        t.task_id = "p260626004-" + std::to_string(i);
+        t.priority = TaskPriority::NORMAL;
+        t.function = []() noexcept {};
+        t.submit_time_ns = 0;
+        t.timeout_ms = 0;
+        scheduler.enqueue(t);
+    }
+    size_t pre_size = scheduler.size();
+    TEST_ASSERT(pre_size == 100,
+                "scheduler should hold 100 tasks before dispatch");
+
+    // Main thread grabs unique_lock first; worker will block on shared_lock.
+    std::unique_lock<std::shared_mutex> writer_lock(lq_mutex);
+
+    std::atomic<bool> worker_done{false};
+    size_t dispatch_return = std::numeric_limits<size_t>::max();
+
+    std::thread worker([&]() {
+        // Will block on shared_lock until writer releases; upon wakeup,
+        // local_queues_ will be empty -- this is the bug scenario.
+        size_t ret = dispatcher.dispatch_batch(100);
+        dispatch_return = ret;
+        worker_done.store(true, std::memory_order_release);
+    });
+
+    // Give worker thread time to reach the shared_lock acquisition.
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::cout.flush();
+
+    // Inside the unique_lock window: clear local_queues_, simulating the
+    // post-resize(0) state described in P-260626-004 evidence.
+    queues.clear();
+    std::cout << "  main thread: cleared local_queues_, size="
+              << queues.size() << std::endl;
+    std::cout.flush();
+
+    writer_lock.unlock();  // Worker now acquires shared_lock, sees size==0
+    worker.join();
+
+    bool ok = worker_done.load(std::memory_order_acquire);
+    TEST_ASSERT(ok, "worker thread must complete (no crash/UB)");
+
+    std::cout << "  dispatch_batch return=" << dispatch_return << std::endl;
+    TEST_ASSERT(dispatch_return == 0,
+                "dispatch_batch should return 0 when num_workers==0");
+
+    size_t post_size = scheduler.size();
+    std::cout << "  scheduler pre=" << pre_size << " post=" << post_size
+              << std::endl;
+    TEST_ASSERT(post_size == 100,
+                "all 100 dequeued tasks must be re-enqueued to scheduler "
+                "(fix path re-enqueues batch when num_workers==0)");
+
+    // Round-trip stress: with local_queues_ permanently empty, repeated
+    // dispatch_batch calls must keep bouncing the batch back to scheduler
+    // without ever crashing or losing tasks.
+    for (int round = 0; round < 5; ++round) {
+        size_t ret = dispatcher.dispatch_batch(100);
+        TEST_ASSERT(ret == 0,
+                    "subsequent dispatch_batch with empty queues must "
+                    "return 0");
+        TEST_ASSERT(scheduler.size() == 100,
+                    "scheduler count must remain 100 across rounds "
+                    "(no tasks lost)");
+    }
+
+    std::cout << "  test_dispatch_batch_resize_zero_workers: PASSED"
+              << std::endl;
+    return true;
+}
+
 int main() {
     std::cout << "=== P-260617-002 thread_pool resize UAF guard tests ==="
               << std::endl;
@@ -198,11 +344,13 @@ int main() {
     all_ok &= test_resize_during_drain();
     all_ok &= test_concurrent_steal_and_resize();
     all_ok &= test_get_status_during_resize();
+    all_ok &= test_dispatch_batch_resize_zero_workers();
 
     if (all_ok) {
-        std::cout << "\n=== All P-002 tests PASSED ===" << std::endl;
+        std::cout << "\n=== All P-002 / P-260626-004 tests PASSED ==="
+                  << std::endl;
         return 0;
     }
-    std::cout << "\n=== Some P-002 tests FAILED ===" << std::endl;
+    std::cout << "\n=== Some tests FAILED ===" << std::endl;
     return 1;
 }
