@@ -154,6 +154,29 @@ public:
             }
 
             size_t batch_size = (count < available) ? count : available;
+
+            // 260626P003: CAS 之前预校验本次 batch 拟占用的全部槽位
+            // sequences_[index] == pos + i (即「待写入」状态)。该不变式
+            // 与单条 push() 一致:任何被其他线程占用 (seq > pos+i) 或
+            // 已经被消费者推进后回填的槽位 (seq < pos+i) 都视为不可用,
+            // 放弃本轮 CAS 预留,退避后重试读取最新 pos/available。
+            // 修复了 P-260626-003: CAS 成功后再覆盖式写入可能损坏已被
+            // 消费者推进的槽位或与并发 push 写入交叉的不一致风险。
+            bool slots_available = true;
+            for (size_t i = 0; i < batch_size; ++i) {
+                size_t index = (pos + i) & mask_;
+                size_t seq = sequences_[index].load(std::memory_order_acquire);
+                if (seq != pos + i) { slots_available = false; break; }
+            }
+            if (!slots_available) {
+                size_t scaled_backoff = backoff * backoff_multiplier_;
+                for (size_t i = 0; i < scaled_backoff; ++i) {
+                    PAUSE_INSTRUCTION();
+                }
+                backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
+                continue;
+            }
+
             if (enqueue_pos_.compare_exchange_weak(pos, pos + batch_size, std::memory_order_relaxed)) {
                 for (size_t i = 0; i < batch_size; ++i) {
                     size_t index = (pos + i) & mask_;
