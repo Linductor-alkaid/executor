@@ -1,7 +1,9 @@
 #include "realtime_thread_executor.hpp"
+#include "util/timer_period_guard.hpp"
 #include <stdexcept>
 #include <algorithm>
 #include <atomic>
+#include <optional>
 
 // Round-robin CPU hint: incremented each time a new RT thread auto-selects its core.
 // Wraps at hw_concurrency so threads spread across all available CPUs.
@@ -9,8 +11,6 @@ static std::atomic<unsigned> g_next_rt_cpu_hint{0};
 
 #ifdef _WIN32
 #include <windows.h>
-#include <mmsystem.h>
-#pragma comment(lib, "winmm.lib")
 #endif
 
 namespace executor {
@@ -48,12 +48,12 @@ bool RealtimeThreadExecutor::start() {
     // 创建实时线程
     thread_ = std::thread([this]() {
 #ifdef _WIN32
+        std::optional<util::TimerPeriodGuard> timer_period_guard;
         // 在Windows上提高定时器精度（对于短周期很重要）
         // 将定时器精度设置为1ms（默认是15.6ms）
         // 注意：这会增加系统功耗，但提高定时精度
         if (config_.cycle_period_ns < 20000000) {  // 如果周期小于20ms
-            timer_period_ms_.store(1, std::memory_order_relaxed);
-            timeBeginPeriod(1);
+            timer_period_guard.emplace(1);
         }
 #endif
         
@@ -148,14 +148,6 @@ void RealtimeThreadExecutor::stop() {
         if (thread_.joinable()) {
             thread_.join();
         }
-        
-#ifdef _WIN32
-        // 恢复Windows定时器精度
-        if (timer_period_ms_.load(std::memory_order_relaxed) > 0) {
-            timeEndPeriod(timer_period_ms_.load(std::memory_order_relaxed));
-            timer_period_ms_.store(0, std::memory_order_relaxed);
-        }
-#endif
     }
 }
 
