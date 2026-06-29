@@ -20,6 +20,7 @@
 #include "../monitor/task_monitor.hpp"
 #include <thread>
 #include <vector>
+#include <memory>
 #include <atomic>
 #include <mutex>
 #include <shared_mutex>
@@ -132,16 +133,11 @@ public:
     /**
      * @brief 重建工作线程本地队列（动态扩缩容 API）
      *
-     * P-260617-002: 在 unique_lock(local_queues_mutex_) 排他窗口内重建
-     * local_queues_ 与 worker_ids_，与 worker_thread 的 shared_lock
-     * 配对，防止 vector reallocation 期间 worker 访问到悬空引用 / UAF。
-     *
-     * 调用方应先通过 resizer / 外部逻辑保证无 worker 正在访问旧 vector。
-     * 当前实现：在 unique_lock 下将旧 vector 与新 vector 整体 swap，
-     * 旧 vector 在持锁窗口结束后被析构（WorkerQueueImpl 的不可移动 mutex
-     * 通过 placement-new 重建的初始化路径由 initialize() 提供；运行时
-     * 仅做 clear + 重新构造 placement-new 元素，保持接口简单且与
-     * initialize() 路径一致）。
+     * local_queues_ 通过 shared_ptr 发布新 vector。resize 路径持
+     * unique_lock(local_queues_mutex_)，所有 worker / dispatcher 访问路径持
+     * shared_lock 并先取得 shared_ptr 快照；旧 vector 会在最后一个快照释放后
+     * 析构，不会因指针发布导致悬空引用。发布前会把旧队列中未执行任务放回
+     * scheduler_，避免 shrink / replace 丢任务。
      *
      * @param new_num_queues 新的本地队列数量（与 worker 数一致）
      * @return 成功返回 true
@@ -286,7 +282,7 @@ private:
     std::unique_ptr<LoadBalancer> load_balancer_;
 
     // 工作线程本地队列
-    std::vector<WorkerQueueImpl> local_queues_;
+    std::shared_ptr<std::vector<WorkerQueueImpl>> local_queues_;
     // 260610P012: 专门保护 local_queues_ 的 shared_mutex
     // - steal / worker 持 shared_lock(并发读)
     // - resize / shutdown 持 unique_lock(排他写)

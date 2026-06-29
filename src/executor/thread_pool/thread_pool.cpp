@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <random>
+#include <new>
 
 namespace executor {
 
@@ -40,35 +41,18 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
     }
     
     // 初始化工作线程本地队列
-#ifdef USE_LOCKFREE_WORKER_QUEUE
-    // LockFreeWorkerQueue 内部含 std::vector<std::atomic<size_t>>，因此整体不可移动。
-    // std::vector 在 reserve/emplace_back 触发 realloc 时会做 move-construct，导致编译失败。
-    // 由于本分支的修复需要绕开 std::vector 的存储语义，超出 P-004 范围，
-    // 暂保留原始 emplace_back 路径——P-004 提交完成后此处的预存在 bug 由后续 plan 处理。
-    local_queues_.clear();
+    auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>(config_.min_threads);
     for (size_t i = 0; i < config_.min_threads; ++i) {
-        local_queues_.emplace_back(config_.queue_capacity);
+        (*new_queues)[i].~WorkerQueueImpl();
+        new (&(*new_queues)[i]) WorkerQueueImpl(config_.queue_capacity);
     }
-#else
-    // WorkerLocalQueue 包含不可移动的 mutex，需要 placement new
-    for (auto& queue : local_queues_) {
-        queue.~WorkerQueueImpl();
-    }
-
-    std::vector<WorkerQueueImpl> new_queues(config_.min_threads);
-    local_queues_.swap(new_queues);
-
-    for (size_t i = 0; i < config_.min_threads; ++i) {
-        local_queues_[i].~WorkerQueueImpl();
-        new (&local_queues_[i]) WorkerQueueImpl(config_.queue_capacity);
-    }
-#endif
+    std::atomic_store_explicit(&local_queues_, new_queues, std::memory_order_release);
     
     // 初始化任务分发器（TaskDispatcher 是模板类，需要显式指定实例化类型）
     // P-260617-002: 传入 local_queues_mutex_ 指针,dispatcher 内部 dispatch
     // 路径会持 shared_lock，与 resize 路径的 unique_lock 配对防 UAF。
     dispatcher_ = std::make_unique<TaskDispatcher<WorkerQueueImpl>>(
-        *load_balancer_, scheduler_, local_queues_, &local_queues_mutex_
+        *load_balancer_, scheduler_, &local_queues_, &local_queues_mutex_
     );
     
     // 初始化动态扩缩容控制器
@@ -102,7 +86,8 @@ void ThreadPool::worker_thread(size_t worker_id) {
         // 路径的 unique_lock 配对，防止 vector reallocation 期间悬空访问。
         {
             std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-            if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
+            auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+            if (queues && worker_id < queues->size() && (*queues)[worker_id].pop(task)) {
                 has_task = true;
             }
         }
@@ -122,7 +107,8 @@ void ThreadPool::worker_thread(size_t worker_id) {
             std::unique_lock<std::mutex> lock(mutex_);
             condition_.wait(lock, [this, &has_task, &task, worker_id]() {
                 std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-                if (worker_id < local_queues_.size() && local_queues_[worker_id].pop(task)) {
+                auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+                if (queues && worker_id < queues->size() && (*queues)[worker_id].pop(task)) {
                     has_task = true;
                     return true;
                 }
@@ -140,9 +126,12 @@ void ThreadPool::worker_thread(size_t worker_id) {
             // 即使 stop_ 为 true，也要检查本地队列以排空任务
             // P-260617-002: predicate 内的 lq_lock 已随 lambda 析构，
             // 此处重新加 shared_lock 后再访问。
-            if (!has_task && worker_id < local_queues_.size()) {
+            if (!has_task) {
                 std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-                has_task = local_queues_[worker_id].pop(task);
+                auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+                if (queues && worker_id < queues->size()) {
+                    has_task = (*queues)[worker_id].pop(task);
+                }
             }
         }
 
@@ -164,10 +153,13 @@ void ThreadPool::worker_thread(size_t worker_id) {
 
             // 更新负载信息
             // P-260617-002: size() 必须持 shared_lock 访问 local_queues_
-            if (worker_id < local_queues_.size() && load_balancer_) {
+            if (load_balancer_) {
                 std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-                size_t queue_size = local_queues_[worker_id].size();
-                load_balancer_->update_load(worker_id, queue_size, 0);
+                auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+                if (queues && worker_id < queues->size()) {
+                    size_t queue_size = (*queues)[worker_id].size();
+                    load_balancer_->update_load(worker_id, queue_size, 0);
+                }
             }
         }
 
@@ -309,8 +301,11 @@ ThreadPoolStatus ThreadPool::get_status() const {
     size_t local_queue_size = 0;
     {
         std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-        for (const auto& queue : local_queues_) {
-            local_queue_size += queue.size();
+        auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+        if (queues) {
+            for (const auto& queue : *queues) {
+                local_queue_size += queue.size();
+            }
         }
     }
     status.queue_size = scheduler_.size() + local_queue_size;
@@ -375,44 +370,42 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
         // 保持配对语义（reader 一律持 shared_lock，写者一律持 unique_lock）。
         {
             std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-            local_queues_.clear();
+            auto empty_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+            std::atomic_store_explicit(&local_queues_, empty_queues, std::memory_order_release);
         }
     });
 }
 
 bool ThreadPool::resize_local_queues(size_t new_num_queues) {
-    // P-260617-002: 公开 resize 入口。持 unique_lock(local_queues_mutex_)
-    // 排他窗口，与 worker_thread / dispatcher 的 shared_lock 配对。
-    //
-    // 设计取舍（已知局限，注释化保留供后续 plan 优化）:
-    // - WorkerQueueImpl 含 std::mutex 不可移动 / 不可拷贝。
-    //   std::vector<WorkerQueueImpl> 的 swap() 不要求 move/copy 元素，
-    //   但 TaskDispatcher 内部持有 `std::vector<QueueT>&` 引用，swap 后
-    //   dispatcher 仍引用旧 vector，触发"双 vector"不一致。完整修复需
-    //   把 local_queues_ 改 std::unique_ptr<std::vector<...>>，超出
-    //   P-002 范围，留作后续 plan。
-    // - 当前实现: P-002 范围内仅做"持 unique_lock 排他窗口"演示
-    //   writer-reader 互斥，不实际重建 element。重建 element 会
-    //   析构旧 WorkerLocalQueue 内的任务（P-002 测试不希望破坏既有
-    //   任务，原始 UAF 风险已被 shared_lock 防护消解）。
-    // - 真扩缩容（size 变化）在 P-002 范围内拒绝并返回 false，留给
-    //   后续 plan 重构为 unique_ptr<vector> 后再开放。
     if (new_num_queues == 0) {
         return false;
     }
-    if (new_num_queues != local_queues_.size()) {
-        return false;
+
+    auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>(new_num_queues);
+    for (size_t i = 0; i < new_num_queues; ++i) {
+        (*new_queues)[i].~WorkerQueueImpl();
+        new (&(*new_queues)[i]) WorkerQueueImpl(config_.queue_capacity);
     }
 
-    // 持 unique_lock 等待所有 shared_lock 释放：与 worker_thread / dispatcher
-    // 的 shared_lock 互斥。窗口内不做 element 重建（会摧毁任务），仅同步
-    // LoadBalancer 内部负载数组。
     std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+    auto old_queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+    if (old_queues) {
+        for (auto& queue : *old_queues) {
+            Task task;
+            while (queue.pop(task)) {
+                scheduler_.enqueue(task);
+            }
+        }
+    }
+
+    std::atomic_store_explicit(&local_queues_, new_queues, std::memory_order_release);
 
     if (load_balancer_) {
         load_balancer_->resize(new_num_queues);
     }
 
+    lq_lock.unlock();
+    condition_.notify_all();
     return true;
 }
 
@@ -443,8 +436,11 @@ void ThreadPool::wait_for_completion() {
             size_t local_queue_total = 0;
             {
                 std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-                for (const auto& queue : local_queues_) {
-                    local_queue_total += queue.size();
+                auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+                if (queues) {
+                    for (const auto& queue : *queues) {
+                        local_queue_total += queue.size();
+                    }
                 }
             }
             bool all_queues_empty = scheduler_empty && (local_queue_total == 0);
@@ -469,8 +465,11 @@ void ThreadPool::wait_for_completion() {
             size_t local_queue_total = 0;
             {
                 std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-                for (const auto& queue : local_queues_) {
-                    local_queue_total += queue.size();
+                auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+                if (queues) {
+                    for (const auto& queue : *queues) {
+                        local_queue_total += queue.size();
+                    }
                 }
             }
             bool all_queues_empty = scheduler_empty && (local_queue_total == 0);
@@ -507,7 +506,8 @@ bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
     // P-260617-002: 调用方必须已持 shared_lock(local_queues_mutex_)。
     // 内部不再获取该锁。worker_thread 谓词中已持 shared_lock 时调用此函数
     // 不会重入，避免 std::shared_mutex 重入 UB。
-    if (local_queues_.size() <= 1) {
+    auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
+    if (!queues || queues->size() <= 1) {
         return false;  // 只有一个线程，无法窃取
     }
 
@@ -516,12 +516,12 @@ bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
         // 获取所有线程的负载信息
         std::vector<LoadBalancer::WorkerLoad> loads = load_balancer_->get_all_loads();
 
-        if (loads.size() == local_queues_.size()) {
+        if (loads.size() == queues->size()) {
             // 创建线程ID和负载的配对，用于排序
             std::vector<std::pair<size_t, size_t>> worker_loads;
-            worker_loads.reserve(local_queues_.size());
+            worker_loads.reserve(queues->size());
 
-            for (size_t i = 0; i < local_queues_.size(); ++i) {
+            for (size_t i = 0; i < queues->size(); ++i) {
                 if (i != worker_id) {  // 跳过自己
                     // 计算总负载：队列大小 + 活跃任务数
                     size_t total_load = loads[i].queue_size + loads[i].active_tasks;
@@ -551,9 +551,9 @@ bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
                 // 按排序顺序尝试窃取
                 for (const auto& wl : worker_loads) {
                     size_t target_id = wl.first;
-                    if (local_queues_[target_id].steal(task)) {
+                    if ((*queues)[target_id].steal(task)) {
                         // 更新目标线程的负载信息
-                        size_t queue_size = local_queues_[target_id].size();
+                        size_t queue_size = (*queues)[target_id].size();
                         load_balancer_->update_load(target_id, queue_size, 0);
                         return true;
                     }
@@ -565,12 +565,12 @@ bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
     // 回退到随机策略（如果无法获取负载信息或所有线程负载相同）
     // 使用 thread_local 随机数生成器（首次使用时会自动初始化）
     static thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<size_t> dist(0, local_queues_.size() - 1);
+    std::uniform_int_distribution<size_t> dist(0, queues->size() - 1);
     size_t start_index = dist(rng);
 
     // 尝试从其他线程窃取任务
-    for (size_t i = 0; i < local_queues_.size(); ++i) {
-        size_t target_id = (start_index + i) % local_queues_.size();
+    for (size_t i = 0; i < queues->size(); ++i) {
+        size_t target_id = (start_index + i) % queues->size();
 
         // 跳过自己
         if (target_id == worker_id) {
@@ -578,10 +578,10 @@ bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
         }
 
         // 尝试窃取
-        if (local_queues_[target_id].steal(task)) {
+        if ((*queues)[target_id].steal(task)) {
             // 更新目标线程的负载信息
             if (load_balancer_) {
-                size_t queue_size = local_queues_[target_id].size();
+                size_t queue_size = (*queues)[target_id].size();
                 load_balancer_->update_load(target_id, queue_size, 0);
             }
             return true;

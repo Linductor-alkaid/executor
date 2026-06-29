@@ -61,7 +61,20 @@ public:
                    std::shared_mutex* local_queues_mutex = nullptr)
         : balancer_(balancer)
         , scheduler_(scheduler)
-        , local_queues_(local_queues)
+        , local_queues_slot_(nullptr)
+        , legacy_local_queues_(&local_queues)
+        , local_queues_snapshot_()
+        , local_queues_mutex_(local_queues_mutex) {}
+
+    TaskDispatcher(LoadBalancer& balancer,
+                   PriorityScheduler& scheduler,
+                   const std::shared_ptr<std::vector<QueueT>>* local_queues_slot,
+                   std::shared_mutex* local_queues_mutex = nullptr)
+        : balancer_(balancer)
+        , scheduler_(scheduler)
+        , local_queues_slot_(local_queues_slot)
+        , legacy_local_queues_(nullptr)
+        , local_queues_snapshot_()
         , local_queues_mutex_(local_queues_mutex) {}
 
     /**
@@ -90,6 +103,7 @@ public:
         if (local_queues_mutex_) {
             lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
         }
+        auto local_queues = queues_snapshot_locked();
 
         Task task;
 
@@ -102,7 +116,7 @@ public:
         size_t worker_id = balancer_.select_worker();
 
         // 检查 worker_id 是否有效
-        if (worker_id >= local_queues_.size()) {
+        if (!local_queues || worker_id >= local_queues->size()) {
             // 260610P009: resize 期间 LoadBalancer 可能返回已被移除的 worker_id。
             // 修复前: 直接丢弃,任务从 scheduler 出队后永久丢失(高并发场景下可能频繁发生)。
             // 修复后: 将任务重新 enqueue 回 scheduler,等待下一轮 dispatch。
@@ -114,11 +128,11 @@ public:
         }
 
         // 分发任务到选定线程的本地队列
-        bool success = local_queues_[worker_id].push(task);
+        bool success = (*local_queues)[worker_id].push(task);
 
         if (success) {
             // 更新负载信息
-            size_t queue_size = local_queues_[worker_id].size();
+            size_t queue_size = (*local_queues)[worker_id].size();
             balancer_.update_load(worker_id, queue_size, 0);
         } else {
             // P-260623-001: 推送失败时(本地队列满)重新入队 scheduler,
@@ -143,6 +157,7 @@ public:
         if (local_queues_mutex_) {
             lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
         }
+        auto local_queues = queues_snapshot_locked();
 
         auto enqueue_fallback = [this, &task]() {
             try {
@@ -157,7 +172,7 @@ public:
         size_t worker_id = balancer_.select_worker();
 
         // 检查 worker_id 是否有效
-        if (worker_id >= local_queues_.size()) {
+        if (!local_queues || worker_id >= local_queues->size()) {
             // 260610P009 / 260625-007: resize 期间 LoadBalancer 可能返回已越界的
             // worker_id。dispatch_task 不从 scheduler 出队,但调用方已提交 task；
             // fallback 回 scheduler,避免静默丢任务。
@@ -165,11 +180,11 @@ public:
         }
 
         // 分发任务到选定线程的本地队列
-        bool success = local_queues_[worker_id].push(task);
+        bool success = (*local_queues)[worker_id].push(task);
 
         if (success) {
             // 更新负载信息
-            size_t queue_size = local_queues_[worker_id].size();
+            size_t queue_size = (*local_queues)[worker_id].size();
             balancer_.update_load(worker_id, queue_size, 0);
         } else {
             // P-260623-001 / 260625-007: 本地队列满时回 enqueue 到 scheduler,
@@ -189,7 +204,7 @@ public:
      * @return 实际分发的任务数
      */
     size_t dispatch_batch(size_t max_tasks = 10) {
-        if (max_tasks == 0 || local_queues_.empty()) return 0;
+        if (max_tasks == 0) return 0;
 
         // P-260617-002: 持 shared_lock 保护 local_queues_ 访问整个函数体。
         // 早返回的 0 路径不需要锁（仅读 size，无 race 风险）。
@@ -197,6 +212,8 @@ public:
         if (local_queues_mutex_) {
             lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
         }
+        auto local_queues = queues_snapshot_locked();
+        if (!local_queues || local_queues->empty()) return 0;
 
         std::unique_ptr<Task[]> batch(new Task[max_tasks]);
         const size_t n = scheduler_.dequeue_batch(batch.get(), max_tasks);
@@ -210,7 +227,7 @@ public:
         // local_queues_ 为空, 但 batch 已从 scheduler 出队。统一防线:
         // 持锁后再断言 num_workers > 0, 否则把已出队的 batch 全部回 enqueue
         // 到 scheduler, 避免钳位到 0 后的越界访问 (local_queues_[w]) 与静默丢任务。
-        const size_t num_workers = local_queues_.size();
+        const size_t num_workers = local_queues->size();
         if (num_workers == 0) {
             for (size_t i = 0; i < n; ++i) {
                 scheduler_.enqueue(batch[i]);
@@ -236,7 +253,7 @@ public:
             for (size_t j = 0; j < indices.size(); ++j)
                 detail::copy_task_fields(tmp[j], batch[indices[j]]);
 
-            size_t pushed = local_queues_[w].push_batch(tmp.get(), indices.size());
+            size_t pushed = (*local_queues)[w].push_batch(tmp.get(), indices.size());
             total_dispatched += pushed;
 
             // 将未能推送的任务放回调度器
@@ -244,7 +261,7 @@ public:
                 scheduler_.enqueue(tmp[j]);
             }
 
-            load_updates.emplace_back(w, local_queues_[w].size(), 0);
+            load_updates.emplace_back(w, (*local_queues)[w].size(), 0);
         }
 
         if (!load_updates.empty())
@@ -261,9 +278,27 @@ public:
     }
 
 private:
+    std::shared_ptr<std::vector<QueueT>> queues_snapshot_locked() const {
+        if (local_queues_slot_) {
+            return std::atomic_load_explicit(local_queues_slot_,
+                                             std::memory_order_acquire);
+        }
+        if (legacy_local_queues_) {
+            if (!local_queues_snapshot_) {
+                local_queues_snapshot_ =
+                    std::shared_ptr<std::vector<QueueT>>(legacy_local_queues_,
+                                                         [](std::vector<QueueT>*) {});
+            }
+            return local_queues_snapshot_;
+        }
+        return {};
+    }
+
     LoadBalancer& balancer_;                      // 负载均衡器
     PriorityScheduler& scheduler_;                // 优先级调度器
-    std::vector<QueueT>& local_queues_;           // 工作线程本地队列数组
+    const std::shared_ptr<std::vector<QueueT>>* local_queues_slot_;
+    std::vector<QueueT>* legacy_local_queues_;
+    mutable std::shared_ptr<std::vector<QueueT>> local_queues_snapshot_;
     std::shared_mutex* local_queues_mutex_;       // P-260617-002: 保护 local_queues_ 的 shared_mutex
 };
 
