@@ -1,10 +1,11 @@
 #pragma once
 
-#include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace executor {
@@ -92,16 +93,22 @@ public:
         Node* node = nullptr;
         if (index >= 0
             && static_cast<size_t>(index) < capacity_
-            && &storage_[index].data == obj) {
-            node = &storage_[index];
+            && &storage_[static_cast<size_t>(index)].data == obj) {
+            node = &storage_[static_cast<size_t>(index)];
         }
-        assert(node && "ObjectPool::release called with a foreign pointer");
-        if (!node) return;
+        if (!node) {
+            throw std::logic_error(
+                std::string("ObjectPool: release of foreign pointer ")
+                + std::to_string(reinterpret_cast<std::uintptr_t>(obj)));
+        }
 
         // O(1) double-release detection via a per-node flag, set when the node
         // re-enters the free list and cleared when it is acquired.
-        assert(!node->in_free_list && "ObjectPool::release called more than once");
-        if (node->in_free_list) return;
+        if (node->in_free_list) {
+            throw std::logic_error(
+                std::string("ObjectPool: double release of node ")
+                + std::to_string(reinterpret_cast<std::uintptr_t>(node)));
+        }
 
         node->in_free_list = true;
         node->next = free_list_;
