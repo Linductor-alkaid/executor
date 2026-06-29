@@ -170,9 +170,6 @@ private:
     // P-001 (260615): 构造时指定的统计开关, push_task() 路径不依赖此开关.
     const bool enable_stats_;
     
-#ifdef _WIN32
-    std::atomic<unsigned int> timer_period_ms_{0};  // Windows定时器精度设置（毫秒），用于timeBeginPeriod/timeEndPeriod
-#endif
 };
 
 } // namespace executor
