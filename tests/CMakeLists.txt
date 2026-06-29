@@ -11,6 +11,7 @@ endif()
 # 收集测试源文件
 file(GLOB TEST_SOURCES "*.cpp")
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_dispatch_task_fallback\\.cpp$")
+list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_object_pool_double_release_detect\\.cpp$")
 
 # 如果未启用CUDA，排除CUDA/GPU相关测试（executor 不编译 gpu 源）
 if(NOT EXECUTOR_CUDA_ENABLED)
@@ -172,6 +173,55 @@ if(EXECUTOR_ENABLE_COVERAGE)
 endif()
 add_test(NAME test_dispatch_task_fallback COMMAND test_dispatch_task_fallback)
 set_tests_properties(test_dispatch_task_fallback PROPERTIES
+    LABELS "unit"
+    TIMEOUT 30
+)
+
+add_executable(test_object_pool_double_release_detect test_object_pool_double_release_detect.cpp)
+target_link_libraries(test_object_pool_double_release_detect PRIVATE executor GTest::GTest GTest::Main)
+target_include_directories(test_object_pool_double_release_detect PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+if(MSVC)
+    target_compile_options(test_object_pool_double_release_detect PRIVATE /utf-8)
+endif()
+if(EXECUTOR_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(test_object_pool_double_release_detect PRIVATE
+            --coverage
+            -fprofile-arcs
+            -ftest-coverage
+        )
+        target_link_options(test_object_pool_double_release_detect PRIVATE --coverage)
+    endif()
+endif()
+add_test(NAME test_object_pool_double_release_detect COMMAND test_object_pool_double_release_detect)
+set_tests_properties(test_object_pool_double_release_detect PROPERTIES
+    LABELS "unit"
+    TIMEOUT 30
+)
+
+add_executable(test_object_pool_double_release_detect_ndebug test_object_pool_double_release_detect.cpp)
+target_link_libraries(test_object_pool_double_release_detect_ndebug PRIVATE executor GTest::GTest GTest::Main)
+target_include_directories(test_object_pool_double_release_detect_ndebug PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+)
+target_compile_definitions(test_object_pool_double_release_detect_ndebug PRIVATE NDEBUG)
+if(MSVC)
+    target_compile_options(test_object_pool_double_release_detect_ndebug PRIVATE /utf-8)
+endif()
+if(EXECUTOR_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(test_object_pool_double_release_detect_ndebug PRIVATE
+            --coverage
+            -fprofile-arcs
+            -ftest-coverage
+        )
+        target_link_options(test_object_pool_double_release_detect_ndebug PRIVATE --coverage)
+    endif()
+endif()
+add_test(NAME test_object_pool_double_release_detect_ndebug COMMAND test_object_pool_double_release_detect_ndebug)
+set_tests_properties(test_object_pool_double_release_detect_ndebug PROPERTIES
     LABELS "unit"
     TIMEOUT 30
 )
