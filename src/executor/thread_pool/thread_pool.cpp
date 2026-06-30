@@ -40,23 +40,32 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
         load_balancer_->set_strategy(LoadBalancer::Strategy::ROUND_ROBIN);
     }
     
-    // 初始化工作线程本地队列
-    auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>(config_.min_threads);
-    for (size_t i = 0; i < config_.min_threads; ++i) {
-        (*new_queues)[i].~WorkerQueueImpl();
-        new (&(*new_queues)[i]) WorkerQueueImpl(config_.queue_capacity);
+    try {
+        // 初始化工作线程本地队列
+        auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+        new_queues->reserve(config_.min_threads);
+        for (size_t i = 0; i < config_.min_threads; ++i) {
+            new_queues->emplace_back(config_.queue_capacity);
+        }
+        std::atomic_store_explicit(&local_queues_, new_queues, std::memory_order_release);
+
+        // 初始化任务分发器（TaskDispatcher 是模板类，需要显式指定实例化类型）
+        // P-260617-002: 传入 local_queues_mutex_ 指针,dispatcher 内部 dispatch
+        // 路径会持 shared_lock，与 resize 路径的 unique_lock 配对防 UAF。
+        dispatcher_ = std::make_unique<TaskDispatcher<WorkerQueueImpl>>(
+            *load_balancer_, scheduler_, &local_queues_, &local_queues_mutex_
+        );
+
+        // 初始化动态扩缩容控制器
+        resizer_ = std::make_unique<ThreadPoolResizer>(*this, config_);
+    } catch (const std::bad_alloc&) {
+        load_balancer_.reset();
+        dispatcher_.reset();
+        resizer_.reset();
+        auto empty_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+        std::atomic_store_explicit(&local_queues_, empty_queues, std::memory_order_release);
+        return false;
     }
-    std::atomic_store_explicit(&local_queues_, new_queues, std::memory_order_release);
-    
-    // 初始化任务分发器（TaskDispatcher 是模板类，需要显式指定实例化类型）
-    // P-260617-002: 传入 local_queues_mutex_ 指针,dispatcher 内部 dispatch
-    // 路径会持 shared_lock，与 resize 路径的 unique_lock 配对防 UAF。
-    dispatcher_ = std::make_unique<TaskDispatcher<WorkerQueueImpl>>(
-        *load_balancer_, scheduler_, &local_queues_, &local_queues_mutex_
-    );
-    
-    // 初始化动态扩缩容控制器
-    resizer_ = std::make_unique<ThreadPoolResizer>(*this, config_);
     
     // 创建工作线程
     workers_.reserve(config_.min_threads);
@@ -381,10 +390,10 @@ bool ThreadPool::resize_local_queues(size_t new_num_queues) {
         return false;
     }
 
-    auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>(new_num_queues);
+    auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+    new_queues->reserve(new_num_queues);
     for (size_t i = 0; i < new_num_queues; ++i) {
-        (*new_queues)[i].~WorkerQueueImpl();
-        new (&(*new_queues)[i]) WorkerQueueImpl(config_.queue_capacity);
+        new_queues->emplace_back(config_.queue_capacity);
     }
 
     std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);

@@ -34,10 +34,58 @@
 namespace executor {
 
 #ifdef USE_LOCKFREE_WORKER_QUEUE
-using WorkerQueueImpl = LockFreeWorkerQueue;
+using WorkerQueueConcrete = LockFreeWorkerQueue;
 #else
-using WorkerQueueImpl = WorkerLocalQueue;
+using WorkerQueueConcrete = WorkerLocalQueue;
 #endif
+
+class WorkerQueueImpl {
+public:
+    explicit WorkerQueueImpl(size_t capacity = 0)
+        : queue_(std::make_unique<WorkerQueueConcrete>(capacity)) {}
+
+    ~WorkerQueueImpl() = default;
+
+    WorkerQueueImpl(const WorkerQueueImpl&) = delete;
+    WorkerQueueImpl& operator=(const WorkerQueueImpl&) = delete;
+    WorkerQueueImpl(WorkerQueueImpl&&) noexcept = default;
+    WorkerQueueImpl& operator=(WorkerQueueImpl&&) noexcept = default;
+
+    bool push(const Task& task) {
+        return queue_->push(task);
+    }
+
+    bool push(Task&& task) {
+        return queue_->push(std::move(task));
+    }
+
+    size_t push_batch(const Task* tasks, size_t n) {
+        return queue_->push_batch(tasks, n);
+    }
+
+    bool pop(Task& task) {
+        return queue_->pop(task);
+    }
+
+    bool steal(Task& task) {
+        return queue_->steal(task);
+    }
+
+    size_t size() const {
+        return queue_->size();
+    }
+
+    bool empty() const {
+        return queue_->empty();
+    }
+
+    void clear() {
+        queue_->clear();
+    }
+
+private:
+    std::unique_ptr<WorkerQueueConcrete> queue_;
+};
 
 /**
  * @brief 线程池核心类

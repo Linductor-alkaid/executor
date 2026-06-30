@@ -6,6 +6,8 @@
 #include <chrono>
 #include <future>
 #include <algorithm>
+#include <cstdlib>
+#include <new>
 
 // 包含 thread_pool 模块的头文件
 #include <executor/config.hpp>
@@ -14,6 +16,54 @@
 #include "executor/thread_pool/thread_pool.hpp"
 
 using namespace executor;
+
+namespace {
+
+std::atomic<bool> g_fail_large_allocations{false};
+std::atomic<int> g_large_allocation_count{0};
+std::atomic<int> g_fail_large_allocation_number{0};
+std::atomic<size_t> g_large_allocation_threshold{0};
+
+void* allocate_with_failure_injection(std::size_t size) {
+    if (g_fail_large_allocations.load(std::memory_order_relaxed) &&
+        size >= g_large_allocation_threshold.load(std::memory_order_relaxed)) {
+        int allocation_number = g_large_allocation_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (allocation_number == g_fail_large_allocation_number.load(std::memory_order_relaxed)) {
+            throw std::bad_alloc();
+        }
+    }
+
+    if (void* p = std::malloc(size)) {
+        return p;
+    }
+    throw std::bad_alloc();
+}
+
+} // namespace
+
+void* operator new(std::size_t size) {
+    return allocate_with_failure_injection(size);
+}
+
+void* operator new[](std::size_t size) {
+    return allocate_with_failure_injection(size);
+}
+
+void operator delete(void* p) noexcept {
+    std::free(p);
+}
+
+void operator delete[](void* p) noexcept {
+    std::free(p);
+}
+
+void operator delete(void* p, std::size_t) noexcept {
+    std::free(p);
+}
+
+void operator delete[](void* p, std::size_t) noexcept {
+    std::free(p);
+}
 
 // 测试辅助宏
 #define TEST_ASSERT(condition, message) \
@@ -251,6 +301,34 @@ bool test_thread_pool_initialize() {
     pool.shutdown();
     
     std::cout << "  ThreadPool initialize: PASSED" << std::endl;
+    return true;
+}
+
+bool test_thread_pool_init_oom_safety() {
+    std::cout << "Testing ThreadPool initialize OOM safety..." << std::endl;
+
+    ThreadPoolConfig config;
+    config.min_threads = 4;
+    config.max_threads = 4;
+    config.queue_capacity = 1024;
+
+    g_large_allocation_count.store(0, std::memory_order_relaxed);
+    g_fail_large_allocation_number.store(3, std::memory_order_relaxed);
+    g_large_allocation_threshold.store(config.queue_capacity * sizeof(Task), std::memory_order_relaxed);
+    g_fail_large_allocations.store(true, std::memory_order_release);
+
+    bool initialized = true;
+    {
+        ThreadPool pool;
+        initialized = pool.initialize(config);
+    }
+
+    g_fail_large_allocations.store(false, std::memory_order_release);
+    TEST_ASSERT(!initialized, "initialize should return false when worker queue construction throws");
+    TEST_ASSERT(g_large_allocation_count.load(std::memory_order_relaxed) >= 3,
+                "failure injection should reach a later worker queue allocation");
+
+    std::cout << "  ThreadPool initialize OOM safety: PASSED" << std::endl;
     return true;
 }
 
@@ -790,6 +868,7 @@ int main() {
     // ThreadPool 测试
     std::cout << "--- ThreadPool Tests ---" << std::endl;
     all_passed &= test_thread_pool_initialize();
+    all_passed &= test_thread_pool_init_oom_safety();
     all_passed &= test_thread_pool_submit_basic();
     all_passed &= test_thread_pool_submit_priority();
     all_passed &= test_thread_pool_concurrent_submit();
