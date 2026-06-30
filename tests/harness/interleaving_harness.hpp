@@ -46,6 +46,21 @@ public:
         }) && consume_if_released(name);
     }
 
+    void wait_for_arrivals(std::string_view point, std::size_t count) {
+        if (!wait_for_arrivals(point, count, default_timeout_)) {
+            throw std::runtime_error("Timed out waiting for " + std::to_string(count) +
+                                     " arrivals at point '" + to_string(point) + "'");
+        }
+    }
+
+    bool wait_for_arrivals(std::string_view point, std::size_t count, Duration timeout) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const std::string name = to_string(point);
+        return condition_.wait_for(lock, timeout, [&] {
+            return points_[name].arrivals >= count;
+        });
+    }
+
     void release(std::string_view point) {
         std::lock_guard<std::mutex> lock(mutex_);
         PointState& state = points_[to_string(point)];
@@ -58,6 +73,29 @@ public:
         PointState& state = points_[to_string(point)];
         state.release_all = true;
         condition_.notify_all();
+    }
+
+    [[nodiscard]] std::size_t arrival_count(std::string_view point) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto it = points_.find(to_string(point));
+        if (it == points_.end()) {
+            return 0;
+        }
+        return it->second.arrivals;
+    }
+
+    [[nodiscard]] bool has_arrived(std::string_view point) const {
+        return arrival_count(point) > 0;
+    }
+
+    void reset(std::string_view point) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        points_.erase(to_string(point));
+    }
+
+    void reset_all() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        points_.clear();
     }
 
 private:
@@ -84,7 +122,7 @@ private:
     }
 
     Duration default_timeout_;
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::condition_variable condition_;
     std::unordered_map<std::string, PointState> points_;
 };
