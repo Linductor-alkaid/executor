@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <random>
 #include <new>
+#include <vector>
 
 namespace executor {
 
@@ -651,6 +652,12 @@ void ThreadPool::submit_batch(std::vector<std::function<void()>> tasks) {
         return;
     }
 
+    std::vector<std::string> task_ids;
+    task_ids.reserve(tasks.size());
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        task_ids.push_back(generate_task_id());
+    }
+
     // 一次获取锁，批量提交所有任务
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -661,11 +668,11 @@ void ThreadPool::submit_batch(std::vector<std::function<void()>> tasks) {
     size_t batch_size = tasks.size();
 
     // 批量创建并入队任务
-    for (auto& task_func : tasks) {
+    for (size_t i = 0; i < tasks.size(); ++i) {
         Task executor_task;
-        executor_task.task_id = generate_task_id();
+        executor_task.task_id = std::move(task_ids[i]);
         executor_task.priority = TaskPriority::NORMAL;
-        executor_task.function = std::move(task_func);
+        executor_task.function = std::move(tasks[i]);
         executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()
         ).count();
