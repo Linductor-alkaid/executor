@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -76,6 +77,38 @@ TEST(StepperTest, ReleaseAllWakesMultipleWaiters) {
     EXPECT_EQ(passed.load(std::memory_order_acquire), 3);
 }
 
+TEST(StepperTest, ReleaseWakesOneWaiterPerToken) {
+    Stepper stepper(500ms);
+    std::atomic<int> ready{0};
+    std::atomic<int> passed{0};
+    std::vector<std::thread> waiters;
+
+    for (int i = 0; i < 2; ++i) {
+        waiters.emplace_back([&] {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            stepper.wait_for("single_gate");
+            passed.fetch_add(1, std::memory_order_acq_rel);
+        });
+    }
+
+    while (ready.load(std::memory_order_acquire) != 2) {
+        std::this_thread::yield();
+    }
+
+    stepper.release("single_gate");
+    while (passed.load(std::memory_order_acquire) != 1) {
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(passed.load(std::memory_order_acquire), 1);
+
+    stepper.release("single_gate");
+    for (std::thread& waiter : waiters) {
+        waiter.join();
+    }
+
+    EXPECT_EQ(passed.load(std::memory_order_acquire), 2);
+}
+
 TEST(StepperTest, WaitForArrivalCountAndReset) {
     Stepper stepper(500ms);
 
@@ -140,6 +173,7 @@ TEST(OperationHistoryTest, RecordsOperations) {
     EXPECT_EQ(operation.start, start);
     EXPECT_EQ(operation.end, end);
     EXPECT_EQ(history.count(Operation::Type::Send), 1U);
+    EXPECT_EQ(history.count_successful(Operation::Type::Send), 1U);
     EXPECT_EQ(std::string(OperationHistory::type_name(Operation::Type::Send)), "send");
 }
 
@@ -191,4 +225,56 @@ TEST(OperationHistoryTest, ChecksUniqueOperationIds) {
     EXPECT_NE(duplicate_result.failures.front().find("thread=4"), std::string::npos);
     EXPECT_NE(duplicate_result.failures.front().find("op=8"), std::string::npos);
     EXPECT_FALSE(duplicate_history.check_basic_channel_invariants().ok);
+}
+
+TEST(OperationHistoryTest, RecordNowAndConcurrentRecords) {
+    OperationHistory history;
+    const int thread_count = 4;
+    const int operations_per_thread = 25;
+    std::vector<std::thread> threads;
+
+    for (int thread_id = 0; thread_id < thread_count; ++thread_id) {
+        threads.emplace_back([&, thread_id] {
+            for (int op_id = 0; op_id < operations_per_thread; ++op_id) {
+                history.record_now(static_cast<std::uint64_t>(thread_id),
+                                   static_cast<std::uint64_t>(op_id),
+                                   Operation::Type::Publish,
+                                   static_cast<std::uint64_t>((thread_id * operations_per_thread) + op_id),
+                                   op_id % 2 == 0);
+            }
+        });
+    }
+
+    for (std::thread& thread : threads) {
+        thread.join();
+    }
+
+    EXPECT_EQ(history.size(), static_cast<std::size_t>(thread_count * operations_per_thread));
+    EXPECT_EQ(history.count(Operation::Type::Publish), static_cast<std::size_t>(thread_count * operations_per_thread));
+    EXPECT_EQ(history.count_successful(Operation::Type::Publish),
+              static_cast<std::size_t>(thread_count * ((operations_per_thread + 1) / 2)));
+    EXPECT_TRUE(history.check_unique_operation_ids().ok);
+    EXPECT_TRUE(history.check_time_ranges().ok);
+}
+
+TEST(OperationHistoryTest, ChecksInvalidTimeRanges) {
+    OperationHistory history;
+    const auto end = std::chrono::steady_clock::now();
+    const auto start = end + 1ms;
+
+    history.record(Operation{
+        .thread_id = 9,
+        .op_id = 3,
+        .type = Operation::Type::Read,
+        .value = 77,
+        .success = true,
+        .start = start,
+        .end = end,
+    });
+
+    const auto result = history.check_time_ranges();
+    EXPECT_FALSE(result.ok);
+    ASSERT_FALSE(result.failures.empty());
+    EXPECT_NE(result.failures.front().find("thread=9"), std::string::npos);
+    EXPECT_NE(result.failures.front().find("op=3"), std::string::npos);
 }

@@ -44,6 +44,23 @@ public:
         operations_.push_back(std::move(operation));
     }
 
+    void record_now(std::uint64_t thread_id,
+                    std::uint64_t op_id,
+                    Operation::Type type,
+                    std::uint64_t value,
+                    bool success) {
+        const auto now = std::chrono::steady_clock::now();
+        record(Operation{
+            .thread_id = thread_id,
+            .op_id = op_id,
+            .type = type,
+            .value = value,
+            .success = success,
+            .start = now,
+            .end = now,
+        });
+    }
+
     [[nodiscard]] std::vector<Operation> snapshot() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return operations_;
@@ -59,6 +76,17 @@ public:
         std::size_t total = 0;
         for (const Operation& operation : copy) {
             if (operation.type == type) {
+                ++total;
+            }
+        }
+        return total;
+    }
+
+    [[nodiscard]] std::size_t count_successful(Operation::Type type) const {
+        const auto copy = snapshot();
+        std::size_t total = 0;
+        for (const Operation& operation : copy) {
+            if (operation.type == type && operation.success) {
                 ++total;
             }
         }
@@ -121,6 +149,20 @@ public:
         return result;
     }
 
+    [[nodiscard]] InvariantResult check_time_ranges() const {
+        const auto copy = snapshot();
+        InvariantResult result;
+
+        for (const Operation& operation : copy) {
+            if (operation.end < operation.start) {
+                result.fail("operation end before start thread=" + std::to_string(operation.thread_id) +
+                            " op=" + std::to_string(operation.op_id));
+            }
+        }
+
+        return result;
+    }
+
     [[nodiscard]] InvariantResult check_basic_channel_invariants() const {
         InvariantResult result = check_no_duplicate_successful_receives();
         InvariantResult no_phantom = check_no_phantom_successful_receives();
@@ -132,6 +174,11 @@ public:
         if (!unique_ops.ok) {
             result.ok = false;
             result.failures.insert(result.failures.end(), unique_ops.failures.begin(), unique_ops.failures.end());
+        }
+        InvariantResult time_ranges = check_time_ranges();
+        if (!time_ranges.ok) {
+            result.ok = false;
+            result.failures.insert(result.failures.end(), time_ranges.failures.begin(), time_ranges.failures.end());
         }
         return result;
     }
