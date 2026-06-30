@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest]
+        os: [ubuntu-22.04, ubuntu-22.04-arm64, windows-latest]
         build_type: [Release, Debug]
         compiler:
           - { name: gcc, version: 11 }
@@ -24,6 +24,9 @@ jobs:
           - os: windows-latest
             compiler: { name: gcc }
           - os: windows-latest
+            compiler: { name: clang }
+          # ARM64 runner only needs gcc-11 Release/Debug coverage for weak-memory CI.
+          - os: ubuntu-22.04-arm64
             compiler: { name: clang }
 
     steps:
