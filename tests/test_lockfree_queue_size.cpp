@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <limits>
 #include <thread>
 #include <vector>
@@ -242,6 +243,91 @@ TEST(LockFreeQueueSizeTest, EmptyAndSizeConvergeAfterDrain) {
                                 << " size=" << q.size();
         ASSERT_EQ(q.size(), 0u) << "iteration " << iter;
     }
+}
+
+// 7. P-260630-003 regression: push_batch must not compute available
+//    from an underflowed enqueue/dequeue snapshot. Multiple producers
+//    batch-push while one consumer drains; after stopping producers,
+//    pushed == popped + size() must hold.
+TEST(LockFreeQueueSizeTest, ConcurrentPushBatchDrainPreservesAccounting) {
+    constexpr size_t kCap = 1024;
+    constexpr int kProducers = 8;
+    constexpr size_t kBatchSize = 16;
+    constexpr auto kDuration = std::chrono::seconds(2);
+
+    LockFreeQueue<int> q(kCap, 1, /*enable_stats=*/true);
+    std::atomic<bool> start{false};
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> total_pushed{0};
+    std::atomic<uint64_t> total_popped{0};
+    std::atomic<uint64_t> failed_pushes{0};
+
+    std::vector<std::thread> producers;
+    producers.reserve(kProducers);
+    for (int p = 0; p < kProducers; ++p) {
+        producers.emplace_back([&, p]() {
+            std::array<int, kBatchSize> items{};
+            for (size_t i = 0; i < kBatchSize; ++i) {
+                items[i] = p * 1000000 + static_cast<int>(i);
+            }
+
+            while (!start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+
+            while (!stop.load(std::memory_order_relaxed)) {
+                size_t pushed = 0;
+                if (q.push_batch(items.data(), items.size(), pushed)) {
+                    total_pushed.fetch_add(pushed, std::memory_order_relaxed);
+                } else {
+                    failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                    std::this_thread::yield();
+                }
+            }
+        });
+    }
+
+    std::thread consumer([&]() {
+        std::array<int, kBatchSize * 4> items{};
+
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        while (!stop.load(std::memory_order_relaxed)) {
+            size_t popped = q.pop_batch(items.data(), items.size());
+            if (popped > 0) {
+                total_popped.fetch_add(popped, std::memory_order_relaxed);
+            } else {
+                std::this_thread::yield();
+            }
+        }
+
+        for (;;) {
+            size_t popped = q.pop_batch(items.data(), items.size());
+            if (popped == 0) break;
+            total_popped.fetch_add(popped, std::memory_order_relaxed);
+        }
+    });
+
+    start.store(true, std::memory_order_release);
+    std::this_thread::sleep_for(kDuration);
+    stop.store(true, std::memory_order_relaxed);
+
+    for (auto& producer : producers) producer.join();
+    consumer.join();
+
+    const uint64_t pushed = total_pushed.load(std::memory_order_relaxed);
+    const uint64_t popped = total_popped.load(std::memory_order_relaxed);
+    const size_t remaining = q.size();
+    EXPECT_EQ(pushed, popped + remaining)
+        << "push_batch accounting drifted; failed_pushes="
+        << failed_pushes.load(std::memory_order_relaxed);
+
+    const LockFreeQueueStats stats = q.get_stats();
+    EXPECT_EQ(stats.total_pushes, pushed);
+    EXPECT_EQ(stats.total_pops, popped);
+    EXPECT_GE(stats.failed_pushes, failed_pushes.load(std::memory_order_relaxed));
 }
 
 int main(int argc, char** argv) {
