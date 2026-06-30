@@ -6,12 +6,14 @@
 #include <chrono>
 #include <future>
 #include <algorithm>
+#include <unordered_set>
 #include <cstdlib>
 #include <new>
 
 // 包含 thread_pool 模块的头文件
 #include <executor/config.hpp>
 #include <executor/types.hpp>
+#include "executor/task/task.hpp"
 #include "executor/thread_pool/priority_scheduler.hpp"
 #include "executor/thread_pool/thread_pool.hpp"
 
@@ -446,6 +448,58 @@ bool test_thread_pool_concurrent_submit() {
     return true;
 }
 
+bool test_thread_pool_concurrent_task_id_uniqueness() {
+    std::cout << "Testing ThreadPool concurrent task ID uniqueness..." << std::endl;
+
+    const int num_threads = 16;
+    const int ids_per_thread = 5000;
+    std::atomic<int> ready_count{0};
+    std::atomic<bool> start_flag{false};
+    std::vector<std::thread> threads;
+    std::vector<std::vector<std::string>> ids(num_threads);
+
+    for (int t = 0; t < num_threads; ++t) {
+        ids[t].reserve(ids_per_thread);
+        threads.emplace_back([&, t]() {
+            ready_count.fetch_add(1, std::memory_order_release);
+            while (!start_flag.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+
+            for (int i = 0; i < ids_per_thread; ++i) {
+                ids[t].push_back(generate_task_id());
+            }
+        });
+    }
+
+    while (ready_count.load(std::memory_order_acquire) < num_threads) {
+        std::this_thread::yield();
+    }
+
+    start_flag.store(true, std::memory_order_release);
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    std::unordered_set<std::string> unique_ids;
+    unique_ids.reserve(static_cast<size_t>(num_threads * ids_per_thread));
+    for (const auto& thread_ids : ids) {
+        TEST_ASSERT(thread_ids.size() == static_cast<size_t>(ids_per_thread),
+                   "Each submitter should generate the expected number of IDs");
+        for (const auto& id : thread_ids) {
+            TEST_ASSERT(id.rfind("task_", 0) == 0, "Task ID should keep task_ prefix");
+            TEST_ASSERT(unique_ids.insert(id).second, "Task IDs should be unique under concurrency");
+        }
+    }
+
+    TEST_ASSERT(unique_ids.size() == static_cast<size_t>(num_threads * ids_per_thread),
+               "All generated task IDs should be unique");
+
+    std::cout << "  ThreadPool concurrent task ID uniqueness: PASSED" << std::endl;
+    return true;
+}
+
 bool test_thread_pool_exception_handling() {
     std::cout << "Testing ThreadPool exception handling..." << std::endl;
     
@@ -872,6 +926,7 @@ int main() {
     all_passed &= test_thread_pool_submit_basic();
     all_passed &= test_thread_pool_submit_priority();
     all_passed &= test_thread_pool_concurrent_submit();
+    all_passed &= test_thread_pool_concurrent_task_id_uniqueness();
     all_passed &= test_thread_pool_exception_handling();
     all_passed &= test_thread_pool_status();
     all_passed &= test_thread_pool_shutdown();
