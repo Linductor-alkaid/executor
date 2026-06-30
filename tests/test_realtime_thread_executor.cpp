@@ -332,6 +332,70 @@ bool test_realtime_executor_task_order() {
     return true;
 }
 
+bool test_realtime_stop_drains_queue() {
+    std::cout << "Testing RealtimeThreadExecutor stop drains queued tasks..." << std::endl;
+
+    constexpr size_t queue_capacity = 50;
+    constexpr int num_tasks = 50;
+    std::atomic<int> cycle_count(0);
+    std::atomic<int> task_count(0);
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_stop_drains";
+    config.cycle_period_ns = 500000000;  // 500ms
+    config.thread_priority = 0;
+    config.cycle_callback = [&cycle_count]() {
+        cycle_count.fetch_add(1, std::memory_order_relaxed);
+    };
+
+    RealtimeThreadExecutor executor("test_stop_drains", config,
+                                    /*enable_stats=*/true,
+                                    queue_capacity);
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+
+    for (int i = 0; i < 200; ++i) {
+        if (executor.get_status().cycle_count > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    TEST_ASSERT(executor.get_status().cycle_count > 0,
+                "Executor should complete its first cycle before queuing tasks");
+
+    // Queue tasks while the RT thread is sleeping until the next period, then stop
+    // before another process_tasks() pass can execute them.
+    for (int i = 0; i < num_tasks; ++i) {
+        TEST_ASSERT(executor.push_task_ex([&task_count]() {
+                        task_count.fetch_add(1, std::memory_order_relaxed);
+                    }),
+                    "Initial task push should succeed");
+    }
+
+    executor.stop();
+
+    auto status = executor.get_status();
+    TEST_ASSERT(task_count.load(std::memory_order_acquire) == 0,
+                "Queued tasks should be dropped, not executed, during stop");
+    TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks),
+                "stop() should count drained queued tasks as dropped");
+
+    // ObjectPool has exactly queue_capacity slots. Re-enqueuing all of them after
+    // stop() proves the stopped queue was drained and every wrapper was released.
+    for (int i = 0; i < num_tasks; ++i) {
+        TEST_ASSERT(executor.push_task_ex([]() {}),
+                    "Task pool slot should be reusable after stop drains the queue");
+    }
+
+    executor.stop();
+    status = executor.get_status();
+    TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks * 2),
+                "Repeated stop() should drain and count queued tasks after shutdown");
+
+    std::cout << "  Stop drains queue: PASSED (dropped "
+              << status.dropped_task_count << " tasks)" << std::endl;
+    return true;
+}
+
 // ========== 统计信息测试 ==========
 
 bool test_realtime_executor_statistics() {
@@ -655,6 +719,7 @@ int main() {
     // 任务处理测试
     all_passed &= test_realtime_executor_push_task();
     all_passed &= test_realtime_executor_task_order();
+    all_passed &= test_realtime_stop_drains_queue();
     
     // 统计信息测试
     all_passed &= test_realtime_executor_statistics();

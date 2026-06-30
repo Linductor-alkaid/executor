@@ -149,6 +149,21 @@ void RealtimeThreadExecutor::stop() {
             thread_.join();
         }
     }
+
+    // stop() prevents any future process_tasks() pass. Return queued-but-never-run
+    // wrappers to the pool before task_pool_ is destroyed, and count them as drops.
+    TaskWrapper* task_wrapper = nullptr;
+    uint64_t drained_count = 0;
+    while (lockfree_queue_.pop(task_wrapper)) {
+        if (task_wrapper) {
+            task_wrapper->func = nullptr;
+            task_pool_.release(task_wrapper);
+            ++drained_count;
+        }
+    }
+    if (drained_count > 0) {
+        dropped_task_count_.fetch_add(drained_count, std::memory_order_relaxed);
+    }
 }
 
 std::string RealtimeThreadExecutor::get_name() const {
