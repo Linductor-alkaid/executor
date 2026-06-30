@@ -100,8 +100,8 @@ public:
                 return false;
             }
 
-            for (size_t i = 0; i < stolen; ++i) {
-                steal_buffer_.push_back(ptrs[i]);
+            for (size_t i = stolen; i > 0; --i) {
+                steal_buffer_.push_back(ptrs[i - 1]);
             }
         }
 
