@@ -31,6 +31,33 @@ if(NOT TEST_SOURCES)
     return()
 endif()
 
+add_executable(test_comm_harness_foundation
+    harness/test_comm_harness_foundation.cpp
+)
+target_link_libraries(test_comm_harness_foundation PRIVATE executor GTest::GTest GTest::Main)
+target_include_directories(test_comm_harness_foundation PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    ${CMAKE_CURRENT_SOURCE_DIR}/harness
+)
+if(MSVC)
+    target_compile_options(test_comm_harness_foundation PRIVATE /utf-8)
+endif()
+if(EXECUTOR_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(test_comm_harness_foundation PRIVATE
+            --coverage
+            -fprofile-arcs
+            -ftest-coverage
+        )
+        target_link_options(test_comm_harness_foundation PRIVATE --coverage)
+    endif()
+endif()
+add_test(NAME test_comm_harness_foundation COMMAND test_comm_harness_foundation)
+set_tests_properties(test_comm_harness_foundation PROPERTIES
+    LABELS "unit;harness"
+    TIMEOUT 30
+)
+
 # 为每个测试文件创建可执行文件
 foreach(TEST_SOURCE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
