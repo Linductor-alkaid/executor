@@ -10,7 +10,58 @@
 
 using namespace executor;
 
+static bool test_steal_fifo_order() {
+    constexpr size_t TASKS = 10;
+    LockFreeWorkerQueue queue(32);
+
+    for (size_t i = 0; i < TASKS; ++i) {
+        Task task;
+        task.task_id = "fifo_" + std::to_string(i);
+        task.priority = TaskPriority::NORMAL;
+        task.submit_time_ns = static_cast<int64_t>(1000 + i);
+
+        if (!queue.push(task)) {
+            std::cerr << "FAILED: push failed at task " << i << std::endl;
+            return false;
+        }
+    }
+
+    std::vector<int64_t> stolen_times;
+    stolen_times.reserve(TASKS);
+
+    std::thread stealer([&]() {
+        Task task;
+        for (size_t i = 0; i < TASKS; ++i) {
+            if (!queue.steal(task)) {
+                return;
+            }
+            stolen_times.push_back(task.submit_time_ns);
+        }
+    });
+    stealer.join();
+
+    if (stolen_times.size() != TASKS) {
+        std::cerr << "FAILED: stole " << stolen_times.size() << " tasks, expected " << TASKS << std::endl;
+        return false;
+    }
+
+    for (size_t i = 0; i < TASKS; ++i) {
+        const int64_t expected_time = static_cast<int64_t>(1000 + i);
+        if (stolen_times[i] != expected_time) {
+            std::cerr << "FAILED: steal order at index " << i << " was "
+                      << stolen_times[i] << ", expected " << expected_time << std::endl;
+            return false;
+        }
+    }
+
+    return true;
+}
+
 int main() {
+    if (!test_steal_fifo_order()) {
+        return 1;
+    }
+
     constexpr size_t PRODUCERS = 4;
     constexpr size_t TASKS_PER_PRODUCER = 1000;
     constexpr size_t STEALERS = 4;

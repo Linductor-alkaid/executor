@@ -1,3 +1,4 @@
+// Lock-free queue implementation.
 #pragma once
 
 #include <atomic>
@@ -65,11 +66,12 @@ public:
         constexpr int MAX_RETRIES = 64;
 
         for (int retry = 0; retry < MAX_RETRIES; ++retry) {
-            pos = enqueue_pos_.load(std::memory_order_relaxed);
+            pos = enqueue_pos_.load(std::memory_order_acquire);
 
             // 检查队列是否已满（保留一个空槽位）
             size_t deq = dequeue_pos_.load(std::memory_order_acquire);
-            if (pos - deq >= capacity_ - 1) {
+            size_t in_flight = (pos >= deq) ? (pos - deq) : 0;
+            if (in_flight >= capacity_ - 1) {
                 // 260610P013: relaxed load
         if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
                 return false;
@@ -143,9 +145,10 @@ public:
         constexpr int MAX_RETRIES = 64;
 
         for (int retry = 0; retry < MAX_RETRIES; ++retry) {
-            pos = enqueue_pos_.load(std::memory_order_relaxed);
+            pos = enqueue_pos_.load(std::memory_order_acquire);
             size_t deq = dequeue_pos_.load(std::memory_order_acquire);
-            size_t available = capacity_ - 1 - (pos - deq);
+            size_t in_flight = (pos >= deq) ? (pos - deq) : 0;
+            size_t available = (in_flight < capacity_ - 1) ? (capacity_ - 1 - in_flight) : 0;
 
             if (available == 0) {
                 // 260610P013: relaxed load

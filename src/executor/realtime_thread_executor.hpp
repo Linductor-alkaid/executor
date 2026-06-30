@@ -16,6 +16,9 @@
 
 namespace executor {
 
+static_assert(std::atomic<int64_t>::is_always_lock_free,
+              "RealtimeThreadExecutor statistics require lock-free int64_t atomics");
+
 /**
  * @brief 实时线程执行器
  * 
@@ -161,8 +164,8 @@ private:
     // 统计信息（使用原子变量支持并发访问）
     std::atomic<int64_t> cycle_count_{0};          // 周期计数
     std::atomic<int64_t> cycle_timeout_count_{0};   // 周期超时计数
-    std::atomic<double> avg_cycle_time_ns_{0.0};    // 平均周期执行时间（纳秒）
-    std::atomic<double> max_cycle_time_ns_{0.0};   // 最大周期执行时间（纳秒）
+    std::atomic<int64_t> avg_cycle_time_ns_{0};     // 平均周期执行时间（纳秒）
+    std::atomic<int64_t> max_cycle_time_ns_{0};     // 最大周期执行时间（纳秒）
 
     // P-001 (260615): 背压可见性 — 始终累计, 与 enable_stats 无关.
     // 队列满 / 对象池耗尽 任一路径触发 drop 时 +1.

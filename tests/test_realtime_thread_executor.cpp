@@ -8,14 +8,20 @@
 #include <future>
 #include <algorithm>
 #include <string>
+#include <ctime>
 
 // 包含 RealtimeThreadExecutor 的头文件
 #include <executor/config.hpp>
 #include <executor/types.hpp>
 #include <executor/interfaces.hpp>
+#define private public
 #include "executor/realtime_thread_executor.hpp"
+#undef private
 
 using namespace executor;
+
+static_assert(std::atomic<int64_t>::is_always_lock_free,
+              "RealtimeThreadExecutor statistics require lock-free int64_t atomics");
 
 // 测试辅助宏
 #define TEST_ASSERT(condition, message) \
@@ -326,6 +332,70 @@ bool test_realtime_executor_task_order() {
     return true;
 }
 
+bool test_realtime_stop_drains_queue() {
+    std::cout << "Testing RealtimeThreadExecutor stop drains queued tasks..." << std::endl;
+
+    constexpr size_t queue_capacity = 50;
+    constexpr int num_tasks = 50;
+    std::atomic<int> cycle_count(0);
+    std::atomic<int> task_count(0);
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_stop_drains";
+    config.cycle_period_ns = 500000000;  // 500ms
+    config.thread_priority = 0;
+    config.cycle_callback = [&cycle_count]() {
+        cycle_count.fetch_add(1, std::memory_order_relaxed);
+    };
+
+    RealtimeThreadExecutor executor("test_stop_drains", config,
+                                    /*enable_stats=*/true,
+                                    queue_capacity);
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+
+    for (int i = 0; i < 200; ++i) {
+        if (executor.get_status().cycle_count > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    TEST_ASSERT(executor.get_status().cycle_count > 0,
+                "Executor should complete its first cycle before queuing tasks");
+
+    // Queue tasks while the RT thread is sleeping until the next period, then stop
+    // before another process_tasks() pass can execute them.
+    for (int i = 0; i < num_tasks; ++i) {
+        TEST_ASSERT(executor.push_task_ex([&task_count]() {
+                        task_count.fetch_add(1, std::memory_order_relaxed);
+                    }),
+                    "Initial task push should succeed");
+    }
+
+    executor.stop();
+
+    auto status = executor.get_status();
+    TEST_ASSERT(task_count.load(std::memory_order_acquire) == 0,
+                "Queued tasks should be dropped, not executed, during stop");
+    TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks),
+                "stop() should count drained queued tasks as dropped");
+
+    // ObjectPool has exactly queue_capacity slots. Re-enqueuing all of them after
+    // stop() proves the stopped queue was drained and every wrapper was released.
+    for (int i = 0; i < num_tasks; ++i) {
+        TEST_ASSERT(executor.push_task_ex([]() {}),
+                    "Task pool slot should be reusable after stop drains the queue");
+    }
+
+    executor.stop();
+    status = executor.get_status();
+    TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks * 2),
+                "Repeated stop() should drain and count queued tasks after shutdown");
+
+    std::cout << "  Stop drains queue: PASSED (dropped "
+              << status.dropped_task_count << " tasks)" << std::endl;
+    return true;
+}
+
 // ========== 统计信息测试 ==========
 
 bool test_realtime_executor_statistics() {
@@ -391,6 +461,64 @@ bool test_realtime_executor_timeout_count() {
     executor.stop();
     
     std::cout << "  Timeout count: PASSED (timeouts: " << status.cycle_timeout_count << ")" << std::endl;
+    return true;
+}
+
+bool test_realtime_atomic_stats_lock_free() {
+    std::cout << "Testing RealtimeThreadExecutor atomic stats lock-free path..." << std::endl;
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_thread";
+    config.cycle_period_ns = 10000000;  // 10ms
+    config.cycle_callback = []() {};
+
+    RealtimeThreadExecutor executor("test_executor", config);
+    constexpr int kIterations = 10000;
+    constexpr int64_t kUpdateBudgetNs = 500;
+    std::atomic<bool> writer_done(false);
+    std::atomic<int64_t> elapsed_ns(0);
+
+    std::thread rt_writer([&]() {
+        timespec start{};
+        timespec end{};
+#ifdef CLOCK_MONOTONIC_RAW
+        constexpr clockid_t kClockId = CLOCK_MONOTONIC_RAW;
+#else
+        constexpr clockid_t kClockId = CLOCK_MONOTONIC;
+#endif
+        clock_gettime(kClockId, &start);
+        for (int i = 0; i < kIterations; ++i) {
+            executor.update_statistics(1000 + i);
+        }
+        clock_gettime(kClockId, &end);
+
+        const int64_t seconds = static_cast<int64_t>(end.tv_sec - start.tv_sec);
+        const int64_t nanoseconds = static_cast<int64_t>(end.tv_nsec - start.tv_nsec);
+        elapsed_ns.store(seconds * 1000000000LL + nanoseconds, std::memory_order_release);
+        writer_done.store(true, std::memory_order_release);
+    });
+
+    while (!writer_done.load(std::memory_order_acquire)) {
+        auto status = executor.get_status();
+        TEST_ASSERT(status.cycle_count <= kIterations,
+                    "Concurrent status read should observe a bounded cycle count");
+        std::this_thread::yield();
+    }
+    rt_writer.join();
+
+    const auto status = executor.get_status();
+    const int64_t per_update_ns = elapsed_ns.load(std::memory_order_acquire) / kIterations;
+    TEST_ASSERT(status.cycle_count == kIterations,
+                "Stats writer should record all update_statistics calls");
+    TEST_ASSERT(status.avg_cycle_time_ns > 0.0,
+                "Average cycle time should be recorded");
+    TEST_ASSERT(status.max_cycle_time_ns == static_cast<double>(1000 + kIterations - 1),
+                "Max cycle time should track the largest integer sample");
+    TEST_ASSERT(per_update_ns < kUpdateBudgetNs,
+                "Average update_statistics time should stay below 500ns");
+
+    std::cout << "  Atomic stats lock-free path: PASSED (avg update "
+              << per_update_ns << "ns)" << std::endl;
     return true;
 }
 
@@ -591,10 +719,12 @@ int main() {
     // 任务处理测试
     all_passed &= test_realtime_executor_push_task();
     all_passed &= test_realtime_executor_task_order();
+    all_passed &= test_realtime_stop_drains_queue();
     
     // 统计信息测试
     all_passed &= test_realtime_executor_statistics();
     all_passed &= test_realtime_executor_timeout_count();
+    all_passed &= test_realtime_atomic_stats_lock_free();
     
     // 异常处理测试
     all_passed &= test_realtime_executor_cycle_callback_exception();
