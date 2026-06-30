@@ -300,24 +300,23 @@ void RealtimeThreadExecutor::update_statistics(int64_t cycle_time_ns) {
     // 增加周期计数
     cycle_count_.fetch_add(1, std::memory_order_relaxed);
 
-    // 更新平均周期时间（使用指数移动平均 EMA）
-    const double alpha = 0.1;  // 平滑因子
-    double old_avg = avg_cycle_time_ns_.load(std::memory_order_relaxed);
-    double new_avg;
+    // 更新平均周期时间（整数 EMA，alpha = 1/8，避免 RT 路径中的浮点原子）
+    int64_t old_avg = avg_cycle_time_ns_.load(std::memory_order_relaxed);
+    int64_t new_avg;
     
-    if (old_avg == 0.0) {
+    if (old_avg == 0) {
         // 第一次更新，直接使用当前值
-        new_avg = static_cast<double>(cycle_time_ns);
+        new_avg = cycle_time_ns;
     } else {
         // 指数移动平均
-        new_avg = alpha * static_cast<double>(cycle_time_ns) + (1.0 - alpha) * old_avg;
+        new_avg = old_avg + ((cycle_time_ns - old_avg) >> 3);
     }
     
     avg_cycle_time_ns_.store(new_avg, std::memory_order_relaxed);
 
     // 更新最大周期时间（使用 CAS 操作）
-    double old_max = max_cycle_time_ns_.load(std::memory_order_relaxed);
-    double new_max = static_cast<double>(cycle_time_ns);
+    int64_t old_max = max_cycle_time_ns_.load(std::memory_order_relaxed);
+    int64_t new_max = cycle_time_ns;
     
     while (new_max > old_max) {
         if (max_cycle_time_ns_.compare_exchange_weak(old_max, new_max, 
@@ -327,7 +326,7 @@ void RealtimeThreadExecutor::update_statistics(int64_t cycle_time_ns) {
         }
         // CAS 失败，重新读取 old_max
         old_max = max_cycle_time_ns_.load(std::memory_order_relaxed);
-        new_max = static_cast<double>(cycle_time_ns);
+        new_max = cycle_time_ns;
     }
 
     // 检查是否超时（周期执行时间 > 周期时间）
@@ -343,8 +342,8 @@ RealtimeExecutorStatus RealtimeThreadExecutor::get_status() const {
     status.cycle_period_ns = config_.cycle_period_ns;
     status.cycle_count = cycle_count_.load(std::memory_order_acquire);
     status.cycle_timeout_count = cycle_timeout_count_.load(std::memory_order_acquire);
-    status.avg_cycle_time_ns = avg_cycle_time_ns_.load(std::memory_order_acquire);
-    status.max_cycle_time_ns = max_cycle_time_ns_.load(std::memory_order_acquire);
+    status.avg_cycle_time_ns = static_cast<double>(avg_cycle_time_ns_.load(std::memory_order_acquire));
+    status.max_cycle_time_ns = static_cast<double>(max_cycle_time_ns_.load(std::memory_order_acquire));
     // P-001 (260615): 背压可见性
     status.dropped_task_count = dropped_task_count_.load(std::memory_order_acquire);
     // failed_pushes / peak_queue_size 仅在 enable_stats=true 时有意义;
