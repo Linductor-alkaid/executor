@@ -13,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <cstdint>
+#include <mutex>
 
 namespace executor {
 
@@ -137,6 +138,14 @@ private:
     void process_tasks();
 
     /**
+     * @brief Drain queued tasks after the realtime thread has stopped.
+     *
+     * Caller must hold drain_mutex_ and must only call this after the realtime
+     * thread is not running; LockFreeQueue has a single-consumer pop path.
+     */
+    void drain_stopped_queue();
+
+    /**
      * @brief 更新周期统计信息
      * 
      * @param cycle_time_ns 当前周期执行时间（纳秒）
@@ -151,6 +160,7 @@ private:
     RealtimeThreadConfig config_;                   // 实时线程配置
     std::thread thread_;                            // 实时线程
     std::atomic<bool> running_{false};              // 运行状态标志
+    std::mutex drain_mutex_;                        // 串行化 stop() join/drain
 
     // 无锁队列（直接传递任务指针）
     util::LockFreeQueue<TaskWrapper*> lockfree_queue_;

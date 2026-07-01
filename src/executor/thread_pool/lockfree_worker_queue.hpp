@@ -3,6 +3,8 @@
 #include "../task/task.hpp"
 #include "../util/lockfree_queue.hpp"
 #include <atomic>
+#include <utility>
+#include <memory>
 #include <mutex>
 #include <vector>
 #include <cstdint>
@@ -37,7 +39,14 @@ public:
     }
 
     bool push(Task&& task) {
-        return push(task);
+        auto* task_ptr = new Task();
+        move_task(*task_ptr, std::move(task));
+        uintptr_t ptr = reinterpret_cast<uintptr_t>(task_ptr);
+        if (!main_queue_.push(ptr)) {
+            delete task_ptr;
+            return false;
+        }
+        return true;
     }
 
     size_t push_batch(const Task* tasks, size_t n) {
@@ -82,9 +91,8 @@ public:
         if (!main_queue_.pop(ptr)) {
             return false;
         }
-        auto* task_ptr = reinterpret_cast<Task*>(ptr);
+        std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
         copy_task(task, *task_ptr);
-        delete task_ptr;
         return true;
     }
 
@@ -107,9 +115,8 @@ public:
 
         uintptr_t ptr = steal_buffer_.back();
         steal_buffer_.pop_back();
-        auto* task_ptr = reinterpret_cast<Task*>(ptr);
+        std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
         copy_task(task, *task_ptr);
-        delete task_ptr;
         return true;
     }
 
@@ -149,6 +156,17 @@ private:
         dst.submit_time_ns = src.submit_time_ns;
         dst.timeout_ms = src.timeout_ms;
         dst.dependencies = src.dependencies;
+        dst.cancelled.store(src.cancelled.load(std::memory_order_acquire),
+                           std::memory_order_release);
+    }
+
+    static void move_task(Task& dst, Task&& src) {
+        dst.task_id = std::move(src.task_id);
+        dst.priority = src.priority;
+        dst.function = std::move(src.function);
+        dst.submit_time_ns = src.submit_time_ns;
+        dst.timeout_ms = src.timeout_ms;
+        dst.dependencies = std::move(src.dependencies);
         dst.cancelled.store(src.cancelled.load(std::memory_order_acquire),
                            std::memory_order_release);
     }

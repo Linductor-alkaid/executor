@@ -770,6 +770,55 @@ bool test_thread_pool_wait_for_completion() {
     return true;
 }
 
+bool test_thread_pool_wait_for_completion_latency() {
+    std::cout << "Testing ThreadPool wait_for_completion latency..." << std::endl;
+
+    ThreadPool pool;
+    ThreadPoolConfig config;
+    config.min_threads = 16;
+    config.max_threads = 16;
+    config.queue_capacity = 2048;
+    TEST_ASSERT(pool.initialize(config), "Should initialize thread pool");
+
+    const int num_tasks = 1000;
+    std::atomic<bool> final_task_started{false};
+    std::atomic<bool> release{false};
+
+    for (int i = 0; i < num_tasks - 1; ++i) {
+        pool.submit([]() noexcept {});
+    }
+
+    pool.submit([&]() noexcept {
+        final_task_started.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+    });
+
+    while (!final_task_started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+
+    auto waiter = std::async(std::launch::async, [&pool]() {
+        pool.wait_for_completion();
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    auto start = std::chrono::steady_clock::now();
+    release.store(true, std::memory_order_release);
+    waiter.wait();
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count() / 1000.0;
+
+    TEST_ASSERT(elapsed < std::chrono::milliseconds(5),
+                "wait_for_completion should unblock in under 5ms after fast tasks complete");
+
+    pool.shutdown();
+
+    std::cout << "  ThreadPool wait_for_completion latency: PASSED (" << elapsed_ms << " ms)" << std::endl;
+    return true;
+}
+
 // ========== 主测试函数 ==========
 
 bool test_task_timeout_soft_skip_works() {
@@ -934,6 +983,7 @@ int main() {
     all_passed &= test_thread_pool_concurrent_shutdown();
     all_passed &= test_thread_pool_submit_after_shutdown();
     all_passed &= test_thread_pool_wait_for_completion();
+    all_passed &= test_thread_pool_wait_for_completion_latency();
     all_passed &= test_task_timeout_soft_skip_works();
     all_passed &= test_task_timeout_not_triggered_when_fast();
     std::cout << std::endl;

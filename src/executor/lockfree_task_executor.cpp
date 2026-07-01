@@ -148,6 +148,7 @@ uint64_t LockFreeTaskExecutor::exception_count() const {
 }
 
 void LockFreeTaskExecutor::set_exception_handler(std::function<void(std::exception_ptr)> handler) {
+    std::lock_guard<std::mutex> lock(exception_handler_mutex_);
     exception_handler_ = std::move(handler);
 }
 
@@ -188,9 +189,14 @@ void LockFreeTaskExecutor::worker_thread() {
                     // handler. Default behavior is "count only" — no rethrow,
                     // no crash — preserving back-compat.
                     exception_count_.fetch_add(1, std::memory_order_relaxed);
-                    if (exception_handler_) {
+                    std::function<void(std::exception_ptr)> handler;
+                    {
+                        std::lock_guard<std::mutex> lock(exception_handler_mutex_);
+                        handler = exception_handler_;
+                    }
+                    if (handler) {
                         try {
-                            exception_handler_(std::current_exception());
+                            handler(std::current_exception());
                         } catch (...) {
                             // Swallow exceptions from the handler itself;
                             // the worker must keep draining the queue.
@@ -226,9 +232,14 @@ void LockFreeTaskExecutor::worker_thread() {
             } catch (...) {
                 // P-260618-006: same handling as in the running loop.
                 exception_count_.fetch_add(1, std::memory_order_relaxed);
-                if (exception_handler_) {
+                std::function<void(std::exception_ptr)> handler;
+                {
+                    std::lock_guard<std::mutex> lock(exception_handler_mutex_);
+                    handler = exception_handler_;
+                }
+                if (handler) {
                     try {
-                        exception_handler_(std::current_exception());
+                        handler(std::current_exception());
                     } catch (...) {
                     }
                 }
