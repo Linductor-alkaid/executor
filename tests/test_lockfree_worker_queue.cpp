@@ -5,8 +5,75 @@
 #include <vector>
 #include <atomic>
 #include <memory>
+#include <new>
+#include <stdexcept>
+#include <utility>
 
 using namespace executor;
+
+namespace {
+
+struct ThrowOnCopyAfterArmed {
+    std::shared_ptr<bool> armed;
+
+    explicit ThrowOnCopyAfterArmed(std::shared_ptr<bool> armed_flag)
+        : armed(std::move(armed_flag)) {}
+
+    ThrowOnCopyAfterArmed(const ThrowOnCopyAfterArmed& other)
+        : armed(other.armed) {
+        if (armed && *armed) {
+            throw std::bad_alloc();
+        }
+    }
+
+    ThrowOnCopyAfterArmed& operator=(const ThrowOnCopyAfterArmed&) = default;
+
+    void operator()() const {}
+};
+
+void make_throwing_copy_task(Task& task, const char* id, const std::shared_ptr<bool>& armed) {
+    task.task_id = id;
+    task.priority = TaskPriority::NORMAL;
+    task.function = ThrowOnCopyAfterArmed(armed);
+}
+
+bool expect_bad_alloc_from_pop(LockFreeWorkerQueue& queue) {
+    Task out;
+    try {
+        (void)queue.pop(out);
+    } catch (const std::bad_alloc&) {
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "FAILED: pop threw unexpected exception: " << e.what() << std::endl;
+        return false;
+    } catch (...) {
+        std::cerr << "FAILED: pop threw unexpected non-standard exception" << std::endl;
+        return false;
+    }
+
+    std::cerr << "FAILED: pop did not propagate std::bad_alloc" << std::endl;
+    return false;
+}
+
+bool expect_bad_alloc_from_steal(LockFreeWorkerQueue& queue) {
+    Task out;
+    try {
+        (void)queue.steal(out);
+    } catch (const std::bad_alloc&) {
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "FAILED: steal threw unexpected exception: " << e.what() << std::endl;
+        return false;
+    } catch (...) {
+        std::cerr << "FAILED: steal threw unexpected non-standard exception" << std::endl;
+        return false;
+    }
+
+    std::cerr << "FAILED: steal did not propagate std::bad_alloc" << std::endl;
+    return false;
+}
+
+} // namespace
 
 bool test_basic_operations() {
     std::cout << "Testing basic push/pop..." << std::endl;
