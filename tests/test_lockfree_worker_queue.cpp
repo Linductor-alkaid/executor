@@ -4,6 +4,7 @@
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <memory>
 
 using namespace executor;
 
@@ -125,6 +126,75 @@ bool test_push_batch_partial_fill_no_leak() {
 
     std::cout << "PASSED: push_batch partial-fill cleanup"
               << " (" << ROUNDS << " rounds)" << std::endl;
+    return true;
+}
+
+bool test_push_move_does_not_copy() {
+    std::cout << "Testing push(std::move(task)) does not copy function target..." << std::endl;
+
+    struct Counters {
+        std::atomic<int> copies{0};
+        std::atomic<int> moves{0};
+    };
+
+    struct MoveObservedCallable {
+        explicit MoveObservedCallable(std::shared_ptr<Counters> counters)
+            : counters(std::move(counters)) {}
+
+        MoveObservedCallable(const MoveObservedCallable& other)
+            : counters(other.counters) {
+            counters->copies.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        MoveObservedCallable(MoveObservedCallable&& other) noexcept
+            : counters(std::move(other.counters)) {
+            counters->moves.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        void operator()() const {}
+
+        std::shared_ptr<Counters> counters;
+    };
+
+    auto counters = std::make_shared<Counters>();
+
+    Task task;
+    task.task_id = "move_task";
+    task.priority = TaskPriority::HIGH;
+    task.function = MoveObservedCallable(counters);
+
+    LockFreeWorkerQueue queue(4);
+    if (!queue.push(std::move(task))) {
+        std::cerr << "FAILED: move push failed" << std::endl;
+        return false;
+    }
+
+    if (counters->copies.load(std::memory_order_relaxed) != 0) {
+        std::cerr << "FAILED: move push copied function target "
+                  << counters->copies.load(std::memory_order_relaxed)
+                  << " times" << std::endl;
+        return false;
+    }
+
+    if (counters->moves.load(std::memory_order_relaxed) != 1) {
+        std::cerr << "FAILED: expected 1 function target move, got "
+                  << counters->moves.load(std::memory_order_relaxed)
+                  << std::endl;
+        return false;
+    }
+
+    Task popped;
+    if (!queue.pop(popped)) {
+        std::cerr << "FAILED: pop after move push failed" << std::endl;
+        return false;
+    }
+
+    if (popped.task_id != "move_task" || popped.priority != TaskPriority::HIGH) {
+        std::cerr << "FAILED: moved task metadata mismatch" << std::endl;
+        return false;
+    }
+
+    std::cout << "PASSED: push(std::move(task)) does not copy function target" << std::endl;
     return true;
 }
 
@@ -270,6 +340,7 @@ int main() {
     all_passed &= test_concurrent_push_pop();
     all_passed &= test_steal_no_double_consume();
     all_passed &= test_push_batch_partial_fill_no_leak();
+    all_passed &= test_push_move_does_not_copy();
 
     if (all_passed) {
         std::cout << "\n✓ All tests passed!" << std::endl;
