@@ -3,6 +3,7 @@
 #include "../task/task.hpp"
 #include "../util/lockfree_queue.hpp"
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <vector>
 #include <cstdint>
@@ -82,9 +83,8 @@ public:
         if (!main_queue_.pop(ptr)) {
             return false;
         }
-        auto* task_ptr = reinterpret_cast<Task*>(ptr);
+        std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
         copy_task(task, *task_ptr);
-        delete task_ptr;
         return true;
     }
 
@@ -107,9 +107,8 @@ public:
 
         uintptr_t ptr = steal_buffer_.back();
         steal_buffer_.pop_back();
-        auto* task_ptr = reinterpret_cast<Task*>(ptr);
+        std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
         copy_task(task, *task_ptr);
-        delete task_ptr;
         return true;
     }
 
