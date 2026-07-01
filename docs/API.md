@@ -360,8 +360,8 @@ public:
 
     // 批量提交（尽力推送，可能部分成功）
     // tasks: 任务数组指针；count: 数组长度；pushed: 实际入队任务数（输出）
-    // 返回值：true = 所有内部资源申请成功（pushed 可能 < count）；
-    //         false = 内部对象池耗尽，已申请的部分已回收，pushed 保持 0
+    // 返回值：true = 至少部分入队（pushed 可能 < count，剩余任务需由调用方处理）；
+    //         false = 内部对象池耗尽或队列无可用槽位，没有任务入队，pushed 保持 0
     bool push_tasks_batch(const std::function<void()>* tasks,
                           size_t count,
                           size_t& pushed);
@@ -387,7 +387,7 @@ public:
 |------|------|
 | 时间复杂度 | O(count)，一次性申请所有 TaskWrapper，组装后单次调用 `queue_->push_batch` 完成入队 |
 | 线程安全 | 与 `push_task` 相同，线程安全，可多生产者并发调用 |
-| 部分成功 | 队列剩余空间 < count 时，`pushed` 会小于 count；未入队的 wrapper 自动回收到对象池 |
+| 部分成功 | 返回 true 时仍可能出现 `pushed < count`：队列剩余空间不足时只会入队前 `pushed` 个任务；未入队的 wrapper 自动回收到对象池，调用方必须检查 `pushed` 并对 `tasks[pushed..]` 重试或丢弃 |
 | 返回 false 时机 | (a) 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；或 (b) 队列满且 `queue_->push_batch` 一次 CAS 也未预留到任何槽位。两种情况下都不会有任务入队 |
 | 批量统计 | 每次成功的 `push_tasks_batch` 调用会令 `get_queue_stats().batch_pushes` 递增 1，`total_pushes` 递增 `pushed`（P-260623-004：与 `queue_->push_batch` 的统计语义一致） |
 
