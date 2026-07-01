@@ -238,19 +238,20 @@ private:
      */
     class ActiveCounter {
     public:
-        explicit ActiveCounter(std::atomic<size_t>& counter) noexcept
-            : counter_(counter) {
-            counter_.fetch_add(1, std::memory_order_relaxed);
+        explicit ActiveCounter(ThreadPool& pool) noexcept
+            : pool_(pool) {
+            pool_.active_threads_.fetch_add(1, std::memory_order_relaxed);
         }
         ~ActiveCounter() {
-            counter_.fetch_sub(1, std::memory_order_relaxed);
+            pool_.active_threads_.fetch_sub(1, std::memory_order_relaxed);
+            pool_.notify_completion_waiters();
         }
         ActiveCounter(const ActiveCounter&) = delete;
         ActiveCounter& operator=(const ActiveCounter&) = delete;
         ActiveCounter(ActiveCounter&&) = delete;
         ActiveCounter& operator=(ActiveCounter&&) = delete;
     private:
-        std::atomic<size_t>& counter_;
+        ThreadPool& pool_;
     };
 
     /**
@@ -279,6 +280,16 @@ private:
      * @param timed_out 是否因软超时而被跳过（P024: 超时不算 failed, 但算 completed）
      */
     void update_statistics(int64_t execution_time_ns, bool success, bool timed_out = false);
+
+    /**
+     * @brief 检查 wait_for_completion 的完整完成条件
+     */
+    bool is_completion_ready() const;
+
+    /**
+     * @brief 唤醒等待任务完成的调用方
+     */
+    void notify_completion_waiters();
 
     /**
      * @brief 尝试工作窃取
@@ -363,6 +374,10 @@ private:
 
     // 条件变量：用于工作线程等待任务
     std::condition_variable condition_;
+
+    // 条件变量：用于 wait_for_completion 等待所有任务完成
+    std::condition_variable completion_cv_;
+    mutable std::mutex completion_mutex_;
 
     // 互斥锁：保护共享状态
     mutable std::mutex mutex_;
