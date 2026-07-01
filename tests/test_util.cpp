@@ -26,6 +26,8 @@ using namespace executor::util;
 
 bool test_lockfree_queue_basic() {
     std::cout << "Testing LockFreeQueue basic operations..." << std::endl;
+
+    PAUSE_INSTRUCTION();
     
     LockFreeQueue<int> queue(8);
     
