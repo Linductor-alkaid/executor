@@ -5,6 +5,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <memory>
+#include <vector>
 
 using namespace executor;
 
@@ -84,6 +85,63 @@ TEST(LockFreeTaskExecutorTest, ExceptionHandling) {
     EXPECT_EQ(exec.processed_count(), 2);
 
     exec.stop();
+}
+
+TEST(LockFreeTaskExecutorTest, ConcurrentSetHandlerWhileRunning) {
+    LockFreeTaskExecutor exec(4096);
+    ASSERT_TRUE(exec.start());
+
+    constexpr int kSetterThreads = 4;
+    constexpr int kIterationsPerThread = 1000;
+    constexpr uint64_t kMinSubmittedTasks = 100;
+
+    std::atomic<bool> setters_done{false};
+    std::atomic<uint64_t> submitted{0};
+    std::atomic<uint64_t> handler_calls{0};
+
+    exec.set_exception_handler([&handler_calls](std::exception_ptr) {
+        handler_calls.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    std::thread producer([&] {
+        while (!setters_done.load(std::memory_order_acquire) ||
+               submitted.load(std::memory_order_relaxed) < kMinSubmittedTasks) {
+            if (exec.push_task([] {
+                    throw std::runtime_error("handler race test");
+                })) {
+                submitted.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                std::this_thread::yield();
+            }
+        }
+    });
+
+    std::vector<std::thread> setters;
+    setters.reserve(kSetterThreads);
+    for (int thread_index = 0; thread_index < kSetterThreads; ++thread_index) {
+        setters.emplace_back([&, thread_index] {
+            for (int i = 0; i < kIterationsPerThread; ++i) {
+                exec.set_exception_handler([&handler_calls, thread_index, i](std::exception_ptr) {
+                    (void)thread_index;
+                    (void)i;
+                    handler_calls.fetch_add(1, std::memory_order_relaxed);
+                });
+            }
+        });
+    }
+
+    for (auto& setter : setters) {
+        setter.join();
+    }
+    setters_done.store(true, std::memory_order_release);
+    producer.join();
+
+    exec.stop();
+
+    EXPECT_GT(submitted.load(std::memory_order_relaxed), 0u);
+    EXPECT_EQ(exec.processed_count(), submitted.load(std::memory_order_relaxed));
+    EXPECT_EQ(exec.exception_count(), submitted.load(std::memory_order_relaxed));
+    EXPECT_GT(handler_calls.load(std::memory_order_relaxed), 0u);
 }
 
 TEST(LockFreeTaskExecutorTest, StopWithPendingTasks) {

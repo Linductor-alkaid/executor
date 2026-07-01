@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 namespace executor {
 
@@ -144,6 +145,7 @@ private:
     // P-260618-006: 累计异常计数, 始终累计, worker 线程写, 读取方任意线程.
     std::atomic<uint64_t> exception_count_{0};
     // P-260618-006: 可选异常回调. 在 worker 线程中调用, 需自行保证线程安全.
+    std::mutex exception_handler_mutex_;
     std::function<void(std::exception_ptr)> exception_handler_;
     uint32_t idle_count_{0};  // only accessed from worker_thread
 };
