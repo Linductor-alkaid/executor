@@ -396,6 +396,82 @@ bool test_realtime_stop_drains_queue() {
     return true;
 }
 
+bool test_realtime_concurrent_stop_does_not_double_release() {
+    std::cout << "Testing RealtimeThreadExecutor concurrent stop does not double-release..." << std::endl;
+
+    constexpr size_t queue_capacity = 64;
+    constexpr int num_tasks = static_cast<int>(queue_capacity - 1);
+    std::atomic<int> cycle_count(0);
+    std::atomic<int> task_count(0);
+    std::atomic<bool> release_stop_callers(false);
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_stop_race";
+    config.cycle_period_ns = 500000000;  // 500ms
+    config.thread_priority = 0;
+    config.cycle_callback = [&cycle_count]() {
+        cycle_count.fetch_add(1, std::memory_order_relaxed);
+    };
+
+    RealtimeThreadExecutor executor("test_stop_race", config,
+                                    /*enable_stats=*/true,
+                                    queue_capacity);
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+
+    for (int i = 0; i < 200; ++i) {
+        if (executor.get_status().cycle_count > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    TEST_ASSERT(executor.get_status().cycle_count > 0,
+                "Executor should complete its first cycle before queuing tasks");
+
+    for (int i = 0; i < num_tasks; ++i) {
+        TEST_ASSERT(executor.push_task_ex([&task_count]() {
+                        task_count.fetch_add(1, std::memory_order_relaxed);
+                    }),
+                    "Initial task push should succeed");
+    }
+
+    std::thread stopper1([&]() {
+        while (!release_stop_callers.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        executor.stop();
+    });
+    std::thread stopper2([&]() {
+        while (!release_stop_callers.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        executor.stop();
+    });
+
+    release_stop_callers.store(true, std::memory_order_release);
+    stopper1.join();
+    stopper2.join();
+
+    auto status = executor.get_status();
+    TEST_ASSERT(task_count.load(std::memory_order_acquire) == 0,
+                "Queued tasks should be dropped, not executed, during concurrent stop");
+    TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks),
+                "Concurrent stop should drain each queued task exactly once");
+
+    for (int i = 0; i < num_tasks; ++i) {
+        TEST_ASSERT(executor.push_task_ex([]() {}),
+                    "Task pool slot should be reusable after concurrent stop drains the queue");
+    }
+
+    executor.stop();
+    status = executor.get_status();
+    TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks * 2),
+                "Follow-up stop should drain each post-shutdown task exactly once");
+
+    std::cout << "  Concurrent stop does not double-release: PASSED (dropped "
+              << status.dropped_task_count << " tasks)" << std::endl;
+    return true;
+}
+
 // ========== 统计信息测试 ==========
 
 bool test_realtime_executor_statistics() {
@@ -720,6 +796,7 @@ int main() {
     all_passed &= test_realtime_executor_push_task();
     all_passed &= test_realtime_executor_task_order();
     all_passed &= test_realtime_stop_drains_queue();
+    all_passed &= test_realtime_concurrent_stop_does_not_double_release();
     
     // 统计信息测试
     all_passed &= test_realtime_executor_statistics();
