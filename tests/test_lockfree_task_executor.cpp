@@ -5,8 +5,37 @@
 #include <chrono>
 #include <stdexcept>
 #include <memory>
+#include <string>
 
 using namespace executor;
+
+namespace {
+#if defined(__has_feature)
+#  if __has_feature(thread_sanitizer)
+#    define EXECUTOR_TEST_HAS_TSAN 1
+#  endif
+#endif
+#if defined(__SANITIZE_THREAD__)
+#  define EXECUTOR_TEST_HAS_TSAN 1
+#endif
+#ifndef EXECUTOR_TEST_HAS_TSAN
+#  define EXECUTOR_TEST_HAS_TSAN 0
+#endif
+
+template <typename Predicate>
+bool wait_until(Predicate predicate,
+                std::chrono::milliseconds timeout = std::chrono::milliseconds(500)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return predicate();
+}
+
+} // namespace
 
 TEST(LockFreeTaskExecutorTest, BasicStartStop) {
     LockFreeTaskExecutor exec(128);
@@ -82,6 +111,99 @@ TEST(LockFreeTaskExecutorTest, ExceptionHandling) {
 
     EXPECT_EQ(counter.load(), 2);
     EXPECT_EQ(exec.processed_count(), 2);
+
+    exec.stop();
+}
+
+TEST(LockFreeTaskExecutorTest, ExceptionHandlerCalled) {
+    LockFreeTaskExecutor exec(128);
+
+    std::atomic<int> handler_calls{0};
+    std::atomic<bool> message_seen{false};
+    exec.set_exception_handler([&](std::exception_ptr eptr) {
+        handler_calls.fetch_add(1, std::memory_order_relaxed);
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const std::runtime_error& ex) {
+            message_seen.store(std::string(ex.what()) == "handler test exception",
+                               std::memory_order_relaxed);
+        } catch (...) {
+        }
+    });
+
+    ASSERT_TRUE(exec.start());
+    ASSERT_TRUE(exec.push_task([] {
+        throw std::runtime_error("handler test exception");
+    }));
+
+    EXPECT_TRUE(wait_until([&] {
+        return exec.exception_count() == 1 &&
+               handler_calls.load(std::memory_order_relaxed) == 1 &&
+               message_seen.load(std::memory_order_relaxed);
+    }));
+    EXPECT_EQ(exec.exception_count(), 1u);
+    EXPECT_EQ(handler_calls.load(std::memory_order_relaxed), 1);
+    EXPECT_TRUE(message_seen.load(std::memory_order_relaxed));
+
+    exec.stop();
+}
+
+TEST(LockFreeTaskExecutorTest, ExceptionHandlerNotCalledWhenNotSet) {
+    LockFreeTaskExecutor exec(128);
+    ASSERT_TRUE(exec.start());
+
+    ASSERT_TRUE(exec.push_task([] {
+        throw std::logic_error("count only");
+    }));
+
+    EXPECT_TRUE(wait_until([&] {
+        return exec.exception_count() == 1 && exec.processed_count() == 1;
+    }));
+    EXPECT_EQ(exec.exception_count(), 1u);
+    EXPECT_EQ(exec.processed_count(), 1u);
+
+    exec.stop();
+}
+
+TEST(LockFreeTaskExecutorTest, ConcurrentSetHandler) {
+#if !EXECUTOR_TEST_HAS_TSAN
+    GTEST_SKIP() << "ConcurrentSetHandler is a ThreadSanitizer regression test";
+#endif
+    LockFreeTaskExecutor exec(1024);
+
+    std::atomic<bool> keep_setting{true};
+    std::atomic<int> handler_calls{0};
+    exec.set_exception_handler([&](std::exception_ptr) {
+        handler_calls.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    ASSERT_TRUE(exec.start());
+
+    std::thread setter([&] {
+        while (keep_setting.load(std::memory_order_acquire)) {
+            exec.set_exception_handler([&](std::exception_ptr) {
+                handler_calls.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+    });
+
+    constexpr int kThrowingTasks = 512;
+    for (int i = 0; i < kThrowingTasks; ++i) {
+        ASSERT_TRUE(exec.push_task([] {
+            throw std::runtime_error("concurrent handler update");
+        }));
+    }
+
+    EXPECT_TRUE(wait_until([&] {
+        return exec.exception_count() == kThrowingTasks;
+    }, std::chrono::seconds(2)));
+
+    keep_setting.store(false, std::memory_order_release);
+    setter.join();
+
+    EXPECT_EQ(exec.exception_count(), static_cast<uint64_t>(kThrowingTasks));
+    EXPECT_EQ(exec.processed_count(), static_cast<uint64_t>(kThrowingTasks));
+    EXPECT_GT(handler_calls.load(std::memory_order_relaxed), 0);
 
     exec.stop();
 }
