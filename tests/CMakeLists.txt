@@ -58,6 +58,29 @@ set_tests_properties(test_comm_harness_foundation PROPERTIES
     TIMEOUT 30
 )
 
+add_executable(test_comm_facade_usage
+    harness/test_comm_facade_usage.cpp
+)
+target_link_libraries(test_comm_facade_usage PRIVATE executor GTest::GTest GTest::Main)
+if(MSVC)
+    target_compile_options(test_comm_facade_usage PRIVATE /utf-8)
+endif()
+if(EXECUTOR_ENABLE_COVERAGE)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(test_comm_facade_usage PRIVATE
+            --coverage
+            -fprofile-arcs
+            -ftest-coverage
+        )
+        target_link_options(test_comm_facade_usage PRIVATE --coverage)
+    endif()
+endif()
+add_test(NAME test_comm_facade_usage COMMAND test_comm_facade_usage)
+set_tests_properties(test_comm_facade_usage PROPERTIES
+    LABELS "unit;harness"
+    TIMEOUT 30
+)
+
 # 为每个测试文件创建可执行文件
 foreach(TEST_SOURCE ${TEST_SOURCES})
     get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
