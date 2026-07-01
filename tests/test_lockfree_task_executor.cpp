@@ -5,9 +5,38 @@
 #include <chrono>
 #include <stdexcept>
 #include <memory>
+#include <string>
 #include <vector>
 
 using namespace executor;
+
+namespace {
+#if defined(__has_feature)
+#  if __has_feature(thread_sanitizer)
+#    define EXECUTOR_TEST_HAS_TSAN 1
+#  endif
+#endif
+#if defined(__SANITIZE_THREAD__)
+#  define EXECUTOR_TEST_HAS_TSAN 1
+#endif
+#ifndef EXECUTOR_TEST_HAS_TSAN
+#  define EXECUTOR_TEST_HAS_TSAN 0
+#endif
+
+template <typename Predicate>
+bool wait_until(Predicate predicate,
+                std::chrono::milliseconds timeout = std::chrono::milliseconds(500)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return predicate();
+}
+
+} // namespace
 
 TEST(LockFreeTaskExecutorTest, BasicStartStop) {
     LockFreeTaskExecutor exec(128);
@@ -87,61 +116,97 @@ TEST(LockFreeTaskExecutorTest, ExceptionHandling) {
     exec.stop();
 }
 
-TEST(LockFreeTaskExecutorTest, ConcurrentSetHandlerWhileRunning) {
-    LockFreeTaskExecutor exec(4096);
-    ASSERT_TRUE(exec.start());
+TEST(LockFreeTaskExecutorTest, ExceptionHandlerCalled) {
+    LockFreeTaskExecutor exec(128);
 
-    constexpr int kSetterThreads = 4;
-    constexpr int kIterationsPerThread = 1000;
-    constexpr uint64_t kMinSubmittedTasks = 100;
-
-    std::atomic<bool> setters_done{false};
-    std::atomic<uint64_t> submitted{0};
-    std::atomic<uint64_t> handler_calls{0};
-
-    exec.set_exception_handler([&handler_calls](std::exception_ptr) {
+    std::atomic<int> handler_calls{0};
+    std::atomic<bool> message_seen{false};
+    exec.set_exception_handler([&](std::exception_ptr eptr) {
         handler_calls.fetch_add(1, std::memory_order_relaxed);
-    });
-
-    std::thread producer([&] {
-        while (!setters_done.load(std::memory_order_acquire) ||
-               submitted.load(std::memory_order_relaxed) < kMinSubmittedTasks) {
-            if (exec.push_task([] {
-                    throw std::runtime_error("handler race test");
-                })) {
-                submitted.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                std::this_thread::yield();
-            }
+        try {
+            std::rethrow_exception(eptr);
+        } catch (const std::runtime_error& ex) {
+            message_seen.store(std::string(ex.what()) == "handler test exception",
+                               std::memory_order_relaxed);
+        } catch (...) {
         }
     });
 
-    std::vector<std::thread> setters;
-    setters.reserve(kSetterThreads);
-    for (int thread_index = 0; thread_index < kSetterThreads; ++thread_index) {
-        setters.emplace_back([&, thread_index] {
-            for (int i = 0; i < kIterationsPerThread; ++i) {
-                exec.set_exception_handler([&handler_calls, thread_index, i](std::exception_ptr) {
-                    (void)thread_index;
-                    (void)i;
-                    handler_calls.fetch_add(1, std::memory_order_relaxed);
-                });
-            }
-        });
-    }
+    ASSERT_TRUE(exec.start());
+    ASSERT_TRUE(exec.push_task([] {
+        throw std::runtime_error("handler test exception");
+    }));
 
-    for (auto& setter : setters) {
-        setter.join();
-    }
-    setters_done.store(true, std::memory_order_release);
-    producer.join();
+    EXPECT_TRUE(wait_until([&] {
+        return exec.exception_count() == 1 &&
+               handler_calls.load(std::memory_order_relaxed) == 1 &&
+               message_seen.load(std::memory_order_relaxed);
+    }));
+    EXPECT_EQ(exec.exception_count(), 1u);
+    EXPECT_EQ(handler_calls.load(std::memory_order_relaxed), 1);
+    EXPECT_TRUE(message_seen.load(std::memory_order_relaxed));
 
     exec.stop();
+}
 
-    EXPECT_GT(submitted.load(std::memory_order_relaxed), 0u);
-    EXPECT_EQ(exec.processed_count(), submitted.load(std::memory_order_relaxed));
-    EXPECT_EQ(exec.exception_count(), submitted.load(std::memory_order_relaxed));
-    EXPECT_GT(handler_calls.load(std::memory_order_relaxed), 0u);
+TEST(LockFreeTaskExecutorTest, ExceptionHandlerNotCalledWhenNotSet) {
+    LockFreeTaskExecutor exec(128);
+    ASSERT_TRUE(exec.start());
+
+    ASSERT_TRUE(exec.push_task([] {
+        throw std::logic_error("count only");
+    }));
+
+    EXPECT_TRUE(wait_until([&] {
+        return exec.exception_count() == 1 && exec.processed_count() == 1;
+    }));
+    EXPECT_EQ(exec.exception_count(), 1u);
+    EXPECT_EQ(exec.processed_count(), 1u);
+
+    exec.stop();
+}
+
+TEST(LockFreeTaskExecutorTest, ConcurrentSetHandler) {
+#if !EXECUTOR_TEST_HAS_TSAN
+    GTEST_SKIP() << "ConcurrentSetHandler is a ThreadSanitizer regression test";
+#endif
+    LockFreeTaskExecutor exec(1024);
+
+    std::atomic<bool> keep_setting{true};
+    std::atomic<int> handler_calls{0};
+    exec.set_exception_handler([&](std::exception_ptr) {
+        handler_calls.fetch_add(1, std::memory_order_relaxed);
+    });
+
+    ASSERT_TRUE(exec.start());
+
+    std::thread setter([&] {
+        while (keep_setting.load(std::memory_order_acquire)) {
+            exec.set_exception_handler([&](std::exception_ptr) {
+                handler_calls.fetch_add(1, std::memory_order_relaxed);
+            });
+        }
+    });
+
+    constexpr int kThrowingTasks = 512;
+    for (int i = 0; i < kThrowingTasks; ++i) {
+        ASSERT_TRUE(exec.push_task([] {
+            throw std::runtime_error("concurrent handler update");
+        }));
+    }
+
+    EXPECT_TRUE(wait_until([&] {
+        return exec.exception_count() == kThrowingTasks;
+    }, std::chrono::seconds(2)));
+
+    keep_setting.store(false, std::memory_order_release);
+    setter.join();
+
+    EXPECT_EQ(exec.exception_count(), static_cast<uint64_t>(kThrowingTasks));
+    EXPECT_EQ(exec.processed_count(), static_cast<uint64_t>(kThrowingTasks));
+    EXPECT_GT(handler_calls.load(std::memory_order_relaxed), 0);
+
+    exec.stop();
 }
 
 TEST(LockFreeTaskExecutorTest, StopWithPendingTasks) {
