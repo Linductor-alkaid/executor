@@ -136,6 +136,8 @@ bool RealtimeThreadExecutor::start() {
 }
 
 void RealtimeThreadExecutor::stop() {
+    std::lock_guard<std::mutex> lock(drain_mutex_);
+
     // 设置停止标志
     bool expected = true;
     if (running_.compare_exchange_strong(expected, false)) {
@@ -150,6 +152,10 @@ void RealtimeThreadExecutor::stop() {
         }
     }
 
+    drain_stopped_queue();
+}
+
+void RealtimeThreadExecutor::drain_stopped_queue() {
     // stop() prevents any future process_tasks() pass. Return queued-but-never-run
     // wrappers to the pool before task_pool_ is destroyed, and count them as drops.
     TaskWrapper* task_wrapper = nullptr;
