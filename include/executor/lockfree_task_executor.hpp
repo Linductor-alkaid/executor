@@ -73,8 +73,9 @@ public:
      * @brief 批量提交任务
      * @param tasks 任务数组
      * @param count 任务数量
-     * @param pushed 实际提交的任务数量（输出参数）
-     * @return 成功返回true，队列满返回false
+     * @param pushed 实际提交的任务数量（输出参数）。返回 true 时仍可能小于 count，
+     *               调用方应检查该值并重试或丢弃剩余任务。
+     * @return 至少部分入队返回 true；队列无可用槽位或对象池耗尽返回 false
      */
     bool push_tasks_batch(const std::function<void()>* tasks, size_t count, size_t& pushed);
 

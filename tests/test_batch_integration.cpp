@@ -30,6 +30,29 @@ TEST(BatchIntegration, PushTasksBatch) {
     EXPECT_EQ(executor.processed_count(), batch_size);
 }
 
+TEST(BatchIntegration, PushBatchPartialSuccess) {
+    LockFreeTaskExecutor executor(16);
+
+    std::vector<std::function<void()>> prefill(5);
+    for (auto& task : prefill) {
+        task = []() {};
+    }
+
+    size_t pushed = 0;
+    ASSERT_TRUE(executor.push_tasks_batch(prefill.data(), prefill.size(), pushed));
+    ASSERT_EQ(pushed, prefill.size());
+
+    std::vector<std::function<void()>> tasks(11);
+    for (auto& task : tasks) {
+        task = []() {};
+    }
+
+    pushed = 0;
+    EXPECT_TRUE(executor.push_tasks_batch(tasks.data(), tasks.size(), pushed));
+    EXPECT_EQ(pushed, 10u);
+    EXPECT_LT(pushed, tasks.size());
+}
+
 TEST(BatchIntegration, WorkerUsesBatchPop) {
     LockFreeTaskExecutor executor(1024);
     ASSERT_TRUE(executor.start());
