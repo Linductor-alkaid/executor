@@ -61,7 +61,7 @@ private:
     bool initialize_opencl();
     void cleanup();
     bool check_opencl_error(cl_int error, const char* operation);
-    CommandQueueWrapper* get_queue(int stream_id);
+    std::shared_ptr<CommandQueueWrapper> get_queue(int stream_id);
     void worker_thread();
 
     std::string name_;
@@ -72,7 +72,7 @@ private:
     cl_platform_id platform_;
     cl_device_id device_;
     cl_context context_;
-    std::vector<std::unique_ptr<CommandQueueWrapper>> queues_;
+    std::vector<std::shared_ptr<CommandQueueWrapper>> queues_;
     mutable std::mutex queues_mutex_;
 
     std::unordered_map<void*, cl_mem> memory_map_;
