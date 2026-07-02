@@ -13,6 +13,7 @@
 // 包含 thread_pool 模块的头文件
 #include <executor/config.hpp>
 #include <executor/types.hpp>
+#include "executor/thread_pool_executor.hpp"
 #include "executor/task/task.hpp"
 #include "executor/thread_pool/priority_scheduler.hpp"
 #include "executor/thread_pool/thread_pool.hpp"
@@ -791,6 +792,45 @@ bool test_thread_pool_submit_after_shutdown() {
     return true;
 }
 
+bool test_thread_pool_submit_batch_after_shutdown_futures_ready() {
+    std::cout << "Testing ThreadPool submit_batch after shutdown futures ready..." << std::endl;
+
+    ThreadPoolConfig config;
+    config.min_threads = 2;
+    config.max_threads = 4;
+
+    ThreadPoolExecutor executor("test", config);
+    TEST_ASSERT(executor.start(), "Should be able to start thread pool executor");
+    executor.stop();
+
+    std::vector<std::function<void()>> tasks;
+    tasks.push_back([]() noexcept {});
+    tasks.push_back([]() noexcept {});
+    tasks.push_back([]() noexcept {});
+
+    auto futures = executor.submit_batch(tasks);
+    TEST_ASSERT(futures.size() == tasks.size(), "Should return one future per submitted task");
+
+    for (auto& future : futures) {
+        TEST_ASSERT(future.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready,
+                    "Rejected batch future should become ready promptly");
+
+        bool exception_caught = false;
+        try {
+            future.get();
+        } catch (const std::exception& e) {
+            exception_caught = true;
+            TEST_ASSERT(std::string(e.what()).find("ThreadPool is stopped") != std::string::npos,
+                        "Rejected batch future exception should mention stopped thread pool");
+        }
+
+        TEST_ASSERT(exception_caught, "Rejected batch future should throw");
+    }
+
+    std::cout << "  ThreadPool submit_batch after shutdown futures ready: PASSED" << std::endl;
+    return true;
+}
+
 bool test_thread_pool_wait_for_completion() {
     std::cout << "Testing ThreadPool wait_for_completion..." << std::endl;
     
@@ -1035,6 +1075,7 @@ int main() {
     all_passed &= test_thread_pool_shutdown_no_wait();
     all_passed &= test_thread_pool_concurrent_shutdown();
     all_passed &= test_thread_pool_submit_after_shutdown();
+    all_passed &= test_thread_pool_submit_batch_after_shutdown_futures_ready();
     all_passed &= test_thread_pool_wait_for_completion();
     all_passed &= test_thread_pool_wait_for_completion_latency();
     all_passed &= test_task_timeout_soft_skip_works();

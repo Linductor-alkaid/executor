@@ -165,6 +165,14 @@ public:
     void submit_batch(std::vector<std::function<void()>> tasks);
 
     /**
+     * @brief 批量提交任务，并报告是否被线程池接受
+     *
+     * @param tasks 任务列表
+     * @return true 表示任务已入队；false 表示线程池已停止或任务为空
+     */
+    bool try_submit_batch(std::vector<std::function<void()>> tasks);
+
+    /**
      * @brief 获取线程池状态
      * 
      * @return 线程池状态信息

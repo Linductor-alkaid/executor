@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <stdexcept>
 
 namespace executor {
 
@@ -110,19 +111,35 @@ public:
     std::vector<std::future<void>> submit_batch(const std::vector<F>& tasks) {
         std::vector<std::function<void()>> task_wrappers;
         std::vector<std::future<void>> futures;
+        std::vector<std::shared_ptr<std::promise<void>>> promises;
 
         task_wrappers.reserve(tasks.size());
         futures.reserve(tasks.size());
+        promises.reserve(tasks.size());
 
         // 准备所有任务和 future
         for (const auto& task : tasks) {
-            auto packaged = std::make_shared<std::packaged_task<void()>>(task);
-            futures.push_back(packaged->get_future());
-            task_wrappers.push_back([packaged]() { (*packaged)(); });
+            auto promise = std::make_shared<std::promise<void>>();
+            futures.push_back(promise->get_future());
+            promises.push_back(promise);
+            task_wrappers.push_back([promise, task]() {
+                try {
+                    task();
+                    promise->set_value();
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+            });
         }
 
         // 批量提交（减少锁竞争）
-        submit_batch_impl(std::move(task_wrappers));
+        if (!try_submit_batch_impl(std::move(task_wrappers))) {
+            for (auto& promise : promises) {
+                promise->set_exception(std::make_exception_ptr(
+                    std::runtime_error("ThreadPool is stopped")
+                ));
+            }
+        }
 
         return futures;
     }
@@ -173,6 +190,16 @@ protected:
         for (auto& task : tasks) {
             submit_impl(std::move(task));
         }
+    }
+
+    /**
+     * @brief 批量提交任务实现（可报告拒绝）
+     * @param tasks 任务列表
+     * @return true 表示任务已被接受；false 表示执行器已拒绝整批任务
+     */
+    virtual bool try_submit_batch_impl(std::vector<std::function<void()>> tasks) {
+        submit_batch_impl(std::move(tasks));
+        return true;
     }
 };
 

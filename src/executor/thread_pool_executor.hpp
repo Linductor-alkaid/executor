@@ -108,6 +108,14 @@ protected:
      */
     void submit_batch_impl(std::vector<std::function<void()>> tasks) override;
 
+    /**
+     * @brief 批量提交任务实现（可报告拒绝）
+     *
+     * @param tasks 任务列表
+     * @return true 表示任务已被线程池接受；false 表示线程池已停止
+     */
+    bool try_submit_batch_impl(std::vector<std::function<void()>> tasks) override;
+
 private:
     std::string name_;              // 执行器名称
     ThreadPoolConfig config_;       // 线程池配置
