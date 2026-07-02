@@ -55,6 +55,10 @@ ExecutorManager::~ExecutorManager() {
 
 // 初始化默认异步执行器（线程池）
 bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
+    std::lock_guard<std::mutex> lock(default_async_mutex_);
+    if (default_async_shutdown_) {
+        return false;
+    }
     // 检查是否已经初始化
     if (default_async_executor_ != nullptr) {
         return false;  // 已经初始化过
@@ -121,15 +125,22 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
 // 若尚未初始化，则使用默认配置懒初始化一次（线程安全由 std::call_once 保证）
 // shutdown 后不再懒初始化，直接返回 nullptr
 IAsyncExecutor* ExecutorManager::get_default_async_executor() {
-    if (default_async_shutdown_) {
-        return nullptr;
+    {
+        std::lock_guard<std::mutex> lock(default_async_mutex_);
+        if (default_async_shutdown_) {
+            return nullptr;
+        }
+        if (default_async_executor_) {
+            return default_async_executor_.get();
+        }
     }
-    if (default_async_executor_ == nullptr) {
-        std::call_once(default_init_once_, [this] {
-            ExecutorConfig default_config{};
-            initialize_async_executor(default_config);
-        });
-    }
+
+    std::call_once(default_init_once_, [this] {
+        ExecutorConfig default_config{};
+        initialize_async_executor(default_config);
+    });
+
+    std::lock_guard<std::mutex> lock(default_async_mutex_);
     return default_async_executor_.get();
 }
 
@@ -348,12 +359,15 @@ void ExecutorManager::shutdown(bool wait_for_tasks) {
     }
     
     // 停止异步执行器
-    if (default_async_executor_) {
-        default_async_executor_->stop();
-        if (wait_for_tasks) {
-            default_async_executor_->wait_for_completion();
+    {
+        std::lock_guard<std::mutex> lock(default_async_mutex_);
+        if (default_async_executor_) {
+            default_async_executor_->stop();
+            if (wait_for_tasks) {
+                default_async_executor_->wait_for_completion();
+            }
+            default_async_executor_.reset();
         }
-        default_async_executor_.reset();
         default_async_shutdown_ = true;
     }
 }

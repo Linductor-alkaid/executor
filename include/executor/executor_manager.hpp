@@ -179,6 +179,8 @@ public:
     std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
 private:
+    // Protects default_async_executor_ and default_async_shutdown_.
+    std::mutex default_async_mutex_;
     // 默认异步执行器（线程池）
     std::unique_ptr<IAsyncExecutor> default_async_executor_;
 
