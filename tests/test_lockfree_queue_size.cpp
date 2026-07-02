@@ -17,6 +17,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <array>
+#include <stdexcept>
 #include <limits>
 #include <thread>
 #include <vector>
@@ -38,6 +39,31 @@ TEST(LockFreeQueueSizeTest, EmptyQueueReportsZero) {
     LockFreeQueue<int> q(64);
     EXPECT_EQ(q.size(), static_cast<size_t>(0));
     EXPECT_EQ(q.size(), q.capacity() == 0 ? 0u : 0u);
+}
+
+TEST(LockFreeQueueSizeTest, test_lockfree_queue_zero_capacity_rejected) {
+    EXPECT_THROW((LockFreeQueue<int>(0)), std::invalid_argument);
+    EXPECT_THROW((LockFreeQueue<int>(1)), std::invalid_argument);
+
+    LockFreeQueue<int> q(3);
+    EXPECT_EQ(q.capacity(), 4u);
+
+    int out = 0;
+    EXPECT_TRUE(q.push(1));
+    EXPECT_TRUE(q.push(2));
+    EXPECT_TRUE(q.push(3));
+    EXPECT_FALSE(q.push(4));
+
+    EXPECT_TRUE(q.pop(out));
+    EXPECT_EQ(out, 1);
+}
+
+TEST(LockFreeQueueSizeTest, test_lockfree_queue_capacity_rounding_overflow) {
+    constexpr size_t max_power_of_two =
+        (std::numeric_limits<size_t>::max() / 2) + 1;
+
+    EXPECT_THROW((LockFreeQueue<int>(max_power_of_two)), std::invalid_argument);
+    EXPECT_THROW((LockFreeQueue<int>(max_power_of_two + 1)), std::invalid_argument);
 }
 
 TEST(LockFreeQueueSizeTest, SingleThreadedSizeMatchesPushesAndPops) {

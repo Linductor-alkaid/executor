@@ -3,9 +3,11 @@
 
 #include <atomic>
 #include <cstddef>
+#include <limits>
 #include <vector>
 #include <type_traits>
 #include <memory>
+#include <stdexcept>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <emmintrin.h>
@@ -338,10 +340,23 @@ private:
         }
     }
     static size_t round_to_power_of_two(size_t n) {
-        if (n == 0) return 1;
-        if ((n & (n - 1)) == 0) return n;
+        if (n < 2) {
+            throw std::invalid_argument("LockFreeQueue capacity must be at least 2");
+        }
+
+        constexpr size_t max_power_of_two = (std::numeric_limits<size_t>::max() / 2) + 1;
+        if (n > max_power_of_two) {
+            throw std::invalid_argument("LockFreeQueue capacity is too large to round to a power of two");
+        }
+
         size_t power = 1;
         while (power < n) power <<= 1;
+
+        if (power > std::vector<T>().max_size() ||
+            power > std::vector<std::atomic<size_t>>().max_size()) {
+            throw std::invalid_argument("LockFreeQueue capacity is too large to allocate");
+        }
+
         return power;
     }
 
