@@ -6,7 +6,7 @@
 // Prevents the recurrence of the bug fixed by P-260618-008: a struct gets
 // new fields (dropped_task_count, failed_pushes, peak_queue_size,
 // queue_capacity) but docs/API.md §7.3 is not updated, leaving users with
-// stale documentation.
+// stale documentation. Also covers P-008 batch performance claim sources.
 
 #include <executor/types.hpp>
 
@@ -60,15 +60,9 @@ std::set<std::string> expected_struct_fields() {
     };
 }
 
-TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
-    const std::vector<std::string> candidates = {
-        "docs/API.md",
-        "../docs/API.md",
-        "../../docs/API.md",
-    };
-
+std::string read_doc_from_candidates(const std::vector<std::string>& candidates,
+                                     std::string& path_used) {
     std::ifstream in;
-    std::string path_used;
     for (const auto& p : candidates) {
         in.open(p);
         if (in.good()) {
@@ -77,12 +71,29 @@ TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
         }
         in.clear();
     }
-    ASSERT_TRUE(in.good()) << "Could not open docs/API.md from any candidate path";
+    if (!in.good()) {
+        return {};
+    }
 
     std::stringstream ss;
     ss << in.rdbuf();
-    const std::string api_md = ss.str();
-    in.close();
+    return ss.str();
+}
+
+bool contains_regex(const std::string& text, const std::string& pattern) {
+    return std::regex_search(text, std::regex(pattern));
+}
+
+TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
+    const std::vector<std::string> candidates = {
+        "docs/API.md",
+        "../docs/API.md",
+        "../../docs/API.md",
+    };
+
+    std::string path_used;
+    const std::string api_md = read_doc_from_candidates(candidates, path_used);
+    ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
 
     const auto entry = extract_status_entry(api_md);
     ASSERT_FALSE(entry.empty())
@@ -110,6 +121,48 @@ TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
             ADD_FAILURE() << "  + " << f;
         }
     }
+}
+
+TEST(ApiDocStatusFields, ApiDocPerformanceClaimsHaveSources) {
+    std::string api_path;
+    const std::string api_md = read_doc_from_candidates(
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+    ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
+
+    std::string readme_path;
+    const std::string readme_md = read_doc_from_candidates(
+        {"README.md", "../README.md", "../../README.md"}, readme_path);
+    ASSERT_FALSE(readme_md.empty()) << "Could not open README.md from any candidate path";
+
+    const std::vector<std::pair<std::string, std::string>> docs = {
+        {api_path, api_md},
+        {readme_path, readme_md},
+    };
+
+    for (const auto& [path, text] : docs) {
+        EXPECT_TRUE(text.find("docs/performance/lockfree_task_executor_baseline.md") !=
+                        std::string::npos ||
+                    text.find("performance/lockfree_task_executor_baseline.md") !=
+                        std::string::npos)
+            << path << " batch performance claim must link the Markdown source";
+        EXPECT_TRUE(text.find("docs/performance/batch_submit_baseline_2026-03-13.json") !=
+                        std::string::npos ||
+                    text.find("performance/batch_submit_baseline_2026-03-13.json") !=
+                        std::string::npos)
+            << path << " batch performance claim must link the JSON source";
+        EXPECT_NE(text.find("benchmark_batch_submit_real"), std::string::npos)
+            << path << " batch performance claim must include the benchmark command";
+        EXPECT_TRUE(contains_regex(text, "date[^0-9]{0,20}2026-03-13") ||
+                    contains_regex(text, "日期[^0-9]{0,20}2026-03-13"))
+            << path << " batch performance claim must include the benchmark date";
+    }
+
+    EXPECT_NE(readme_md.find("3–5x"), std::string::npos)
+        << "README.md public batch performance claim should stay conservative at 3-5x";
+    EXPECT_NE(api_md.find("实测加速比 | 公开推荐范围"), std::string::npos)
+        << "docs/API.md should keep measured ratios separate from public guidance";
+    EXPECT_NE(api_md.find("16.47x"), std::string::npos)
+        << "docs/API.md should preserve the measured 2000-task ratio";
 }
 
 }  // namespace

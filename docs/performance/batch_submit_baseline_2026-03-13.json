@@ -1,0 +1,73 @@
+{
+  "benchmark": "batch_submit_baseline",
+  "description": "Batch task submission baseline used by README.md and docs/API.md performance claims.",
+  "benchmark_command": "JOBS=16 cmake --build build -j16 --target benchmark_batch_submit_real benchmark_batch_submit_concurrent && ./build/tests/benchmark_batch_submit_real && ./build/tests/benchmark_batch_submit_concurrent",
+  "source_markdown": "docs/performance/lockfree_task_executor_baseline.md",
+  "source_json": "docs/performance/batch_submit_baseline_2026-03-13.json",
+  "commit": "9b69e52",
+  "date": "2026-03-13",
+  "captured_from": {
+    "date": "2026-07-02",
+    "os": "Linux 6.8.0-124-generic x86_64 GNU/Linux",
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF, 32 logical CPUs",
+    "compiler": "GCC 11.4.0",
+    "build_type": "Release",
+    "thread_count": 16
+  },
+  "environment": {
+    "os": "Linux 6.8.0-101-generic",
+    "cpu": "multi-core processor",
+    "compiler": "GCC 11",
+    "build_type": "Release",
+    "thread_count": 16
+  },
+  "single_thread_submit_batch_no_future": [
+    {
+      "tasks": 500,
+      "loop_submit_us": 2757,
+      "submit_batch_no_future_us": 549,
+      "measured_ratio": 5.02,
+      "public_recommended_range": "3-5x"
+    },
+    {
+      "tasks": 1000,
+      "loop_submit_us": 5307,
+      "submit_batch_no_future_us": 1246,
+      "measured_ratio": 4.26,
+      "public_recommended_range": "3-5x"
+    },
+    {
+      "tasks": 2000,
+      "loop_submit_us": 11003,
+      "submit_batch_no_future_us": 668,
+      "measured_ratio": 16.47,
+      "public_recommended_range": "3-5x"
+    }
+  ],
+  "multi_thread_submit_batch": [
+    {
+      "threads": 2,
+      "tasks_per_thread": 5000,
+      "loop_submit_ms": 37,
+      "submit_batch_ms": 37,
+      "measured_ratio": 1.00,
+      "recommendation": "Prefer loop submit() for multi-threaded submission."
+    },
+    {
+      "threads": 4,
+      "tasks_per_thread": 2500,
+      "loop_submit_ms": 23,
+      "submit_batch_ms": 38,
+      "measured_ratio": 0.61,
+      "recommendation": "Prefer loop submit() for multi-threaded submission."
+    },
+    {
+      "threads": 8,
+      "tasks_per_thread": 1250,
+      "loop_submit_ms": 45,
+      "submit_batch_ms": 38,
+      "measured_ratio": 1.18,
+      "recommendation": "Prefer loop submit() for multi-threaded submission."
+    }
+  ]
+}
