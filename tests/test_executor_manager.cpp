@@ -243,6 +243,58 @@ bool test_async_executor_lazy_init() {
     return true;
 }
 
+bool test_executor_manager_concurrent_initialize() {
+    std::cout << "Testing concurrent async executor initialization..." << std::endl;
+
+    ExecutorManager manager;
+    ExecutorConfig config;
+    config.min_threads = 2;
+    config.max_threads = 4;
+    config.queue_capacity = 256;
+
+    const int num_threads = 32;
+    std::vector<std::thread> threads;
+    std::atomic<int> ready_count{0};
+    std::atomic<bool> start{false};
+    std::atomic<int> success_count{0};
+
+    for (int i = 0; i < num_threads; ++i) {
+        threads.emplace_back([&manager, &config, &ready_count, &start, &success_count, num_threads]() {
+            ready_count.fetch_add(1);
+            while (ready_count.load() < num_threads) {
+                std::this_thread::yield();
+            }
+            while (!start.load()) {
+                std::this_thread::yield();
+            }
+
+            if (manager.initialize_async_executor(config)) {
+                success_count.fetch_add(1);
+            }
+        });
+    }
+
+    start.store(true);
+
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    TEST_ASSERT(success_count.load() == 1,
+               "Exactly one concurrent initialize_async_executor call should succeed");
+
+    IAsyncExecutor* executor = manager.get_default_async_executor();
+    TEST_ASSERT(executor != nullptr, "Executor should exist after concurrent initialization");
+
+    auto future = executor->submit([]() {
+        return 7;
+    });
+    TEST_ASSERT(future.get() == 7, "Executor should accept tasks after concurrent initialization");
+
+    std::cout << "  Concurrent async executor initialization: PASSED" << std::endl;
+    return true;
+}
+
 // ========== 实时执行器管理测试 ==========
 
 bool test_realtime_executor_registration() {
@@ -551,6 +603,7 @@ int main() {
     all_passed &= test_async_executor_task_submission();
     all_passed &= test_async_executor_lazy_init();
     
+    all_passed &= test_executor_manager_concurrent_initialize();
     // 实时执行器管理测试
     all_passed &= test_realtime_executor_registration();
     all_passed &= test_realtime_executor_retrieval();
