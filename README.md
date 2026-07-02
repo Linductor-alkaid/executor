@@ -38,7 +38,7 @@
   `Executor` facade provides `submit`, `submit_priority`, `submit_delayed`, `submit_periodic`, `submit_batch`, `submit_batch_no_future`, and real-time task registration
 
 - **Batch Task Submission**
-  `submit_batch()` and `submit_batch_no_future()` efficiently submit large numbers of tasks, with **3–5x** throughput improvement in single-threaded scenarios (500–2000 tasks)
+  `submit_batch()` and `submit_batch_no_future()` efficiently submit large numbers of tasks. Public guidance stays conservative at **3–5x** throughput improvement for single-threaded scenarios (500–2000 tasks); source: [docs/performance/lockfree_task_executor_baseline.md](docs/performance/lockfree_task_executor_baseline.md) and [docs/performance/batch_submit_baseline_2026-03-13.json](docs/performance/batch_submit_baseline_2026-03-13.json), benchmark command `JOBS=16 cmake --build build -j16 --target benchmark_batch_submit_real benchmark_batch_submit_concurrent && ./build/tests/benchmark_batch_submit_real && ./build/tests/benchmark_batch_submit_concurrent`, date 2026-03-13.
 
 - **Push-Task Backpressure Counter (P-001)**
   Real-time executors expose `push_task_ex()` and status counters such as `dropped_task_count`, making queue-full and object-pool-exhaustion drops observable without breaking the existing `push_task()` API.

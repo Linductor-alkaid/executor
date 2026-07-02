@@ -80,8 +80,8 @@ void submit_batch_no_future(const std::vector<F>& tasks);
 
 #### 性能特性
 
-| 场景 | 性能提升 | 推荐使用 |
-|------|---------|---------|
+| 场景 | 公开推荐范围 | 推荐使用 |
+|------|-------------|---------|
 | 单线程提交 500+ 任务 | **3-5x** | ✅ `submit_batch_no_future` |
 | 单线程提交 < 500 任务 | 2-5x | ✅ `submit_batch_no_future` |
 | 多线程并发提交 | 0.6-1.2x | ⚠️ 使用循环 `submit()` |
@@ -113,7 +113,7 @@ for (int i = 0; i < 1000; ++i) {
     });
 }
 
-// 使用无 future 版本，性能最佳（5-16x 加速）
+// 使用无 future 版本，公开推荐范围为 3-5x 加速
 executor.submit_batch_no_future(tasks);
 
 // 或使用有 future 版本（如需等待完成）
@@ -150,25 +150,27 @@ for (int t = 0; t < 4; ++t) {
 
 #### 性能测试数据
 
-> 注：以下数据来源于 2026-03-13 性能基线(见 [docs/performance/lockfree_task_executor_baseline.md](performance/lockfree_task_executor_baseline.md))，加速比统一为 `include/executor/executor.hpp:157` 公开口径的 **3-5x** 范围。单线程场景下 `submit_batch_no_future` 提升显著，多线程场景下建议使用循环 `submit()`。
+> 复现元数据：数据日期 2026-03-13，结果来源 [docs/performance/lockfree_task_executor_baseline.md](performance/lockfree_task_executor_baseline.md) 与 [docs/performance/batch_submit_baseline_2026-03-13.json](performance/batch_submit_baseline_2026-03-13.json)。benchmark command: `JOBS=16 cmake --build build -j16 --target benchmark_batch_submit_real benchmark_batch_submit_concurrent && ./build/tests/benchmark_batch_submit_real && ./build/tests/benchmark_batch_submit_concurrent`。commit: `9b69e52`。CPU: 多核处理器（当前补充记录：13th Gen Intel(R) Core(TM) i9-13900KF，32 logical CPUs）。OS: Linux 6.8.0-101-generic（当前补充记录：Linux 6.8.0-124-generic x86_64）。compiler: GCC 11（当前补充记录：GCC 11.4.0）。build type: Release。thread count: 16。
+>
+> 说明：表格保留实测加速比；“公开推荐范围”用于 README/API 对外承诺，保持保守的 **3-5x** 口径。单线程场景下 `submit_batch_no_future` 提升显著，多线程场景下建议使用循环 `submit()`。
 
 单线程批量提交性能（使用 `submit_batch_no_future`）：
 
-| 任务数 | 循环 submit | submit_batch_no_future | 加速比（与 3-5x 公开口径一致） |
-|--------|-------------|------------------------|----------------------------|
-| 500    | ~2757 μs    | ~549 μs                | 3-5x                       |
-| 1000   | ~5307 μs    | ~1246 μs               | 3-5x                       |
-| 2000   | ~11003 μs   | ~668 μs                | 3-5x                       |
+| 任务数 | 循环 submit | submit_batch_no_future | 实测加速比 | 公开推荐范围 |
+|--------|-------------|------------------------|------------|-------------|
+| 500    | ~2757 μs    | ~549 μs                | 5.02x      | 3-5x        |
+| 1000   | ~5307 μs    | ~1246 μs               | 4.26x      | 3-5x        |
+| 2000   | ~11003 μs   | ~668 μs                | 16.47x     | 3-5x        |
 
 多线程并发提交性能（使用 `submit_batch`）：
 
-| 线程数 | 每线程任务数 | 循环 submit | submit_batch | 加速比（与多线程口径一致） |
-|--------|-------------|-------------|--------------|------------------------|
-| 2      | 5000        | 37 ms       | 37 ms        | 1.00x                   |
-| 4      | 2500        | 23 ms       | 38 ms        | 0.61x                   |
-| 8      | 1250        | 45 ms       | 38 ms        | 1.18x                   |
+| 线程数 | 每线程任务数 | 循环 submit | submit_batch | 实测加速比 | 公开建议 |
+|--------|-------------|-------------|--------------|------------|----------|
+| 2      | 5000        | 37 ms       | 37 ms        | 1.00x      | 使用循环 `submit()` |
+| 4      | 2500        | 23 ms       | 38 ms        | 0.61x      | 使用循环 `submit()` |
+| 8      | 1250        | 45 ms       | 38 ms        | 1.18x      | 使用循环 `submit()` |
 
-**结论**：批量提交在单线程场景下性能提升显著（公开口径 3-5x），多线程场景下建议使用循环 `submit()`。
+**结论**：批量提交在单线程场景下性能提升显著；公开推荐范围保持 3-5x，多线程场景下建议使用循环 `submit()`。
 
 ### 3.4 软超时
 
