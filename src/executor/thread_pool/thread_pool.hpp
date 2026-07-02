@@ -224,6 +224,12 @@ public:
         return static_cast<size_t>(timeout_count_.load(std::memory_order_relaxed));
     }
 
+#ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
+    void set_worker_thread_start_hook_for_test(std::function<void(size_t)> hook) {
+        worker_thread_start_hook_for_test_ = std::move(hook);
+    }
+#endif
+
 private:
     /**
      * @brief RAII guard that increments active_threads_ on construction
@@ -325,6 +331,11 @@ private:
     void resize_monitor_thread();
 
     /**
+     * @brief Roll back a failed initialize() attempt.
+     */
+    void rollback_initialization_failure();
+
+    /**
      * @brief 创建新的工作线程
      * 
      * @param worker_id 工作线程ID
@@ -403,6 +414,8 @@ private:
     // 监控线程（用于动态扩缩容）
     std::thread resize_monitor_thread_;
     std::atomic<bool> resize_monitor_stop_{false};
+
+    std::function<void(size_t)> worker_thread_start_hook_for_test_;
 };
 
 // 模板方法实现
