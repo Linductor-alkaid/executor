@@ -88,6 +88,7 @@ private:
     std::queue<std::packaged_task<void()>> task_queue_;
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
+    std::condition_variable queue_drained_cv_;
 };
 
 } // namespace gpu
