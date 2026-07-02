@@ -334,6 +334,58 @@ bool test_thread_pool_init_oom_safety() {
     return true;
 }
 
+bool test_thread_pool_init_worker_thread_failure_rolls_back() {
+    std::cout << "Testing ThreadPool initialize worker thread failure rollback..." << std::endl;
+
+    ThreadPool pool;
+
+    ThreadPoolConfig config;
+    config.min_threads = 4;
+    config.max_threads = 4;
+    config.queue_capacity = 100;
+
+    std::atomic<int> create_attempts{0};
+    pool.set_worker_thread_start_hook_for_test([&](size_t) {
+        int attempt = create_attempts.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (attempt == 3) {
+            throw std::system_error(
+                std::make_error_code(std::errc::resource_unavailable_try_again),
+                "injected worker thread creation failure");
+        }
+    });
+
+    bool initialized = true;
+    bool threw = false;
+    try {
+        initialized = pool.initialize(config);
+    } catch (...) {
+        threw = true;
+    }
+
+    TEST_ASSERT(!threw, "initialize should not throw when worker thread creation fails");
+    TEST_ASSERT(!initialized, "initialize should return false when worker thread creation fails");
+    TEST_ASSERT(!pool.is_stopped(), "rollback should leave the pool reusable, not permanently stopped");
+
+    ThreadPoolStatus status_after_failure = pool.get_status();
+    TEST_ASSERT(status_after_failure.total_threads == 0,
+                "rollback should join and clear already-created workers");
+    TEST_ASSERT(status_after_failure.queue_size == 0,
+                "rollback should clear local/global queues");
+
+    pool.set_worker_thread_start_hook_for_test(nullptr);
+    TEST_ASSERT(pool.initialize(config), "same ThreadPool object should initialize after rollback");
+
+    auto future = pool.submit([]() noexcept {
+        return 123;
+    });
+    TEST_ASSERT(future.get() == 123, "reinitialized pool should execute submitted tasks");
+
+    pool.shutdown();
+
+    std::cout << "  ThreadPool initialize worker thread failure rollback: PASSED" << std::endl;
+    return true;
+}
+
 bool test_thread_pool_submit_basic() {
     std::cout << "Testing ThreadPool submit basic..." << std::endl;
     
@@ -972,6 +1024,7 @@ int main() {
     std::cout << "--- ThreadPool Tests ---" << std::endl;
     all_passed &= test_thread_pool_initialize();
     all_passed &= test_thread_pool_init_oom_safety();
+    all_passed &= test_thread_pool_init_worker_thread_failure_rolls_back();
     all_passed &= test_thread_pool_submit_basic();
     all_passed &= test_thread_pool_submit_priority();
     all_passed &= test_thread_pool_concurrent_submit();

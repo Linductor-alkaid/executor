@@ -94,6 +94,10 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     if(EXECUTOR_ENABLE_GPU)
         target_compile_definitions(${TEST_NAME} PRIVATE EXECUTOR_ENABLE_GPU)
     endif()
+
+    if(TEST_NAME STREQUAL "test_thread_pool")
+        target_compile_definitions(${TEST_NAME} PRIVATE EXECUTOR_THREAD_POOL_TEST_HOOKS)
+    endif()
     
     # 如果是 CUDA/GPU 测试，添加 CUDA 头文件支持（不链接库，使用动态加载）
     if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*" OR TEST_NAME MATCHES ".*gpu_dep_async.*" OR TEST_NAME MATCHES ".*gpu_wait_for_completion.*" OR TEST_NAME MATCHES ".*unified_memory.*") AND EXECUTOR_CUDA_ENABLED)

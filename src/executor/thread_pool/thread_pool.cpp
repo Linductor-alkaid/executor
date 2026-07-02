@@ -18,7 +18,7 @@ ThreadPool::~ThreadPool() {
 }
 
 bool ThreadPool::initialize(const ThreadPoolConfig& config) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     
     if (initialized_.load()) {
         return false;  // 已经初始化过
@@ -30,18 +30,21 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
     }
     
     config_ = config;
-    
-    // 初始化负载均衡器
-    load_balancer_ = std::make_unique<LoadBalancer>(config_.min_threads);
-    
-    // 设置负载均衡策略
-    if (config_.enable_work_stealing) {
-        load_balancer_->set_strategy(LoadBalancer::Strategy::LEAST_TASKS);
-    } else {
-        load_balancer_->set_strategy(LoadBalancer::Strategy::ROUND_ROBIN);
-    }
-    
+
     try {
+        stop_.store(false);
+        resize_monitor_stop_.store(false);
+
+        // 初始化负载均衡器
+        load_balancer_ = std::make_unique<LoadBalancer>(config_.min_threads);
+
+        // 设置负载均衡策略
+        if (config_.enable_work_stealing) {
+            load_balancer_->set_strategy(LoadBalancer::Strategy::LEAST_TASKS);
+        } else {
+            load_balancer_->set_strategy(LoadBalancer::Strategy::ROUND_ROBIN);
+        }
+
         // 初始化工作线程本地队列
         auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
         new_queues->reserve(config_.min_threads);
@@ -59,31 +62,66 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
 
         // 初始化动态扩缩容控制器
         resizer_ = std::make_unique<ThreadPoolResizer>(*this, config_);
-    } catch (const std::bad_alloc&) {
-        load_balancer_.reset();
-        dispatcher_.reset();
-        resizer_.reset();
-        auto empty_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
-        std::atomic_store_explicit(&local_queues_, empty_queues, std::memory_order_release);
+
+        // 创建工作线程
+        workers_.reserve(config_.min_threads);
+        worker_ids_.reserve(config_.min_threads);
+        for (size_t i = 0; i < config_.min_threads; ++i) {
+            worker_ids_.push_back(i);
+            create_worker_thread(i);
+        }
+
+        // 启动监控线程（用于动态扩缩容）
+        if (config_.max_threads > config_.min_threads) {
+            resize_monitor_thread_ = std::thread(&ThreadPool::resize_monitor_thread, this);
+        }
+    } catch (...) {
+        lock.unlock();
+        rollback_initialization_failure();
         return false;
     }
-    
-    // 创建工作线程
-    workers_.reserve(config_.min_threads);
-    worker_ids_.reserve(config_.min_threads);
-    for (size_t i = 0; i < config_.min_threads; ++i) {
-        worker_ids_.push_back(i);
-        create_worker_thread(i);
-    }
-    
-    // 启动监控线程（用于动态扩缩容）
-    if (config_.max_threads > config_.min_threads) {
-        resize_monitor_stop_.store(false);
-        resize_monitor_thread_ = std::thread(&ThreadPool::resize_monitor_thread, this);
-    }
-    
+
     initialized_.store(true);
     return true;
+}
+
+void ThreadPool::rollback_initialization_failure() {
+    initialized_.store(false);
+    stop_.store(true);
+    resize_monitor_stop_.store(true);
+    condition_.notify_all();
+
+    if (resize_monitor_thread_.joinable()) {
+        resize_monitor_thread_.join();
+    }
+
+    for (auto& worker : workers_) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+
+    workers_.clear();
+    worker_ids_.clear();
+    dispatcher_.reset();
+    resizer_.reset();
+    load_balancer_.reset();
+    scheduler_.clear();
+
+    {
+        std::lock_guard<std::mutex> exit_lock(exit_threads_mutex_);
+        exit_threads_.clear();
+    }
+
+    {
+        std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+        auto empty_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+        std::atomic_store_explicit(&local_queues_, empty_queues, std::memory_order_release);
+    }
+
+    resize_monitor_stop_.store(false);
+    stop_.store(false);
+    notify_completion_waiters();
 }
 
 void ThreadPool::worker_thread(size_t worker_id) {
@@ -611,6 +649,10 @@ void ThreadPool::resize_monitor_thread() {
 }
 
 void ThreadPool::create_worker_thread(size_t worker_id) {
+    if (worker_thread_start_hook_for_test_) {
+        worker_thread_start_hook_for_test_(worker_id);
+    }
+
     workers_.emplace_back(&ThreadPool::worker_thread, this, worker_id);
 
     // 设置线程优先级
