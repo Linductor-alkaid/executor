@@ -106,7 +106,7 @@ bool OpenCLExecutor::initialize_opencl() {
 
     // 创建默认命令队列
     for (int i = 0; i < config_.default_stream_count; ++i) {
-        auto queue_wrapper = std::make_unique<CommandQueueWrapper>();
+        auto queue_wrapper = std::make_shared<CommandQueueWrapper>();
         queue_wrapper->queue = funcs.clCreateCommandQueue(context_, device_, 0, &err);
         if (err != CL_SUCCESS) {
             cleanup();
@@ -121,6 +121,7 @@ bool OpenCLExecutor::initialize_opencl() {
 
 void OpenCLExecutor::cleanup() {
     auto funcs = loader_->get_functions();
+    std::vector<std::shared_ptr<CommandQueueWrapper>> detached_queues;
 
     // 释放内存
     {
@@ -136,12 +137,18 @@ void OpenCLExecutor::cleanup() {
     // 释放命令队列
     {
         std::lock_guard<std::mutex> lock(queues_mutex_);
-        for (auto& queue_wrapper : queues_) {
-            if (queue_wrapper && queue_wrapper->queue) {
-                funcs.clReleaseCommandQueue(queue_wrapper->queue);
-            }
+        detached_queues.swap(queues_);
+    }
+
+    for (auto& queue_wrapper : detached_queues) {
+        if (!queue_wrapper) {
+            continue;
         }
-        queues_.clear();
+        std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+        if (queue_wrapper->queue) {
+            funcs.clReleaseCommandQueue(queue_wrapper->queue);
+            queue_wrapper->queue = nullptr;
+        }
     }
 
     // 释放上下文
@@ -195,7 +202,7 @@ bool OpenCLExecutor::copy_to_device(void* dst, const void* src, size_t size, boo
         return false;
     }
 
-    auto* queue_wrapper = get_queue(stream_id);
+    auto queue_wrapper = get_queue(stream_id);
     if (!queue_wrapper) {
         return false;
     }
@@ -208,6 +215,9 @@ bool OpenCLExecutor::copy_to_device(void* dst, const void* src, size_t size, boo
 
     auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+    if (!queue_wrapper->queue) {
+        return false;
+    }
     cl_int err = funcs.clEnqueueWriteBuffer(
         queue_wrapper->queue, it->second, async ? CL_FALSE : CL_TRUE,
         0, size, src, 0, nullptr, nullptr);
@@ -220,7 +230,7 @@ bool OpenCLExecutor::copy_to_host(void* dst, const void* src, size_t size, bool 
         return false;
     }
 
-    auto* queue_wrapper = get_queue(stream_id);
+    auto queue_wrapper = get_queue(stream_id);
     if (!queue_wrapper) {
         return false;
     }
@@ -233,6 +243,9 @@ bool OpenCLExecutor::copy_to_host(void* dst, const void* src, size_t size, bool 
 
     auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+    if (!queue_wrapper->queue) {
+        return false;
+    }
     cl_int err = funcs.clEnqueueReadBuffer(
         queue_wrapper->queue, it->second, async ? CL_FALSE : CL_TRUE,
         0, size, dst, 0, nullptr, nullptr);
@@ -245,7 +258,7 @@ bool OpenCLExecutor::copy_device_to_device(void* dst, const void* src, size_t si
         return false;
     }
 
-    auto* queue_wrapper = get_queue(stream_id);
+    auto queue_wrapper = get_queue(stream_id);
     if (!queue_wrapper) {
         return false;
     }
@@ -260,6 +273,9 @@ bool OpenCLExecutor::copy_device_to_device(void* dst, const void* src, size_t si
 
     auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+    if (!queue_wrapper->queue) {
+        return false;
+    }
     cl_int err = funcs.clEnqueueCopyBuffer(
         queue_wrapper->queue, src_it->second, dst_it->second,
         0, 0, size, 0, nullptr, nullptr);
@@ -279,24 +295,35 @@ void OpenCLExecutor::synchronize() {
     }
 
     auto funcs = loader_->get_functions();
-    std::lock_guard<std::mutex> lock(queues_mutex_);
+    std::vector<std::shared_ptr<CommandQueueWrapper>> queue_snapshot;
 
-    for (auto& queue_wrapper : queues_) {
-        if (queue_wrapper && queue_wrapper->queue) {
+    {
+        std::lock_guard<std::mutex> lock(queues_mutex_);
+        queue_snapshot = queues_;
+    }
+
+    for (auto& queue_wrapper : queue_snapshot) {
+        if (queue_wrapper) {
             std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+            if (!queue_wrapper->queue) {
+                continue;
+            }
             funcs.clFinish(queue_wrapper->queue);
         }
     }
 }
 
 void OpenCLExecutor::synchronize_stream(int stream_id) {
-    auto* queue_wrapper = get_queue(stream_id);
+    auto queue_wrapper = get_queue(stream_id);
     if (!queue_wrapper) {
         return;
     }
 
     auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> lock(queue_wrapper->mutex);
+    if (!queue_wrapper->queue) {
+        return;
+    }
     funcs.clFinish(queue_wrapper->queue);
 }
 
@@ -308,7 +335,7 @@ int OpenCLExecutor::create_stream() {
     auto funcs = loader_->get_functions();
     cl_int err;
 
-    auto queue_wrapper = std::make_unique<CommandQueueWrapper>();
+    auto queue_wrapper = std::make_shared<CommandQueueWrapper>();
     queue_wrapper->queue = funcs.clCreateCommandQueue(context_, device_, 0, &err);
 
     if (err != CL_SUCCESS) {
@@ -323,16 +350,26 @@ int OpenCLExecutor::create_stream() {
 }
 
 void OpenCLExecutor::destroy_stream(int stream_id) {
-    if (stream_id < 0 || stream_id >= static_cast<int>(config_.default_stream_count)) {
+    if (stream_id < static_cast<int>(config_.default_stream_count)) {
+        return;
+    }
+
+    std::shared_ptr<CommandQueueWrapper> queue_wrapper;
+
+    {
         std::lock_guard<std::mutex> lock(queues_mutex_);
         if (stream_id >= 0 && stream_id < static_cast<int>(queues_.size())) {
-            auto& queue_wrapper = queues_[stream_id];
-            if (queue_wrapper && queue_wrapper->queue) {
-                auto funcs = loader_->get_functions();
-                std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
-                funcs.clReleaseCommandQueue(queue_wrapper->queue);
-                queue_wrapper->queue = nullptr;
-            }
+            queue_wrapper = std::move(queues_[stream_id]);
+            queues_[stream_id].reset();
+        }
+    }
+
+    if (queue_wrapper) {
+        auto funcs = loader_->get_functions();
+        std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+        if (queue_wrapper->queue) {
+            funcs.clReleaseCommandQueue(queue_wrapper->queue);
+            queue_wrapper->queue = nullptr;
         }
     }
 }
@@ -392,9 +429,12 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
         active_kernels_++;
 
         try {
-            auto* queue_wrapper = get_queue(config.stream_id);
+            auto queue_wrapper = get_queue(config.stream_id);
             if (queue_wrapper) {
-                kernel_func(queue_wrapper->queue);
+                std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+                if (queue_wrapper->queue) {
+                    kernel_func(queue_wrapper->queue);
+                }
             }
 
             auto end = std::chrono::high_resolution_clock::now();
@@ -443,14 +483,14 @@ void OpenCLExecutor::worker_thread() {
     }
 }
 
-OpenCLExecutor::CommandQueueWrapper* OpenCLExecutor::get_queue(int stream_id) {
+std::shared_ptr<OpenCLExecutor::CommandQueueWrapper> OpenCLExecutor::get_queue(int stream_id) {
     std::lock_guard<std::mutex> lock(queues_mutex_);
 
     if (stream_id < 0 || stream_id >= static_cast<int>(queues_.size())) {
-        return queues_.empty() ? nullptr : queues_[0].get();
+        return queues_.empty() ? nullptr : queues_[0];
     }
 
-    return queues_[stream_id].get();
+    return queues_[stream_id];
 }
 
 bool OpenCLExecutor::check_opencl_error(cl_int error, const char* operation) {

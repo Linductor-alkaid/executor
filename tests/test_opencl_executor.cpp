@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 #include "executor/gpu/opencl_executor.hpp"
 #include "executor/gpu/opencl_loader.hpp"
+#include <atomic>
+#include <thread>
+#include <vector>
 
 using namespace executor::gpu;
 
@@ -112,6 +115,71 @@ TEST_F(OpenCLExecutorTest, StreamManagement) {
 
     executor_->synchronize_stream(stream_id);
     executor_->destroy_stream(stream_id);
+}
+
+TEST_F(OpenCLExecutorTest, DestroyStreamRaceWithSubmit) {
+    if (!opencl_available_) {
+        GTEST_SKIP() << "OpenCL not available";
+    }
+
+    if (!executor_->start()) {
+        GTEST_SKIP() << "OpenCL start failed";
+    }
+
+    constexpr int kIterations = 1000;
+    const size_t element_count = 64;
+    const size_t size = element_count * sizeof(float);
+    std::vector<float> host_data(element_count, 1.0f);
+
+    void* device_ptr = executor_->allocate_device_memory(size);
+    ASSERT_NE(device_ptr, nullptr);
+
+    int initial_stream = executor_->create_stream();
+    if (initial_stream < 0) {
+        executor_->free_device_memory(device_ptr);
+        FAIL() << "Failed to create OpenCL stream";
+    }
+    std::atomic<int> stream_id{initial_stream};
+
+    std::atomic<bool> start{false};
+    std::atomic<bool> create_failed{false};
+
+    std::thread submitter([&]() {
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        for (int i = 0; i < kIterations; ++i) {
+            GpuTaskConfig config;
+            config.stream_id = stream_id.load(std::memory_order_acquire);
+            auto future = executor_->submit_kernel([](void*) {}, config);
+            executor_->copy_to_device(device_ptr, host_data.data(), size, true, config.stream_id);
+            future.wait();
+        }
+    });
+
+    std::thread destroyer([&]() {
+        start.store(true, std::memory_order_release);
+        for (int i = 0; i < kIterations; ++i) {
+            int current_stream = stream_id.load(std::memory_order_acquire);
+            executor_->synchronize_stream(current_stream);
+            executor_->destroy_stream(current_stream);
+
+            int new_stream = executor_->create_stream();
+            if (new_stream < 0) {
+                create_failed.store(true, std::memory_order_release);
+                break;
+            }
+            stream_id.store(new_stream, std::memory_order_release);
+        }
+    });
+
+    submitter.join();
+    destroyer.join();
+
+    EXPECT_FALSE(create_failed.load(std::memory_order_acquire));
+    executor_->destroy_stream(stream_id.load(std::memory_order_acquire));
+    executor_->free_device_memory(device_ptr);
 }
 
 TEST_F(OpenCLExecutorTest, KernelSubmission) {
