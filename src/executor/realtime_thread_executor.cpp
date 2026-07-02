@@ -46,7 +46,7 @@ bool RealtimeThreadExecutor::start() {
     }
 
     // 创建实时线程
-    thread_ = std::thread([this]() {
+    auto thread_entry = [this]() {
 #ifdef _WIN32
         std::optional<util::TimerPeriodGuard> timer_period_guard;
         // 在Windows上提高定时器精度（对于短周期很重要）
@@ -130,7 +130,14 @@ bool RealtimeThreadExecutor::start() {
             // 使用内置的简单周期实现
             simple_cycle_loop();
         }
-    });
+    };
+
+    try {
+        thread_ = thread_factory_(std::move(thread_entry));
+    } catch (...) {
+        running_.store(false, std::memory_order_release);
+        return false;
+    }
 
     return true;
 }

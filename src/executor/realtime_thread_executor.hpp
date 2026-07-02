@@ -14,6 +14,7 @@
 #include <functional>
 #include <cstdint>
 #include <mutex>
+#include <utility>
 
 namespace executor {
 
@@ -156,9 +157,16 @@ private:
         std::function<void()> func;
     };
 
+    using ThreadFactory = std::function<std::thread(std::function<void()>)>;
+
     std::string name_;                              // 执行器名称
     RealtimeThreadConfig config_;                   // 实时线程配置
     std::thread thread_;                            // 实时线程
+    ThreadFactory thread_factory_{
+        [](std::function<void()> entry) {
+            return std::thread(std::move(entry));
+        }
+    };
     std::atomic<bool> running_{false};              // 运行状态标志
     std::mutex drain_mutex_;                        // 串行化 stop() join/drain
 

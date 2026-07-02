@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <string>
 #include <ctime>
+#include <system_error>
 
 // 包含 RealtimeThreadExecutor 的头文件
 #include <executor/config.hpp>
@@ -105,6 +106,40 @@ bool test_realtime_executor_double_start() {
     executor.stop();
     
     std::cout << "  Double start: PASSED" << std::endl;
+    return true;
+}
+
+bool test_realtime_start_thread_creation_failure_rolls_back() {
+    std::cout << "Testing RealtimeThreadExecutor start thread creation failure rollback..." << std::endl;
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_thread_create_fail";
+    config.cycle_period_ns = 10000000;  // 10ms
+    config.cycle_callback = []() {};
+
+    RealtimeThreadExecutor executor("test_executor", config);
+    executor.thread_factory_ = [](std::function<void()>) -> std::thread {
+        throw std::system_error(
+            std::make_error_code(std::errc::resource_unavailable_try_again),
+            "test thread creation failure");
+    };
+
+    TEST_ASSERT(!executor.start(), "start() should return false when thread creation fails");
+
+    auto status = executor.get_status();
+    TEST_ASSERT(!status.is_running, "Executor should roll running state back after failed start");
+
+    executor.thread_factory_ = [](std::function<void()> entry) {
+        return std::thread(std::move(entry));
+    };
+
+    TEST_ASSERT(executor.start(), "Subsequent start should be retryable and succeed");
+    status = executor.get_status();
+    TEST_ASSERT(status.is_running, "Executor should be running after retry succeeds");
+
+    executor.stop();
+
+    std::cout << "  Start thread creation failure rollback: PASSED" << std::endl;
     return true;
 }
 
@@ -787,6 +822,7 @@ int main() {
     // 基本功能测试
     all_passed &= test_realtime_executor_basic();
     all_passed &= test_realtime_executor_double_start();
+    all_passed &= test_realtime_start_thread_creation_failure_rolls_back();
     
     // 周期循环测试
     all_passed &= test_realtime_executor_cycle_loop();
