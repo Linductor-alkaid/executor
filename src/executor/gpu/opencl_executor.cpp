@@ -1,6 +1,7 @@
 #include "opencl_executor.hpp"
 #include <chrono>
 #include <sstream>
+#include <stdexcept>
 
 namespace executor {
 namespace gpu {
@@ -59,6 +60,13 @@ void OpenCLExecutor::stop() {
 }
 
 void OpenCLExecutor::wait_for_completion() {
+    {
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        queue_drained_cv_.wait(lock, [this] {
+            return task_queue_.empty() && active_kernels_.load() == 0;
+        });
+    }
+
     synchronize();
 }
 
@@ -389,7 +397,6 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
 
     std::packaged_task<void()> task([this, kernel_func, config]() {
         auto start = std::chrono::high_resolution_clock::now();
-        active_kernels_++;
 
         try {
             auto* queue_wrapper = get_queue(config.stream_id);
@@ -403,15 +410,21 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
             completed_kernels_++;
         } catch (...) {
             failed_kernels_++;
+            throw;
         }
-
-        active_kernels_--;
     });
 
     auto future = task.get_future();
 
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (!running_) {
+            std::promise<void> promise;
+            promise.set_exception(std::make_exception_ptr(
+                std::runtime_error("OpenCLExecutor is not running")));
+            return promise.get_future();
+        }
+
         task_queue_.push(std::move(task));
     }
     queue_cv_.notify_one();
@@ -420,7 +433,7 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
 }
 
 void OpenCLExecutor::worker_thread() {
-    while (running_) {
+    while (true) {
         std::packaged_task<void()> task;
 
         {
@@ -428,17 +441,25 @@ void OpenCLExecutor::worker_thread() {
             queue_cv_.wait(lock, [this] { return !task_queue_.empty() || !running_; });
 
             if (!running_ && task_queue_.empty()) {
+                queue_drained_cv_.notify_all();
                 break;
             }
 
-            if (!task_queue_.empty()) {
-                task = std::move(task_queue_.front());
-                task_queue_.pop();
-            }
+            task = std::move(task_queue_.front());
+            task_queue_.pop();
+            active_kernels_++;
         }
 
         if (task.valid()) {
             task();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            active_kernels_--;
+            if (task_queue_.empty() && active_kernels_.load() == 0) {
+                queue_drained_cv_.notify_all();
+            }
         }
     }
 }
