@@ -669,8 +669,12 @@ void ThreadPool::create_worker_thread(size_t worker_id) {
 }
 
 void ThreadPool::submit_batch(std::vector<std::function<void()>> tasks) {
+    (void)try_submit_batch(std::move(tasks));
+}
+
+bool ThreadPool::try_submit_batch(std::vector<std::function<void()>> tasks) {
     if (tasks.empty()) {
-        return;
+        return false;
     }
 
     std::vector<std::string> task_ids;
@@ -683,7 +687,7 @@ void ThreadPool::submit_batch(std::vector<std::function<void()>> tasks) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (stop_.load()) {
-        return;  // 线程池已停止，忽略任务
+        return false;  // 线程池已停止，拒绝任务
     }
 
     size_t batch_size = tasks.size();
@@ -711,6 +715,8 @@ void ThreadPool::submit_batch(std::vector<std::function<void()>> tasks) {
 
     // 唤醒所有等待的工作线程
     condition_.notify_all();
+
+    return true;
 }
 
 } // namespace executor

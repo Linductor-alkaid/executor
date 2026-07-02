@@ -68,4 +68,9 @@ void ThreadPoolExecutor::submit_batch_impl(std::vector<std::function<void()>> ta
     thread_pool_.submit_batch(std::move(tasks));
 }
 
+bool ThreadPoolExecutor::try_submit_batch_impl(std::vector<std::function<void()>> tasks) {
+    // 调用 ThreadPool 的可报告批量提交方法（一次获取锁）
+    return thread_pool_.try_submit_batch(std::move(tasks));
+}
+
 } // namespace executor
