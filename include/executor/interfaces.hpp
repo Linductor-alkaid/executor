@@ -90,6 +90,15 @@ public:
     virtual void stop() = 0;
 
     /**
+     * @brief 停止执行器
+     * @param wait_for_tasks 是否等待已提交任务完成
+     */
+    virtual void stop(bool wait_for_tasks) {
+        (void)wait_for_tasks;
+        stop();
+    }
+
+    /**
      * @brief 等待所有任务完成
      */
     virtual void wait_for_completion() = 0;

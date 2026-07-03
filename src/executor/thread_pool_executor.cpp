@@ -1,10 +1,11 @@
 #include "thread_pool_executor.hpp"
 #include <stdexcept>
+#include <thread>
 
 namespace executor {
 
 ThreadPoolExecutor::ThreadPoolExecutor(const std::string& name, const ThreadPoolConfig& config)
-    : name_(name), config_(config) {
+    : name_(name), config_(config), thread_pool_(std::make_shared<ThreadPool>()) {
 }
 
 ThreadPoolExecutor::~ThreadPoolExecutor() {
@@ -18,13 +19,23 @@ std::string ThreadPoolExecutor::get_name() const {
 AsyncExecutorStatus ThreadPoolExecutor::get_status() const {
     AsyncExecutorStatus status;
     status.name = name_;
+
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        status.is_running = false;
+        return status;
+    }
     
     // 获取线程池状态
-    ThreadPoolStatus pool_status = thread_pool_.get_status();
+    ThreadPoolStatus pool_status = thread_pool->get_status();
     
     // 映射线程池状态到异步执行器状态
     // 如果total_threads == 0,说明ThreadPool还没有初始化,不应该被认为是运行中
-    status.is_running = (pool_status.total_threads > 0) && !thread_pool_.is_stopped();
+    status.is_running = (pool_status.total_threads > 0) && !thread_pool->is_stopped();
     status.active_tasks = pool_status.active_threads;  // 活跃线程数作为活跃任务数
     status.completed_tasks = pool_status.completed_tasks;
     status.failed_tasks = pool_status.failed_tasks;
@@ -35,27 +46,81 @@ AsyncExecutorStatus ThreadPoolExecutor::get_status() const {
 }
 
 bool ThreadPoolExecutor::start() {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        if (!thread_pool_) {
+            thread_pool_ = std::make_shared<ThreadPool>();
+        }
+        thread_pool = thread_pool_;
+    }
+
     // 初始化线程池
-    return thread_pool_.initialize(config_);
+    return thread_pool->initialize(config_);
 }
 
 void ThreadPoolExecutor::stop() {
+    stop(true);
+}
+
+void ThreadPoolExecutor::stop(bool wait_for_tasks) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        if (!thread_pool_) {
+            return;
+        }
+        thread_pool = thread_pool_;
+        thread_pool_.reset();
+    }
+
     // 关闭线程池，等待所有任务完成
-    thread_pool_.shutdown(true);
+    if (wait_for_tasks) {
+        thread_pool->shutdown(true);
+    } else {
+        std::thread([thread_pool = std::move(thread_pool)]() {
+            thread_pool->shutdown(false);
+        }).detach();
+    }
 }
 
 void ThreadPoolExecutor::wait_for_completion() {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        return;
+    }
+
     // 等待所有任务完成
-    thread_pool_.wait_for_completion();
+    thread_pool->wait_for_completion();
 }
 
 void ThreadPoolExecutor::set_task_monitor(monitor::TaskMonitor* m) {
-    thread_pool_.set_task_monitor(m);
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (thread_pool) {
+        thread_pool->set_task_monitor(m);
+    }
 }
 
 void ThreadPoolExecutor::submit_impl(std::function<void()> task) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        throw std::runtime_error("ThreadPool is stopped");
+    }
+
     // 将任务提交到线程池（使用NORMAL优先级）
-    thread_pool_.submit(std::move(task));
+    thread_pool->submit(std::move(task));
 }
 
 bool ThreadPoolExecutor::try_submit_impl(std::function<void()> task) {
@@ -64,18 +129,45 @@ bool ThreadPoolExecutor::try_submit_impl(std::function<void()> task) {
 }
 
 void ThreadPoolExecutor::submit_priority_impl(int priority, std::function<void()> task) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        throw std::runtime_error("ThreadPool is stopped");
+    }
+
     // 将任务提交到线程池（使用指定优先级）
-    thread_pool_.submit_priority(priority, std::move(task));
+    thread_pool->submit_priority(priority, std::move(task));
 }
 
 void ThreadPoolExecutor::submit_batch_impl(std::vector<std::function<void()>> tasks) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        throw std::runtime_error("ThreadPool is stopped");
+    }
+
     // 调用 ThreadPool 的批量提交方法（一次获取锁）
-    thread_pool_.submit_batch(std::move(tasks));
+    thread_pool->submit_batch(std::move(tasks));
 }
 
 bool ThreadPoolExecutor::try_submit_batch_impl(std::vector<std::function<void()>> tasks) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        return false;
+    }
+
     // 调用 ThreadPool 的可报告批量提交方法（一次获取锁）
-    return thread_pool_.try_submit_batch(std::move(tasks));
+    return thread_pool->try_submit_batch(std::move(tasks));
 }
 
 } // namespace executor

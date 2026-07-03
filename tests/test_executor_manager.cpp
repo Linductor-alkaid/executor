@@ -9,6 +9,7 @@
 
 // 包含 ExecutorManager 的头文件
 #include <executor/executor_manager.hpp>
+#include <executor/executor.hpp>
 #include <executor/config.hpp>
 #include <executor/types.hpp>
 #include <executor/interfaces.hpp>
@@ -488,6 +489,36 @@ bool test_shutdown() {
     return true;
 }
 
+bool test_executor_shutdown_false_does_not_block_long_task() {
+    std::cout << "Testing Executor shutdown(false) does not block long task..." << std::endl;
+
+    Executor executor;
+
+    ExecutorConfig config;
+    config.min_threads = 1;
+    config.max_threads = 1;
+    config.queue_capacity = 100;
+
+    TEST_ASSERT(executor.initialize(config), "Executor should initialize successfully");
+
+    auto future = executor.submit([]() {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    });
+    (void)future;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    auto start = std::chrono::steady_clock::now();
+    executor.shutdown(false);
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
+
+    TEST_ASSERT(elapsed_ms < 500, "shutdown(false) should return quickly");
+
+    std::cout << "  Executor shutdown(false) does not block long task: PASSED" << std::endl;
+    return true;
+}
+
 // ========== 线程安全测试 ==========
 
 bool test_concurrent_realtime_registration() {
@@ -613,6 +644,7 @@ int main() {
     // 生命周期管理测试
     all_passed &= test_lifecycle_raii();
     all_passed &= test_shutdown();
+    all_passed &= test_executor_shutdown_false_does_not_block_long_task();
     
     // 线程安全测试
     all_passed &= test_concurrent_realtime_registration();
