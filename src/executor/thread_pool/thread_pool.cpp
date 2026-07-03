@@ -668,6 +668,32 @@ void ThreadPool::create_worker_thread(size_t worker_id) {
     }
 }
 
+bool ThreadPool::try_submit(std::function<void()> task) {
+    Task executor_task;
+    executor_task.task_id = generate_task_id();
+    executor_task.priority = TaskPriority::NORMAL;
+    executor_task.function = std::move(task);
+    executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+    executor_task.timeout_ms = config_.task_timeout_ms;
+
+    // 提交到调度器；持锁期间分发并 notify，避免错过唤醒
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stop_.load()) {
+        return false;
+    }
+
+    scheduler_.enqueue(executor_task);
+    total_tasks_.fetch_add(1, std::memory_order_relaxed);
+    if (dispatcher_) {
+        dispatcher_->dispatch_batch(1);
+    }
+    condition_.notify_all();
+
+    return true;
+}
+
 void ThreadPool::submit_batch(std::vector<std::function<void()>> tasks) {
     (void)try_submit_batch(std::move(tasks));
 }

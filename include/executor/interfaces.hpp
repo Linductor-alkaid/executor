@@ -11,6 +11,7 @@
 #include <mutex>
 #include <atomic>
 #include <stdexcept>
+#include <utility>
 
 namespace executor {
 
@@ -36,13 +37,32 @@ public:
     auto submit(F&& f, Args&&... args)
         -> std::future<typename std::invoke_result<F, Args...>::type> {
         using return_type = typename std::invoke_result<F, Args...>::type;
-        
-        auto task = std::make_shared<std::packaged_task<return_type()>>(
+
+        auto promise = std::make_shared<std::promise<return_type>>();
+        auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
         );
-        
-        std::future<return_type> result = task->get_future();
-        submit_impl([task]() { (*task)(); });
+
+        std::future<return_type> result = promise->get_future();
+        auto task = [promise, bound_task]() mutable {
+            try {
+                if constexpr (std::is_void_v<return_type>) {
+                    std::invoke(*bound_task);
+                    promise->set_value();
+                } else {
+                    promise->set_value(std::invoke(*bound_task));
+                }
+            } catch (...) {
+                promise->set_exception(std::current_exception());
+            }
+        };
+
+        if (!try_submit_impl(std::move(task))) {
+            promise->set_exception(std::make_exception_ptr(
+                std::runtime_error("Executor is stopped")
+            ));
+        }
+
         return result;
     }
 
@@ -170,6 +190,20 @@ protected:
      * @param task 任务函数
      */
     virtual void submit_impl(std::function<void()> task) = 0;
+
+    /**
+     * @brief 提交任务实现（可报告拒绝）
+     * @param task 任务函数
+     * @return true 表示任务已被接受；false 表示执行器已拒绝任务
+     */
+    virtual bool try_submit_impl(std::function<void()> task) {
+        try {
+            submit_impl(std::move(task));
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
 
     /**
      * @brief 提交优先级任务实现（内部方法）
