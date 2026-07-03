@@ -197,8 +197,12 @@ protected:
      * @return true 表示任务已被接受；false 表示执行器已拒绝任务
      */
     virtual bool try_submit_impl(std::function<void()> task) {
-        submit_impl(std::move(task));
-        return true;
+        try {
+            submit_impl(std::move(task));
+            return true;
+        } catch (...) {
+            return false;
+        }
     }
 
     /**

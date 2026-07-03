@@ -134,6 +134,7 @@ public:
      * @param f 可调用对象
      * @param args 参数
      * @return std::future 任务执行结果的future
+     * @note 实现内部调用 try_submit，若线程池已停止则返回带 std::runtime_error("ThreadPool is stopped") 异常的 future。
      */
     template<typename F, typename... Args>
     auto submit(F&& f, Args&&... args)
