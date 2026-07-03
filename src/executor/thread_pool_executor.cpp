@@ -58,6 +58,11 @@ void ThreadPoolExecutor::submit_impl(std::function<void()> task) {
     thread_pool_.submit(std::move(task));
 }
 
+bool ThreadPoolExecutor::try_submit_impl(std::function<void()> task) {
+    // 将任务提交到线程池（使用NORMAL优先级），并报告停止后的拒绝
+    return thread_pool_.try_submit(std::move(task));
+}
+
 void ThreadPoolExecutor::submit_priority_impl(int priority, std::function<void()> task) {
     // 将任务提交到线程池（使用指定优先级）
     thread_pool_.submit_priority(priority, std::move(task));

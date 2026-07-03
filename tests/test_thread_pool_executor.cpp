@@ -6,6 +6,7 @@
 #include <chrono>
 #include <future>
 #include <algorithm>
+#include <string>
 
 // 包含 ThreadPoolExecutor 的头文件
 #include <executor/config.hpp>
@@ -32,6 +33,7 @@ bool test_thread_pool_executor_exception_handling();
 bool test_thread_pool_executor_status();
 bool test_thread_pool_executor_wait_for_completion();
 bool test_thread_pool_executor_stop_behavior();
+bool test_thread_pool_executor_submit_after_stop_future_ready_with_exception();
 
 // ========== ThreadPoolExecutor 基本功能测试 ==========
 
@@ -332,6 +334,45 @@ bool test_thread_pool_executor_stop_behavior() {
     return true;
 }
 
+bool test_thread_pool_executor_submit_after_stop_future_ready_with_exception() {
+    std::cout << "Testing ThreadPoolExecutor submit after stop future ready with exception..." << std::endl;
+
+    ThreadPoolConfig config;
+    config.min_threads = 2;
+    config.max_threads = 4;
+    config.queue_capacity = 100;
+
+    ThreadPoolExecutor executor("test_executor", config);
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+    executor.stop();
+
+    IAsyncExecutor* async_executor = &executor;
+    std::atomic<bool> task_executed{false};
+    auto future = async_executor->submit([&task_executed]() {
+        task_executed.store(true, std::memory_order_relaxed);
+        return 42;
+    });
+
+    TEST_ASSERT(future.wait_for(std::chrono::milliseconds(100)) == std::future_status::ready,
+                "Rejected submit future should become ready promptly");
+    TEST_ASSERT(!task_executed.load(std::memory_order_relaxed),
+                "Rejected submit task should not execute after stop");
+
+    bool exception_caught = false;
+    try {
+        (void)future.get();
+    } catch (const std::exception& e) {
+        exception_caught = true;
+        TEST_ASSERT(std::string(e.what()).find("Executor is stopped") != std::string::npos,
+                    "Rejected submit future exception should mention stopped executor");
+    }
+
+    TEST_ASSERT(exception_caught, "Rejected submit future should throw");
+
+    std::cout << "  ThreadPoolExecutor submit after stop future ready with exception: PASSED" << std::endl;
+    return true;
+}
+
 // ========== 主函数 ==========
 
 int main() {
@@ -348,6 +389,7 @@ int main() {
     all_passed &= test_thread_pool_executor_status();
     all_passed &= test_thread_pool_executor_wait_for_completion();
     all_passed &= test_thread_pool_executor_stop_behavior();
+    all_passed &= test_thread_pool_executor_submit_after_stop_future_ready_with_exception();
     
     std::cout << std::endl;
     if (all_passed) {

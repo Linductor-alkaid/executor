@@ -90,6 +90,14 @@ protected:
     void submit_impl(std::function<void()> task) override;
 
     /**
+     * @brief 提交任务实现（可报告拒绝）
+     *
+     * @param task 任务函数
+     * @return true 表示任务已被线程池接受；false 表示线程池已停止
+     */
+    bool try_submit_impl(std::function<void()> task) override;
+
+    /**
      * @brief 提交优先级任务实现（内部方法）
      *
      * 将任务提交到线程池执行，使用指定优先级。
