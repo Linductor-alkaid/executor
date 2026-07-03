@@ -46,6 +46,11 @@ void Executor::shutdown(bool wait_for_tasks) {
     manager_->shutdown(wait_for_tasks);
 }
 
+void Executor::set_timer_thread_factory_for_test(
+    std::function<std::thread(std::function<void()>)> factory) {
+    timer_thread_factory_for_test_ = std::move(factory);
+}
+
 // 提交周期性任务
 std::string Executor::submit_periodic(int64_t period_ms, std::function<void()> task) {
     if (period_ms <= 0) {
@@ -258,9 +263,19 @@ void Executor::start_timer_thread() {
         return;  // 已经在运行
     }
     
-    timer_thread_ = std::thread([this]() {
-        timer_thread_func();
-    });
+    try {
+        auto timer_entry = [this]() {
+            timer_thread_func();
+        };
+        if (timer_thread_factory_for_test_) {
+            timer_thread_ = timer_thread_factory_for_test_(std::move(timer_entry));
+        } else {
+            timer_thread_ = std::thread(std::move(timer_entry));
+        }
+    } catch (...) {
+        timer_running_.store(false);
+        throw;
+    }
 }
 
 // 停止定时器线程

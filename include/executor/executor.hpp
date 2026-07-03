@@ -81,6 +81,14 @@ public:
     void shutdown(bool wait_for_tasks = true);
 
     /**
+     * @brief 设置定时器线程工厂（仅用于测试）
+     *
+     * 允许测试注入线程创建失败，验证 start_timer_thread() 的异常回滚行为。
+     */
+    void set_timer_thread_factory_for_test(
+        std::function<std::thread(std::function<void()>)> factory);
+
+    /**
      * @brief 提交任务（使用默认线程池）
      * 
      * @tparam F 可调用对象类型
@@ -446,6 +454,7 @@ private:
     // 定时器线程
     std::thread timer_thread_;
     std::atomic<bool> timer_running_{false};
+    std::function<std::thread(std::function<void()>)> timer_thread_factory_for_test_;
 
     // GPU 调度器
     gpu::GpuScheduler scheduler_;
