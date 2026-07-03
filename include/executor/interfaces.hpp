@@ -241,19 +241,16 @@ public:
     /**
      * @brief 推送任务并回传是否成功 (P-001 260615, 非破坏扩展)
      *
-     * 默认实现回退到 push_task() + 读取丢弃计数器差值; 派生类应 override 以
-     * 直接返回 push 路径的实际结果, 避免竞态读取计数器.
+     * 默认实现回退到 push_task(), 返回 true 仅表示任务已交给旧接口处理。
+     * 派生类应 override 以直接返回 push 路径的实际成功/失败结果。
      *
      * @param task 任务函数
-     * @return true 表示已成功入队 (最终会被执行); false 表示被丢弃
-     *         (队列满 或 对象池耗尽, dropped_task_count 同步 +1).
+     * @return true 表示任务已被接受或已交给旧接口; false 表示派生类确认拒绝。
      */
     virtual bool push_task_ex(std::function<void()> task) {
-        // 默认实现: 调用 void push_task, 然后假定失败已被计数器累计.
-        // 派生类 override 可避免 toctou. 此处不读取 dropped_task_count 以避免
-        // 与其他 push 调用混淆, 严格走"成功与否不可知"语义, 返回 true 仅作
-        // 乐观占位. 派生类 (RealtimeThreadExecutor) 应正确 override.
-        (void)task;
+        // 默认实现保持 ABI/源码兼容: 交给 void push_task(), 无法精确报告失败。
+        // 派生类 override 可返回队列 push 的实际结果。
+        push_task(std::move(task));
         return true;
     }
 

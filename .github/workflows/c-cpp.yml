@@ -73,6 +73,73 @@ jobs:
           build/tests/executor_*_test
         retention-days: 7
 
+  gpu-headers-build:
+    name: GPU headers compile paths
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 安装 GPU 头文件构建依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build g++-11 libgtest-dev opencl-headers ocl-icd-opencl-dev
+        mkdir -p "$RUNNER_TEMP/cuda-stub/include"
+        cat > "$RUNNER_TEMP/cuda-stub/include/cuda_runtime.h" <<'EOF'
+        #pragma once
+        #include <stddef.h>
+
+        typedef enum cudaError {
+            cudaSuccess = 0,
+            cudaErrorInvalidValue = 1,
+            cudaErrorMemoryAllocation = 2,
+            cudaErrorInitializationError = 3,
+            cudaErrorPeerAccessAlreadyEnabled = 217
+        } cudaError_t;
+
+        typedef void* cudaStream_t;
+
+        typedef struct cudaDeviceProp {
+            char name[256];
+            int major;
+            int minor;
+            int maxThreadsPerBlock;
+            int maxGridSize[3];
+        } cudaDeviceProp;
+
+        typedef enum cudaMemcpyKind {
+            cudaMemcpyHostToDevice = 1,
+            cudaMemcpyDeviceToHost = 2,
+            cudaMemcpyDeviceToDevice = 3
+        } cudaMemcpyKind;
+
+        enum { cudaMemAttachGlobal = 1 };
+        enum { cudaCpuDeviceId = -1 };
+        EOF
+        echo "CUDA_STUB_INCLUDE=$RUNNER_TEMP/cuda-stub/include" >> "$GITHUB_ENV"
+
+    - name: 配置 CMake (GPU headers)
+      run: |
+        cmake -B build-gpu-headers -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_COMPILER=g++-11 \
+          -DEXECUTOR_ENABLE_GPU=ON \
+          -DEXECUTOR_ENABLE_CUDA=ON \
+          -DEXECUTOR_ENABLE_OPENCL=ON \
+          -DEXECUTOR_BUILD_TESTS=ON \
+          -DEXECUTOR_BUILD_EXAMPLES=OFF \
+          -DCUDA_FOUND=TRUE \
+          -DCUDA_VERSION=0.0 \
+          -DCUDA_INCLUDE_DIRS="$CUDA_STUB_INCLUDE"
+
+    - name: 编译 GPU 头文件路径
+      run: cmake --build build-gpu-headers --config Release -j
+
+    - name: 运行无硬件 GPU 测试
+      working-directory: build-gpu-headers
+      run: ctest -C Release --output-on-failure --verbose -R '^(test_cuda_executor|test_opencl_executor|test_executor_manager_gpu)$'
+
   # 可选：代码覆盖率任务
   coverage:
     name: Code Coverage
