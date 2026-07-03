@@ -145,7 +145,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     
     # 根据测试类型设置 LABELS 和 TIMEOUT
     # 单元测试
-    if(TEST_NAME MATCHES "^test_(util|task|thread_pool|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager)$")
+    if(TEST_NAME MATCHES "^test_(util|task|thread_pool|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager|push_task_ex_default)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "unit"
             TIMEOUT 30
