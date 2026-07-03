@@ -44,15 +44,16 @@ void OpenCLExecutor::stop() {
         return;
     }
 
+    running_ = false;
+    queue_cv_.notify_all();
+    queue_not_full_cv_.notify_all();
+
     // P-260625-002 fix: signal + join all submit_kernel_after waiter threads
     // before tearing down internal state. Mirrors the same P-002 fix on
     // CudaExecutor (commit 159ab55) to eliminate the UAF where a detached
     // waiter accesses this->submit_kernel_impl() after ~OpenCLExecutor()
     // releases context_/queues_/streams_ via cleanup().
     join_pending_waiters();
-
-    running_ = false;
-    queue_cv_.notify_all();
 
     if (worker_.joinable()) {
         worker_.join();
@@ -134,9 +135,9 @@ void OpenCLExecutor::cleanup() {
     // 释放内存
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        for (auto& [ptr, mem] : memory_map_) {
-            if (mem) {
-                funcs.clReleaseMemObject(mem);
+        for (auto& [ptr, allocation] : memory_map_) {
+            if (allocation.buffer) {
+                funcs.clReleaseMemObject(allocation.buffer);
             }
         }
         memory_map_.clear();
@@ -186,7 +187,7 @@ void* OpenCLExecutor::allocate_device_memory(size_t size) {
     void* ptr = reinterpret_cast<void*>(buffer);
 
     std::lock_guard<std::mutex> lock(memory_mutex_);
-    memory_map_[ptr] = buffer;
+    memory_map_[ptr] = MemoryAllocation{buffer, size};
 
     return ptr;
 }
@@ -200,7 +201,7 @@ void OpenCLExecutor::free_device_memory(void* ptr) {
     auto it = memory_map_.find(ptr);
     if (it != memory_map_.end()) {
         auto funcs = loader_->get_functions();
-        funcs.clReleaseMemObject(it->second);
+        funcs.clReleaseMemObject(it->second.buffer);
         memory_map_.erase(it);
     }
 }
@@ -227,7 +228,7 @@ bool OpenCLExecutor::copy_to_device(void* dst, const void* src, size_t size, boo
         return false;
     }
     cl_int err = funcs.clEnqueueWriteBuffer(
-        queue_wrapper->queue, it->second, async ? CL_FALSE : CL_TRUE,
+        queue_wrapper->queue, it->second.buffer, async ? CL_FALSE : CL_TRUE,
         0, size, src, 0, nullptr, nullptr);
 
     return check_opencl_error(err, "clEnqueueWriteBuffer");
@@ -255,7 +256,7 @@ bool OpenCLExecutor::copy_to_host(void* dst, const void* src, size_t size, bool 
         return false;
     }
     cl_int err = funcs.clEnqueueReadBuffer(
-        queue_wrapper->queue, it->second, async ? CL_FALSE : CL_TRUE,
+        queue_wrapper->queue, it->second.buffer, async ? CL_FALSE : CL_TRUE,
         0, size, dst, 0, nullptr, nullptr);
 
     return check_opencl_error(err, "clEnqueueReadBuffer");
@@ -285,7 +286,7 @@ bool OpenCLExecutor::copy_device_to_device(void* dst, const void* src, size_t si
         return false;
     }
     cl_int err = funcs.clEnqueueCopyBuffer(
-        queue_wrapper->queue, src_it->second, dst_it->second,
+        queue_wrapper->queue, src_it->second.buffer, dst_it->second.buffer,
         0, 0, size, 0, nullptr, nullptr);
 
     return check_opencl_error(err, "clEnqueueCopyBuffer");
@@ -420,9 +421,38 @@ GpuExecutorStatus OpenCLExecutor::get_status() const {
     status.active_kernels = active_kernels_.load();
     status.completed_kernels = completed_kernels_.load();
     status.failed_kernels = failed_kernels_.load();
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        status.queue_size = task_queue_.size();
+    }
+    {
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        for (const auto& [ptr, allocation] : memory_map_) {
+            (void)ptr;
+            status.memory_used_bytes += allocation.size;
+        }
+    }
 
-    if (completed_kernels_ > 0) {
-        status.avg_kernel_time_ms = total_kernel_time_ns_.load() / 1000000.0 / completed_kernels_.load();
+    if (is_available_ && device_) {
+        auto funcs = loader_->get_functions();
+        cl_ulong mem_size = 0;
+        cl_int err = funcs.clGetDeviceInfo(
+            device_, 0x101F, sizeof(mem_size), &mem_size, nullptr); // CL_DEVICE_GLOBAL_MEM_SIZE
+        if (err == CL_SUCCESS) {
+            status.memory_total_bytes = static_cast<size_t>(mem_size);
+            if (status.memory_total_bytes > 0) {
+                status.memory_usage_percent =
+                    (static_cast<double>(status.memory_used_bytes) /
+                     static_cast<double>(status.memory_total_bytes)) * 100.0;
+            }
+        }
+    }
+
+    size_t completed = completed_kernels_.load();
+    if (completed > 0) {
+        status.avg_kernel_time_ms =
+            static_cast<double>(total_kernel_time_ns_.load()) / 1000000.0 /
+            static_cast<double>(completed);
     }
 
     return status;
@@ -457,7 +487,11 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
     auto future = task.get_future();
 
     {
-        std::lock_guard<std::mutex> lock(queue_mutex_);
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        queue_not_full_cv_.wait(lock, [this] {
+            return !running_.load(std::memory_order_acquire) ||
+                   task_queue_.size() < config_.max_queue_size;
+        });
         if (!running_) {
             std::promise<void> promise;
             promise.set_exception(std::make_exception_ptr(
@@ -488,6 +522,7 @@ void OpenCLExecutor::worker_thread() {
             task = std::move(task_queue_.front());
             task_queue_.pop();
             active_kernels_++;
+            queue_not_full_cv_.notify_one();
         }
 
         if (task.valid()) {

@@ -258,6 +258,143 @@ TEST_F(OpenCLExecutorTest, StopDrainsOrFailsPendingFutures) {
     EXPECT_EQ(completed + failed, kSubmitted);
 }
 
+TEST_F(OpenCLExecutorTest, OpenCLExecutorRespectsMaxQueueSize) {
+    if (!opencl_available_) {
+        GTEST_SKIP() << "OpenCL not available";
+    }
+
+    GpuExecutorConfig config;
+    config.name = "bounded_opencl";
+    config.backend = GpuBackend::OPENCL;
+    config.device_id = 0;
+    config.default_stream_count = 1;
+    config.max_queue_size = 1;
+
+    OpenCLExecutor executor("bounded_opencl", config);
+    if (!executor.start()) {
+        GTEST_SKIP() << "OpenCL start failed";
+    }
+
+    std::atomic<bool> first_started{false};
+    std::atomic<bool> release_first{false};
+    std::atomic<bool> second_started{false};
+    std::atomic<bool> release_second{false};
+
+    auto wait_until = [](const std::function<bool()>& predicate,
+                         std::chrono::milliseconds timeout) {
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (predicate()) {
+                return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return predicate();
+    };
+
+    auto release_all = [&]() {
+        release_first.store(true, std::memory_order_release);
+        release_second.store(true, std::memory_order_release);
+    };
+
+    GpuTaskConfig task_config;
+    task_config.stream_id = 0;
+
+    auto first = executor.submit_kernel([&](void*) {
+        first_started.store(true, std::memory_order_release);
+        while (!release_first.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }, task_config);
+
+    if (!wait_until([&]() {
+            return first_started.load(std::memory_order_acquire);
+        }, std::chrono::seconds(2))) {
+        release_all();
+        first.wait();
+        FAIL() << "First OpenCL kernel did not start";
+    }
+
+    auto second = executor.submit_kernel([&](void*) {
+        second_started.store(true, std::memory_order_release);
+        while (!release_second.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }, task_config);
+
+    if (!wait_until([&]() {
+            return executor.get_status().queue_size == 1;
+        }, std::chrono::seconds(2))) {
+        release_all();
+        first.wait();
+        second.wait();
+        FAIL() << "Second OpenCL kernel was not queued";
+    }
+
+    auto third_submit = std::async(std::launch::async, [&executor, task_config]() {
+        return executor.submit_kernel([](void*) {}, task_config);
+    });
+
+    EXPECT_EQ(third_submit.wait_for(std::chrono::milliseconds(100)),
+              std::future_status::timeout);
+    EXPECT_LE(executor.get_status().queue_size, 1u);
+
+    release_first.store(true, std::memory_order_release);
+
+    if (third_submit.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+        release_all();
+        executor.stop();
+        third_submit.wait();
+        FAIL() << "Third OpenCL submit did not resume after queue space became available";
+    }
+    auto third = third_submit.get();
+
+    if (!wait_until([&]() {
+            return second_started.load(std::memory_order_acquire);
+        }, std::chrono::seconds(2))) {
+        release_all();
+        first.wait();
+        second.wait();
+        third.wait();
+        FAIL() << "Second OpenCL kernel did not start";
+    }
+
+    release_second.store(true, std::memory_order_release);
+    first.get();
+    second.get();
+    third.get();
+}
+
+TEST_F(OpenCLExecutorTest, OpenCLExecutorStatusReportsQueueAndMemory) {
+    if (!opencl_available_) {
+        GTEST_SKIP() << "OpenCL not available";
+    }
+
+    if (!executor_->start()) {
+        GTEST_SKIP() << "OpenCL start failed";
+    }
+
+    auto before = executor_->get_status();
+    EXPECT_EQ(before.queue_size, 0u);
+
+    const size_t size = 4096;
+    void* ptr = executor_->allocate_device_memory(size);
+    if (ptr == nullptr) {
+        GTEST_SKIP() << "OpenCL device memory allocation failed";
+    }
+
+    auto after_alloc = executor_->get_status();
+    EXPECT_EQ(after_alloc.queue_size, 0u);
+    EXPECT_GE(after_alloc.memory_used_bytes, before.memory_used_bytes + size);
+    EXPECT_GT(after_alloc.memory_total_bytes, 0u);
+    EXPECT_GT(after_alloc.memory_usage_percent, 0.0);
+
+    executor_->free_device_memory(ptr);
+
+    auto after_free = executor_->get_status();
+    EXPECT_LE(after_free.memory_used_bytes, after_alloc.memory_used_bytes - size);
+}
+
 TEST_F(OpenCLExecutorTest, Status) {
     if (!opencl_available_) {
         GTEST_SKIP() << "OpenCL not available";
