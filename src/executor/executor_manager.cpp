@@ -362,7 +362,7 @@ void ExecutorManager::shutdown(bool wait_for_tasks) {
     {
         std::lock_guard<std::mutex> lock(default_async_mutex_);
         if (default_async_executor_) {
-            default_async_executor_->stop();
+            default_async_executor_->stop(wait_for_tasks);
             if (wait_for_tasks) {
                 default_async_executor_->wait_for_completion();
             }

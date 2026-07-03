@@ -7,6 +7,7 @@
 #include "executor/monitor/task_monitor.hpp"
 #include <string>
 #include <memory>
+#include <mutex>
 
 namespace executor {
 
@@ -68,6 +69,13 @@ public:
     void stop() override;
 
     /**
+     * @brief 停止执行器
+     *
+     * @param wait_for_tasks 是否等待所有任务完成
+     */
+    void stop(bool wait_for_tasks) override;
+
+    /**
      * @brief 等待所有任务完成
      * 
      * 阻塞直到所有已提交的任务执行完成。
@@ -119,7 +127,8 @@ protected:
 private:
     std::string name_;              // 执行器名称
     ThreadPoolConfig config_;       // 线程池配置
-    ThreadPool thread_pool_;       // 线程池实例
+    mutable std::mutex thread_pool_mutex_;
+    std::shared_ptr<ThreadPool> thread_pool_;  // 线程池实例
 };
 
 } // namespace executor
