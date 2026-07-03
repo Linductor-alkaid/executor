@@ -2,6 +2,7 @@
 #include "../task/task.hpp"
 #include <stdexcept>
 #include <algorithm>
+#include <cstdio>
 #include <random>
 #include <new>
 #include <vector>
@@ -95,7 +96,8 @@ void ThreadPool::rollback_initialization_failure() {
         resize_monitor_thread_.join();
     }
 
-    for (auto& worker : workers_) {
+    for (size_t i = 0; i < workers_.size(); ++i) {
+        auto& worker = workers_[i];
         if (worker.joinable()) {
             worker.join();
         }
@@ -129,6 +131,12 @@ void ThreadPool::worker_thread(size_t worker_id) {
         Task task;
         bool has_task = false;
 
+        if ((stop_.load(std::memory_order_acquire) &&
+             !initialized_.load(std::memory_order_acquire)) ||
+            should_exit(worker_id)) {
+            break;
+        }
+
         // 1. 优先从本地队列获取任务
         // P-260617-002: 持 shared_lock(local_queues_mutex_)，与 resize/shutdown
         // 路径的 unique_lock 配对，防止 vector reallocation 期间悬空访问。
@@ -154,6 +162,12 @@ void ThreadPool::worker_thread(size_t worker_id) {
         if (!has_task) {
             std::unique_lock<std::mutex> lock(mutex_);
             condition_.wait(lock, [this, &has_task, &task, worker_id]() {
+                if ((stop_.load(std::memory_order_acquire) &&
+                     !initialized_.load(std::memory_order_acquire)) ||
+                    should_exit(worker_id)) {
+                    return true;
+                }
+
                 std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
                 auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
                 if (queues && worker_id < queues->size() && (*queues)[worker_id].pop(task)) {
@@ -167,7 +181,7 @@ void ThreadPool::worker_thread(size_t worker_id) {
                 }
                 has_task = scheduler_.dequeue(task);
                 if (has_task) return true;
-                if (should_exit(worker_id) || stop_.load()) return true;
+                if (stop_.load() || should_exit(worker_id)) return true;
                 return false;
             });
             // 被 notify 唤醒但谓词未取到任务时，再试一次本地队列（可能刚被分发）
