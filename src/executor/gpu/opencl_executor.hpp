@@ -58,6 +58,11 @@ private:
         std::mutex mutex;
     };
 
+    struct MemoryAllocation {
+        cl_mem buffer = nullptr;
+        size_t size = 0;
+    };
+
     bool initialize_opencl();
     void cleanup();
     bool check_opencl_error(cl_int error, const char* operation);
@@ -75,7 +80,7 @@ private:
     std::vector<std::shared_ptr<CommandQueueWrapper>> queues_;
     mutable std::mutex queues_mutex_;
 
-    std::unordered_map<void*, cl_mem> memory_map_;
+    std::unordered_map<void*, MemoryAllocation> memory_map_;
     mutable std::mutex memory_mutex_;
 
     std::atomic<size_t> active_kernels_{0};
@@ -86,8 +91,9 @@ private:
     std::atomic<bool> running_{false};
     std::thread worker_;
     std::queue<std::packaged_task<void()>> task_queue_;
-    std::mutex queue_mutex_;
+    mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
+    std::condition_variable queue_not_full_cv_;
     std::condition_variable queue_drained_cv_;
 };
 
