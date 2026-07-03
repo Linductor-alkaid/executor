@@ -6,6 +6,7 @@
 #include <chrono>
 #include <future>
 #include <algorithm>
+#include <stdexcept>
 
 // 包含 Executor 的头文件
 #include <executor/executor.hpp>
@@ -179,6 +180,7 @@ bool test_initialize();
 bool test_submit();
 bool test_submit_priority();
 bool test_submit_delayed();
+bool test_delayed_timer_thread_creation_failure_rolls_back();
 bool test_submit_periodic();
 bool test_realtime_task_management();
 bool test_monitor_queries();
@@ -380,6 +382,52 @@ bool test_submit_delayed() {
     executor.shutdown();
     
     std::cout << "  Submit delayed: PASSED" << std::endl;
+    return true;
+}
+
+bool test_delayed_timer_thread_creation_failure_rolls_back() {
+    std::cout << "Testing Executor delayed timer thread creation failure rollback..." << std::endl;
+
+    Executor executor;
+    ExecutorConfig config;
+    config.min_threads = 2;
+    config.max_threads = 4;
+    TEST_ASSERT(executor.initialize(config), "Executor initialization should succeed");
+
+    std::atomic<int> execution_count(0);
+    executor.set_timer_thread_factory_for_test(
+        [](std::function<void()>) -> std::thread {
+            throw std::runtime_error("injected timer thread creation failure");
+        });
+
+    bool threw = false;
+    try {
+        auto failed_future = executor.submit_delayed(1, [&execution_count]() noexcept {
+            execution_count.fetch_add(1);
+            return 1;
+        });
+        (void)failed_future;
+    } catch (const std::runtime_error&) {
+        threw = true;
+    }
+
+    TEST_ASSERT(threw, "submit_delayed should propagate timer thread creation failure");
+
+    executor.set_timer_thread_factory_for_test(nullptr);
+    auto future = executor.submit_delayed(1, [&execution_count]() noexcept {
+        execution_count.fetch_add(1);
+        return 2;
+    });
+
+    auto status = future.wait_for(std::chrono::seconds(2));
+    TEST_ASSERT(status == std::future_status::ready,
+                "Timer thread should be startable after failed creation rolls back");
+    TEST_ASSERT(future.get() == 2, "Second delayed task result should be 2");
+    TEST_ASSERT(execution_count.load() >= 1, "Delayed task should execute after retry");
+
+    executor.shutdown();
+
+    std::cout << "  Delayed timer thread creation failure rollback: PASSED" << std::endl;
     return true;
 }
 
@@ -980,6 +1028,7 @@ int main() {
     all_passed &= test_submit();
     all_passed &= test_submit_priority();
     all_passed &= test_submit_delayed();
+    all_passed &= test_delayed_timer_thread_creation_failure_rolls_back();
     all_passed &= test_submit_periodic();
     all_passed &= test_realtime_task_management();
     all_passed &= test_monitor_queries();
