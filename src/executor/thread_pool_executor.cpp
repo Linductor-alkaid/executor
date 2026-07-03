@@ -124,8 +124,17 @@ void ThreadPoolExecutor::submit_impl(std::function<void()> task) {
 }
 
 bool ThreadPoolExecutor::try_submit_impl(std::function<void()> task) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        return false;
+    }
+
     // 将任务提交到线程池（使用NORMAL优先级），并报告停止后的拒绝
-    return thread_pool_.try_submit(std::move(task));
+    return thread_pool->try_submit(std::move(task));
 }
 
 void ThreadPoolExecutor::submit_priority_impl(int priority, std::function<void()> task) {

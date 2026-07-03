@@ -22,6 +22,12 @@ if(EXECUTOR_LOCKFREE_QUEUE)
     add_definitions(-DUSE_LOCKFREE_WORKER_QUEUE)
 endif()
 
+# MSVC: define NOMINMAX to prevent macro conflicts with std::min/std::max
+if(MSVC)
+    add_compile_definitions(NOMINMAX)
+    add_compile_options(/W3 /wd4324 /wd4267 /wd4244)
+endif()
+
 # 包含 CMake 模块
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)

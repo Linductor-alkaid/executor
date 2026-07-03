@@ -28,6 +28,13 @@ jobs:
             compiler: { name: gcc }
           - os: windows-latest
             compiler: { name: clang }
+        include:
+          - os: windows-latest
+            build_type: Release
+            compiler: { name: msvc, version: '' }
+          - os: windows-latest
+            build_type: Debug
+            compiler: { name: msvc, version: '' }
 
     steps:
     - name: 检出代码
@@ -48,12 +55,21 @@ jobs:
           echo "CXX=clang++-${{ matrix.compiler.version }}" >> $GITHUB_ENV
         fi
 
-    - name: 配置 CMake
+    - name: 配置 CMake (Linux)
+      if: runner.os == 'Linux'
       run: |
         cmake -B build -G Ninja \
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
           -DEXECUTOR_BUILD_TESTS=ON \
           -DEXECUTOR_BUILD_EXAMPLES=ON \
+          -DEXECUTOR_ENABLE_COVERAGE=OFF
+
+    - name: 配置 CMake (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        cmake -B build `
+          -DEXECUTOR_BUILD_TESTS=ON `
+          -DEXECUTOR_BUILD_EXAMPLES=OFF `
           -DEXECUTOR_ENABLE_COVERAGE=OFF
 
     - name: 编译
