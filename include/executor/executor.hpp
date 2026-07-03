@@ -537,15 +537,8 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
         throw std::runtime_error("Async executor not initialized. Call initialize() first.");
     }
 
-    std::vector<std::future<void>> futures;
-    futures.reserve(tasks.size());
-
-    // 批量提交，减少锁竞争
-    for (const auto& task : tasks) {
-        futures.push_back(executor->submit(task));
-    }
-
-    return futures;
+    // 直接调用 IAsyncExecutor::submit_batch，使用底层批量优化路径。
+    return executor->submit_batch(tasks);
 }
 
 template<typename F>
@@ -560,7 +553,7 @@ std::vector<std::future<void>> Executor::submit_batch_priority(
     std::vector<std::future<void>> futures;
     futures.reserve(tasks.size());
 
-    // 批量提交优先级任务
+    // TODO: IAsyncExecutor 暂无 submit_batch_priority 批量接口；当前保留逐个提交。
     for (const auto& task : tasks) {
         futures.push_back(executor->submit_priority(priority, task));
     }
