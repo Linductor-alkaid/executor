@@ -18,6 +18,7 @@
 #include <map>
 #include <queue>
 #include <deque>
+#include <optional>
 
 namespace executor {
 
@@ -152,6 +153,19 @@ public:
      * @return 是否取消成功
      */
     bool cancel_task(const std::string& task_id);
+
+    /**
+     * @brief 查询单个周期任务状态
+     *
+     * 返回 std::nullopt 表示任务不存在或已取消。
+     */
+    std::optional<PeriodicTaskStatus> get_periodic_task_status(
+        const std::string& task_id) const;
+
+    /**
+     * @brief 查询所有当前注册的周期任务状态
+     */
+    std::vector<PeriodicTaskStatus> get_all_periodic_task_status() const;
 
     /**
      * @brief 批量提交任务
@@ -465,6 +479,18 @@ private:
                                const std::string& message,
                                std::exception_ptr exception);
 
+    void record_periodic_task_success(const std::string& task_id);
+
+    void record_periodic_task_exception(const std::string& executor_name,
+                                        const std::string& task_id,
+                                        const std::string& message,
+                                        std::exception_ptr exception);
+
+    void record_periodic_submit_rejected(const std::string& executor_name,
+                                         const std::string& task_id,
+                                         const std::string& message,
+                                         std::exception_ptr exception = nullptr);
+
     /**
      * @brief 当前 facade 最近失败事件缓冲容量
      */
@@ -478,9 +504,10 @@ private:
 
     // 延迟任务结构（使用类型擦除）
     struct DelayedTask {
+        std::string task_id;
         std::chrono::steady_clock::time_point execute_time;
         std::function<void()> task;
-        std::function<void()> on_complete;  // 完成回调（用于设置 promise）
+        std::function<void(std::exception_ptr)> on_rejected;
     };
 
     // 延迟任务比较器（用于 priority_queue，最早执行的在顶部）
@@ -492,9 +519,7 @@ private:
 
     // 周期性任务结构
     struct PeriodicTask {
-        std::string task_id;
-        int64_t period_ms;
-        std::chrono::steady_clock::time_point next_execute_time;
+        PeriodicTaskStatus status;
         std::function<void()> task;
         bool cancelled = false;  // 使用普通 bool，由 periodic_tasks_mutex_ 保护
     };
@@ -505,7 +530,7 @@ private:
 
     // 周期性任务列表
     std::unordered_map<std::string, PeriodicTask> periodic_tasks_;
-    std::mutex periodic_tasks_mutex_;
+    mutable std::mutex periodic_tasks_mutex_;
 
     // 定时器线程
     std::thread timer_thread_;
@@ -653,24 +678,32 @@ template<typename F, typename... Args>
 auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
     using return_type = typename std::invoke_result<F, Args...>::type;
-    
+
     auto* executor = manager_->get_default_async_executor();
+    const std::string executor_name = executor ? executor->get_name() : "default";
+    const std::string task_id = "facade_submit_delayed";
     if (!executor) {
+        record_submit_rejected(
+            executor_name,
+            task_id,
+            "Async executor not initialized. Call initialize() first.");
         throw std::runtime_error("Async executor not initialized. Call initialize() first.");
     }
-    
-    // 创建 promise 和 future
+
     auto promise = std::make_shared<std::promise<return_type>>();
+    auto promise_ready = std::make_shared<std::atomic_bool>(false);
     auto future = promise->get_future();
-    
-    // 计算执行时间
-    auto execute_time = std::chrono::steady_clock::now() + 
+
+    auto execute_time = std::chrono::steady_clock::now() +
                        std::chrono::milliseconds(delay_ms);
-    
-    // 创建延迟任务包装器
-    std::function<void()> task_wrapper = [f = std::forward<F>(f), 
+
+    std::function<void()> task_wrapper = [this,
+                                         executor_name,
+                                         task_id,
+                                         f = std::forward<F>(f),
                                          args_tuple = std::make_tuple(std::forward<Args>(args)...),
-                                         promise]() mutable {
+                                         promise,
+                                         promise_ready]() mutable {
         try {
             if constexpr (std::is_void_v<return_type>) {
                 std::apply(f, std::move(args_tuple));
@@ -679,28 +712,62 @@ auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
                 auto result = std::apply(f, std::move(args_tuple));
                 promise->set_value(std::move(result));
             }
+            promise_ready->store(true, std::memory_order_release);
         } catch (...) {
-            promise->set_exception(std::current_exception());
+            auto exception = std::current_exception();
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(expected, true)) {
+                promise->set_exception(exception);
+            }
+            record_task_exception(
+                executor_name,
+                task_id,
+                "Delayed async task threw an exception",
+                exception);
+            throw;
         }
     };
-    
-    // 创建延迟任务
+
     DelayedTask delayed_task;
+    delayed_task.task_id = task_id;
     delayed_task.execute_time = execute_time;
     delayed_task.task = std::move(task_wrapper);
-    delayed_task.on_complete = []() {};  // 延迟任务不需要额外的完成回调
-    
-    // 添加到延迟任务列表
+    delayed_task.on_rejected = [this, executor_name, task_id, promise, promise_ready](
+                                   std::exception_ptr exception) {
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+            record_submit_rejected(
+                executor_name,
+                task_id,
+                "Async executor rejected delayed task submission",
+                exception);
+        }
+    };
+
+    try {
+        if (!timer_running_.load()) {
+            start_timer_thread();
+        }
+    } catch (...) {
+        auto exception = std::current_exception();
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+        }
+        record_submit_rejected(
+            executor_name,
+            task_id,
+            "Timer thread creation failed for delayed task",
+            exception);
+        throw;
+    }
+
     {
         std::lock_guard<std::mutex> lock(delayed_tasks_mutex_);
         delayed_tasks_.push(std::move(delayed_task));
     }
-    
-    // 确保定时器线程运行
-    if (!timer_running_.load()) {
-        start_timer_thread();
-    }
-    
+
     return future;
 }
 

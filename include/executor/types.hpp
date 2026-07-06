@@ -65,6 +65,21 @@ struct ExecutorFailureStatus {
     uint64_t total_count = 0;
 };
 
+/**
+ * @brief Executor facade 周期任务状态
+ */
+struct PeriodicTaskStatus {
+    std::string task_id;
+    int64_t period_ms = 0;
+    bool is_running = false;
+    uint64_t execution_count = 0;
+    uint64_t failed_count = 0;
+    uint64_t consecutive_failure_count = 0;
+    std::string last_error_message;
+    std::chrono::steady_clock::time_point next_execute_time{};
+    std::chrono::steady_clock::time_point last_failure_time{};
+};
+
 using ExecutorFailureCallback = std::function<void(const ExecutorFailureEvent&)>;
 
 /**

@@ -68,56 +68,92 @@ std::string Executor::submit_periodic(int64_t period_ms, std::function<void()> t
     if (!task) {
         throw std::invalid_argument("task must not be null");
     }
-    
+
     auto* executor = manager_->get_default_async_executor();
+    const std::string executor_name = executor ? executor->get_name() : "default";
     if (!executor) {
+        record_submit_rejected(
+            executor_name,
+            "facade_submit_periodic",
+            "Async executor not initialized. Call initialize() first.");
         throw std::runtime_error("Async executor not initialized. Call initialize() first.");
     }
-    
-    // 生成任务 ID
+
     std::string task_id = generate_task_id();
-    
-    // 创建周期性任务
+
     PeriodicTask periodic_task;
-    periodic_task.task_id = task_id;
-    periodic_task.period_ms = period_ms;
-    periodic_task.next_execute_time = std::chrono::steady_clock::now() + 
-                                     std::chrono::milliseconds(period_ms);
-    periodic_task.task = [executor, task]() {
-        executor->submit(task);
-    };
+    periodic_task.status.task_id = task_id;
+    periodic_task.status.period_ms = period_ms;
+    periodic_task.status.is_running = true;
+    periodic_task.status.next_execute_time = std::chrono::steady_clock::now() +
+                                            std::chrono::milliseconds(period_ms);
+    periodic_task.task = std::move(task);
     periodic_task.cancelled = false;
-    
-    // 添加到周期性任务列表
+
     {
         std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
         periodic_tasks_[task_id] = std::move(periodic_task);
     }
-    
-    // 确保定时器线程运行
-    if (!timer_running_.load()) {
-        start_timer_thread();
+
+    try {
+        if (!timer_running_.load()) {
+            start_timer_thread();
+        }
+    } catch (...) {
+        auto exception = std::current_exception();
+        {
+            std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
+            periodic_tasks_.erase(task_id);
+        }
+        record_submit_rejected(
+            executor_name,
+            task_id,
+            "Timer thread creation failed for periodic task",
+            exception);
+        throw;
     }
-    
+
     return task_id;
 }
 
 // 取消任务
 bool Executor::cancel_task(const std::string& task_id) {
+    {
+        std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
+
+        auto it = periodic_tasks_.find(task_id);
+        if (it != periodic_tasks_.end()) {
+            it->second.cancelled = true;
+            periodic_tasks_.erase(it);
+            return true;
+        }
+    }
+
+    record_submit_rejected(
+        "default",
+        task_id,
+        "Periodic task cancellation failed: task not found");
+    return false;
+}
+
+std::optional<PeriodicTaskStatus> Executor::get_periodic_task_status(
+    const std::string& task_id) const {
     std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
-    
     auto it = periodic_tasks_.find(task_id);
     if (it == periodic_tasks_.end()) {
-        return false;  // 任务不存在
+        return std::nullopt;
     }
-    
-    // 标记为已取消
-    it->second.cancelled = true;
-    
-    // 从列表中移除
-    periodic_tasks_.erase(it);
-    
-    return true;
+    return it->second.status;
+}
+
+std::vector<PeriodicTaskStatus> Executor::get_all_periodic_task_status() const {
+    std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
+    std::vector<PeriodicTaskStatus> statuses;
+    statuses.reserve(periodic_tasks_.size());
+    for (const auto& entry : periodic_tasks_) {
+        statuses.push_back(entry.second.status);
+    }
+    return statuses;
 }
 
 // 注册实时任务
@@ -340,6 +376,58 @@ void Executor::record_task_exception(const std::string& executor_name,
     record_failure(std::move(event));
 }
 
+void Executor::record_periodic_task_success(const std::string& task_id) {
+    std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
+    auto it = periodic_tasks_.find(task_id);
+    if (it == periodic_tasks_.end()) {
+        return;
+    }
+
+    auto& status = it->second.status;
+    ++status.execution_count;
+    status.consecutive_failure_count = 0;
+    status.last_error_message.clear();
+}
+
+void Executor::record_periodic_task_exception(const std::string& executor_name,
+                                              const std::string& task_id,
+                                              const std::string& message,
+                                              std::exception_ptr exception) {
+    {
+        std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
+        auto it = periodic_tasks_.find(task_id);
+        if (it != periodic_tasks_.end()) {
+            auto& status = it->second.status;
+            ++status.execution_count;
+            ++status.failed_count;
+            ++status.consecutive_failure_count;
+            status.last_error_message = message;
+            status.last_failure_time = std::chrono::steady_clock::now();
+        }
+    }
+
+    record_task_exception(executor_name, task_id, message, exception);
+}
+
+void Executor::record_periodic_submit_rejected(const std::string& executor_name,
+                                               const std::string& task_id,
+                                               const std::string& message,
+                                               std::exception_ptr exception) {
+    {
+        std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
+        auto it = periodic_tasks_.find(task_id);
+        if (it != periodic_tasks_.end()) {
+            auto& status = it->second.status;
+            ++status.failed_count;
+            ++status.consecutive_failure_count;
+            status.last_error_message = message;
+            status.last_failure_time = std::chrono::steady_clock::now();
+        }
+    }
+
+    record_submit_rejected(executor_name, task_id, message, exception);
+}
+
 void Executor::enable_monitoring(bool enable) {
     manager_->enable_monitoring(enable);
 }
@@ -463,15 +551,56 @@ void Executor::stop_timer_thread() {
     if (!timer_running_.exchange(false)) {
         return;  // 已经停止
     }
-    
+
     if (timer_thread_.joinable()) {
         timer_thread_.join();
+    }
+
+    std::vector<DelayedTask> pending_delayed_tasks;
+    {
+        std::lock_guard<std::mutex> lock(delayed_tasks_mutex_);
+        while (!delayed_tasks_.empty()) {
+            DelayedTask task = std::move(const_cast<DelayedTask&>(delayed_tasks_.top()));
+            delayed_tasks_.pop();
+            pending_delayed_tasks.push_back(std::move(task));
+        }
+    }
+
+    for (auto& task : pending_delayed_tasks) {
+        auto exception = std::make_exception_ptr(std::runtime_error(
+            "Timer stopped before delayed task execution"));
+        if (task.on_rejected) {
+            task.on_rejected(exception);
+        }
+    }
+
+    std::vector<std::string> pending_periodic_task_ids;
+    {
+        std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
+        pending_periodic_task_ids.reserve(periodic_tasks_.size());
+        for (auto& entry : periodic_tasks_) {
+            entry.second.status.is_running = false;
+            pending_periodic_task_ids.push_back(entry.first);
+        }
+    }
+
+    for (const auto& task_id : pending_periodic_task_ids) {
+        record_periodic_submit_rejected(
+            "default",
+            task_id,
+            "Timer stopped before periodic task execution");
     }
 }
 
 namespace {
 
 constexpr int64_t kTimerMaxSleepMs = 10;  // 无待处理任务时的最大休眠间隔（ms）
+
+struct DuePeriodicTask {
+    std::string task_id;
+    int64_t period_ms = 0;
+    std::function<void()> task;
+};
 
 }  // namespace
 
@@ -483,25 +612,35 @@ void Executor::timer_thread_func() {
     while (timer_running_.load(std::memory_order_acquire)) {
         auto now = clock::now();
         auto next_wake = now + max_interval;
+        auto* executor = manager_->get_default_async_executor();
+        const std::string executor_name = executor ? executor->get_name() : "default";
 
-        // 处理延迟任务
         {
             std::lock_guard<std::mutex> lock(delayed_tasks_mutex_);
 
-            auto* executor = manager_->get_default_async_executor();
-            if (executor) {
-                while (!delayed_tasks_.empty()) {
-                    const auto& top = delayed_tasks_.top();
-                    if (now >= top.execute_time) {
-                        DelayedTask task = std::move(const_cast<DelayedTask&>(top));
-                        delayed_tasks_.pop();
+            while (!delayed_tasks_.empty()) {
+                const auto& top = delayed_tasks_.top();
+                if (now < top.execute_time) {
+                    break;
+                }
 
-                        executor->submit(std::move(task.task));
-                        if (task.on_complete) {
-                            task.on_complete();
-                        }
-                    } else {
-                        break;
+                DelayedTask task = std::move(const_cast<DelayedTask&>(top));
+                delayed_tasks_.pop();
+
+                if (!executor) {
+                    auto exception = std::make_exception_ptr(std::runtime_error(
+                        "Async executor unavailable for delayed task"));
+                    if (task.on_rejected) {
+                        task.on_rejected(exception);
+                    }
+                    continue;
+                }
+
+                if (!executor->try_submit_task(std::move(task.task))) {
+                    auto exception = std::make_exception_ptr(std::runtime_error(
+                        "Async executor rejected delayed task submission"));
+                    if (task.on_rejected) {
+                        task.on_rejected(exception);
                     }
                 }
             }
@@ -512,7 +651,7 @@ void Executor::timer_thread_func() {
             }
         }
 
-        // 处理周期性任务
+        std::vector<DuePeriodicTask> due_periodic_tasks;
         {
             std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
 
@@ -524,17 +663,55 @@ void Executor::timer_thread_func() {
                     continue;
                 }
 
-                if (now >= periodic_task.next_execute_time) {
-                    if (!periodic_task.cancelled) {
-                        periodic_task.task();
-                        periodic_task.next_execute_time =
-                            now + std::chrono::milliseconds(periodic_task.period_ms);
-                    }
+                auto& status = periodic_task.status;
+                if (now >= status.next_execute_time) {
+                    due_periodic_tasks.push_back(
+                        DuePeriodicTask{status.task_id, status.period_ms, periodic_task.task});
+                    status.next_execute_time =
+                        now + std::chrono::milliseconds(status.period_ms);
                 }
 
-                if (periodic_task.next_execute_time < next_wake)
-                    next_wake = periodic_task.next_execute_time;
+                if (status.next_execute_time < next_wake)
+                    next_wake = status.next_execute_time;
                 ++it;
+            }
+        }
+
+        for (auto& due : due_periodic_tasks) {
+            if (!executor) {
+                record_periodic_submit_rejected(
+                    executor_name,
+                    due.task_id,
+                    "Async executor unavailable for periodic task");
+                continue;
+            }
+
+            auto wrapped_task = [this,
+                                 executor_name,
+                                 task_id = due.task_id,
+                                 task = std::move(due.task)]() mutable {
+                try {
+                    task();
+                    record_periodic_task_success(task_id);
+                } catch (...) {
+                    auto exception = std::current_exception();
+                    record_periodic_task_exception(
+                        executor_name,
+                        task_id,
+                        "Periodic task threw an exception",
+                        exception);
+                    throw;
+                }
+            };
+
+            if (!executor->try_submit_task(std::move(wrapped_task))) {
+                auto exception = std::make_exception_ptr(std::runtime_error(
+                    "Async executor rejected periodic task submission"));
+                record_periodic_submit_rejected(
+                    executor_name,
+                    due.task_id,
+                    "Async executor rejected periodic task submission",
+                    exception);
             }
         }
 

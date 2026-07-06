@@ -106,24 +106,24 @@
 
 ### 任务
 
-- [ ] 为 `submit_periodic()` 增加内部任务包装：
+- [x] 为 `submit_periodic()` 增加内部任务包装：
   - 用户任务异常触发 failure event。
   - 每次周期执行失败累计到周期任务状态。
-  - 可选：连续失败阈值、最后一次失败时间、最后错误消息。
-- [ ] 新增周期任务状态查询：
+  - 已记录连续失败计数、最后一次失败时间、最后错误消息。
+- [x] 新增周期任务状态查询：
   - `get_periodic_task_status(task_id)`
   - `get_all_periodic_task_status()`
-- [ ] 定义周期任务失败后的默认行为：
+- [x] 定义周期任务失败后的默认行为：
   - 默认继续调度，但记录失败。
-  - 可选配置：失败后停止、失败后退避、连续 N 次失败后停止。
-- [ ] `submit_delayed()` 到期提交失败时，应设置 promise 异常并触发 failure event。
-- [ ] 定时器线程中 facade/manager 已 shutdown 时，延迟/周期任务不可悄悄丢失，应写入 failure event 或设置 future 异常。
+  - 失败后停止/退避/连续 N 次失败后停止保留为后续可选配置。
+- [x] `submit_delayed()` 到期提交失败时，应设置 promise 异常并触发 failure event。
+- [x] 定时器线程中 facade/manager 已 shutdown 时，延迟/周期任务不可悄悄丢失，应写入 failure event 或设置 future 异常。
 
 ### 验收
 
-- [ ] 周期任务抛异常但用户没有 future 时，仍能从 failure status 或 periodic status 观察到。
-- [ ] `cancel_task()` 对不存在 ID 的失败保持返回值可见，并可选记录诊断事件。
-- [ ] shutdown 期间未执行的 delayed/periodic 任务处理策略有文档说明和测试覆盖。
+- [x] 周期任务抛异常但用户没有 future 时，仍能从 failure status 或 periodic status 观察到。
+- [x] `cancel_task()` 对不存在 ID 的失败保持返回值可见，并可选记录诊断事件。
+- [x] shutdown 期间未执行的 delayed/periodic 任务处理策略有文档说明和测试覆盖。
 
 ---
 
@@ -252,16 +252,16 @@
 
 ## 阶段 8：测试矩阵
 
-- [ ] `test_executor_failure_observability.cpp`
-  - [ ] `submit` 用户异常可观察。
-  - [ ] `submit_priority` 用户异常可观察。
-  - [ ] `submit_batch` 部分任务异常可观察。
-  - [ ] `submit_batch_no_future` 用户异常可观察。
-  - [ ] shutdown 后提交拒绝可观察。
-- [ ] `test_periodic_failure_observability.cpp`
-  - [ ] 周期任务抛异常后无 future 也可观察。
-  - [ ] 连续失败计数和最后错误可查询。
-  - [ ] cancel 不存在任务返回 false 且可诊断。
+- [x] `test_executor_failure_observability.cpp`
+  - [x] `submit` 用户异常可观察。
+  - [x] `submit_priority` 用户异常可观察。
+  - [x] `submit_batch` 部分任务异常可观察。
+  - [x] `submit_batch_no_future` 用户异常可观察。
+  - [x] shutdown 后提交拒绝可观察。
+- [x] `test_periodic_failure_observability.cpp`
+  - [x] 周期任务抛异常后无 future 也可观察。
+  - [x] 连续失败计数和最后错误可查询。
+  - [x] cancel 不存在任务返回 false 且可诊断。
 - [ ] `test_realtime_facade_push.cpp`
   - [ ] facade 推送成功。
   - [ ] 不存在 RT executor 推送失败可见。
