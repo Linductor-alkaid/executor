@@ -1,6 +1,7 @@
 #include "gpu_memory_manager.hpp"
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 namespace executor {
 namespace gpu {
@@ -32,6 +33,10 @@ size_t GpuMemoryManager::align_up(size_t size, size_t alignment) const {
 
 void* GpuMemoryManager::allocate(size_t size) {
     if (size == 0 || !raw_alloc_) {
+        return nullptr;
+    }
+    const size_t max_size = std::numeric_limits<size_t>::max();
+    if (size > max_size - kAlignment - kHeaderSize) {
         return nullptr;
     }
     const size_t need = align_up(size, kAlignment) + kHeaderSize;

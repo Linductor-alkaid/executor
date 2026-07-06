@@ -1,6 +1,7 @@
 #include <cassert>
 #include <chrono>
 #include <iostream>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -151,6 +152,84 @@ static bool test_pool_overflow_raw() {
     return true;
 }
 
+static bool test_huge_allocation_overflow_returns_null() {
+    std::cout << "Testing GpuMemoryManager huge allocation overflow returns null..." << std::endl;
+
+    const size_t max_size = std::numeric_limits<size_t>::max();
+    const size_t overflow_values[] = {max_size, max_size - 128};
+    const size_t pool_sizes[] = {0, 4096};
+
+    for (size_t pool_size : pool_sizes) {
+        for (size_t huge_size : overflow_values) {
+            size_t raw_alloc_count = 0;
+            size_t raw_free_count = 0;
+
+            GpuMemoryManager::RawAlloc raw_alloc = [&](size_t) {
+                raw_alloc_count++;
+                return reinterpret_cast<void*>(0x1000);
+            };
+            GpuMemoryManager::RawFree raw_free = [&](void*) {
+                raw_free_count++;
+            };
+
+            GpuMemoryManager mgr(raw_alloc, raw_free, pool_size);
+
+            void* p = mgr.allocate(huge_size);
+            TEST_ASSERT(p == nullptr, "huge allocation returns nullptr");
+            TEST_ASSERT(raw_alloc_count == 0, "huge allocation does not call raw_alloc");
+            TEST_ASSERT(raw_free_count == 0, "huge allocation does not call raw_free");
+
+            auto stats = mgr.get_stats();
+            TEST_ASSERT(stats.allocation_count == 0, "huge allocation does not update count");
+            TEST_ASSERT(stats.total_allocated == 0, "huge allocation does not update total");
+        }
+    }
+
+    const size_t boundary_size = max_size - 1024;
+    const size_t boundary_need = ((boundary_size + 255) & ~static_cast<size_t>(255)) + sizeof(size_t);
+    for (size_t pool_size : pool_sizes) {
+        alignas(256) unsigned char pool_storage[4096];
+        std::vector<size_t> raw_alloc_sizes;
+        size_t raw_free_count = 0;
+
+        GpuMemoryManager::RawAlloc raw_alloc = [&](size_t size) {
+            raw_alloc_sizes.push_back(size);
+            if (pool_size != 0 && size == pool_size) {
+                return static_cast<void*>(pool_storage);
+            }
+            return static_cast<void*>(nullptr);
+        };
+        GpuMemoryManager::RawFree raw_free = [&](void*) {
+            raw_free_count++;
+        };
+
+        {
+            GpuMemoryManager mgr(raw_alloc, raw_free, pool_size);
+
+            void* p = mgr.allocate(boundary_size);
+            TEST_ASSERT(p == nullptr, "SIZE_MAX - 1024 allocation returns nullptr when raw_alloc fails");
+
+            auto stats = mgr.get_stats();
+            TEST_ASSERT(stats.allocation_count == 0, "boundary allocation does not update count");
+            TEST_ASSERT(stats.total_allocated == 0, "boundary allocation does not update total");
+        }
+
+        if (pool_size == 0) {
+            TEST_ASSERT(raw_alloc_sizes.size() == 1, "passthrough boundary calls raw_alloc once");
+            TEST_ASSERT(raw_alloc_sizes[0] == boundary_need, "passthrough boundary raw size does not wrap");
+            TEST_ASSERT(raw_free_count == 0, "passthrough failed boundary allocation does not raw_free");
+        } else {
+            TEST_ASSERT(raw_alloc_sizes.size() == 2, "pool boundary calls raw_alloc for pool and overflow");
+            TEST_ASSERT(raw_alloc_sizes[0] == pool_size, "pool boundary initializes pool");
+            TEST_ASSERT(raw_alloc_sizes[1] == boundary_need, "pool boundary raw size does not wrap");
+            TEST_ASSERT(raw_free_count == 1, "pool boundary frees pool backing in destructor");
+        }
+    }
+
+    std::cout << "  huge allocation overflow: PASSED" << std::endl;
+    return true;
+}
+
 static bool test_defragment() {
     std::cout << "Testing GpuMemoryManager defragment..." << std::endl;
     GpuMemoryManager::RawAlloc raw_alloc = [](size_t size) { return ::malloc(size); };
@@ -286,6 +365,7 @@ int main() {
     ok = test_pool_disabled_passthrough() && ok;
     ok = test_pool_enabled_from_pool() && ok;
     ok = test_pool_overflow_raw() && ok;
+    ok = test_huge_allocation_overflow_returns_null() && ok;
     ok = test_defragment() && ok;
     ok = test_get_stats() && ok;
     ok = test_performance_comparison() && ok;
