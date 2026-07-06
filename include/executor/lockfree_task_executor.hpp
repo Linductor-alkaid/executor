@@ -66,7 +66,7 @@ public:
     /**
      * @brief 提交任务到无锁队列（线程安全，支持多线程并发调用）
      * @param task 任务函数
-     * @return 成功返回true，队列满返回false
+     * @return 成功返回true，队列满或 stop() 后返回false
      */
     bool push_task(std::function<void()> task);
 
@@ -76,7 +76,7 @@ public:
      * @param count 任务数量
      * @param pushed 实际提交的任务数量（输出参数）。返回 true 时仍可能小于 count，
      *               调用方应检查该值并重试或丢弃剩余任务。
-     * @return 至少部分入队返回 true；队列无可用槽位或对象池耗尽返回 false
+     * @return 至少部分入队返回 true；stop() 后、队列无可用槽位或对象池耗尽返回 false
      */
     bool push_tasks_batch(const std::function<void()>* tasks, size_t count, size_t& pushed);
 
@@ -135,6 +135,8 @@ private:
         std::function<void()> func;
     };
 
+    bool enter_push();
+    void leave_push();
     void worker_thread();
 
     std::unique_ptr<util::LockFreeQueue<TaskWrapper*>> queue_;
@@ -142,6 +144,8 @@ private:
 
     std::thread worker_;
     std::atomic<bool> running_{false};
+    std::atomic<bool> stopped_{false};
+    std::atomic<uint32_t> active_pushes_{0};
     std::atomic<uint64_t> processed_count_{0};
     // P-260618-006: 累计异常计数, 始终累计, worker 线程写, 读取方任意线程.
     std::atomic<uint64_t> exception_count_{0};
