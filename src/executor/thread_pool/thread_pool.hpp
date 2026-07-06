@@ -165,6 +165,15 @@ public:
         -> std::future<typename std::invoke_result<F, Args...>::type>;
 
     /**
+     * @brief 提交优先级任务，并报告是否被线程池接受
+     *
+     * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
+     * @param task 任务函数
+     * @return true 表示任务已入队；false 表示线程池已停止
+     */
+    bool try_submit_priority(int priority, std::function<void()> task);
+
+    /**
      * @brief 批量提交任务
      *
      * 批量提交多个任务，一次获取锁，减少锁竞争开销。
@@ -473,44 +482,12 @@ auto ThreadPool::submit_priority(int priority, F&& f, Args&&... args)
     
     std::future<return_type> result = task->get_future();
     
-    // 将优先级值转换为TaskPriority枚举
-    TaskPriority task_priority = TaskPriority::NORMAL;
-    if (priority <= 0) {
-        task_priority = TaskPriority::LOW;
-    } else if (priority == 1) {
-        task_priority = TaskPriority::NORMAL;
-    } else if (priority == 2) {
-        task_priority = TaskPriority::HIGH;
-    } else {
-        task_priority = TaskPriority::CRITICAL;
-    }
-    
-    // 创建Task对象
-    Task executor_task;
-    executor_task.task_id = generate_task_id();
-    executor_task.priority = task_priority;
-    executor_task.function = [task]() { (*task)(); };
-    executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()
-    ).count();
-    executor_task.timeout_ms = config_.task_timeout_ms;
-    
-    // 提交到调度器；持锁期间分发并 notify，避免错过唤醒
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (stop_.load()) {
-            std::promise<return_type> promise;
-            promise.set_exception(std::make_exception_ptr(
-                std::runtime_error("ThreadPool is stopped")
-            ));
-            return promise.get_future();
-        }
-        scheduler_.enqueue(executor_task);
-        total_tasks_.fetch_add(1, std::memory_order_relaxed);
-        if (dispatcher_) {
-            dispatcher_->dispatch_batch(1);
-        }
-        condition_.notify_all();
+    if (!try_submit_priority(priority, [task]() { (*task)(); })) {
+        std::promise<return_type> promise;
+        promise.set_exception(std::make_exception_ptr(
+            std::runtime_error("ThreadPool is stopped")
+        ));
+        return promise.get_future();
     }
     
     return result;

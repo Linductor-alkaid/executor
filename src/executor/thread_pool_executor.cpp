@@ -151,6 +151,19 @@ void ThreadPoolExecutor::submit_priority_impl(int priority, std::function<void()
     thread_pool->submit_priority(priority, std::move(task));
 }
 
+bool ThreadPoolExecutor::try_submit_priority_impl(int priority, std::function<void()> task) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        return false;
+    }
+
+    return thread_pool->try_submit_priority(priority, std::move(task));
+}
+
 void ThreadPoolExecutor::submit_batch_impl(std::vector<std::function<void()>> tasks) {
     std::shared_ptr<ThreadPool> thread_pool;
     {

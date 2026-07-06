@@ -455,6 +455,16 @@ private:
      */
     void record_failure(ExecutorFailureEvent event);
 
+    void record_submit_rejected(const std::string& executor_name,
+                                const std::string& task_id,
+                                const std::string& message,
+                                std::exception_ptr exception = nullptr);
+
+    void record_task_exception(const std::string& executor_name,
+                               const std::string& task_id,
+                               const std::string& message,
+                               std::exception_ptr exception);
+
     /**
      * @brief 当前 facade 最近失败事件缓冲容量
      */
@@ -518,23 +528,125 @@ private:
 template<typename F, typename... Args>
 auto Executor::submit(F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
+    using return_type = typename std::invoke_result<F, Args...>::type;
+
     auto* executor = manager_->get_default_async_executor();
+    const std::string executor_name = executor ? executor->get_name() : "default";
+    const std::string task_id = "facade_submit";
     if (!executor) {
+        record_submit_rejected(
+            executor_name,
+            task_id,
+            "Async executor not initialized. Call initialize() first.");
         throw std::runtime_error("Async executor not initialized. Call initialize() first.");
     }
-    return executor->submit(std::forward<F>(f), std::forward<Args>(args)...);
+
+    auto promise = std::make_shared<std::promise<return_type>>();
+    auto promise_ready = std::make_shared<std::atomic_bool>(false);
+    auto future = promise->get_future();
+    auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
+        std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+    );
+
+    auto task_wrapper = [this, executor_name, task_id, promise, promise_ready, bound_task]() mutable {
+        try {
+            if constexpr (std::is_void_v<return_type>) {
+                std::invoke(*bound_task);
+                promise->set_value();
+            } else {
+                promise->set_value(std::invoke(*bound_task));
+            }
+            promise_ready->store(true, std::memory_order_release);
+        } catch (...) {
+            auto exception = std::current_exception();
+            promise->set_exception(exception);
+            promise_ready->store(true, std::memory_order_release);
+            record_task_exception(
+                executor_name,
+                task_id,
+                "Async task threw an exception",
+                exception);
+            throw;
+        }
+    };
+
+    if (!executor->try_submit_task(std::move(task_wrapper))) {
+        auto exception = std::make_exception_ptr(
+            std::runtime_error("Async executor rejected task submission"));
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+            record_submit_rejected(
+                executor_name,
+                task_id,
+                "Async executor rejected task submission",
+                exception);
+        }
+    }
+
+    return future;
 }
 
 template<typename F, typename... Args>
 auto Executor::submit_priority(int priority, F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
+    using return_type = typename std::invoke_result<F, Args...>::type;
+
     auto* executor = manager_->get_default_async_executor();
+    const std::string executor_name = executor ? executor->get_name() : "default";
+    const std::string task_id = "facade_submit_priority";
     if (!executor) {
+        record_submit_rejected(
+            executor_name,
+            task_id,
+            "Async executor not initialized. Call initialize() first.");
         throw std::runtime_error("Async executor not initialized. Call initialize() first.");
     }
-    
-    // 使用 IAsyncExecutor 接口的 submit_priority 方法
-    return executor->submit_priority(priority, std::forward<F>(f), std::forward<Args>(args)...);
+
+    auto promise = std::make_shared<std::promise<return_type>>();
+    auto promise_ready = std::make_shared<std::atomic_bool>(false);
+    auto future = promise->get_future();
+    auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
+        std::bind(std::forward<F>(f), std::forward<Args>(args)...)
+    );
+
+    auto task_wrapper = [this, executor_name, task_id, promise, promise_ready, bound_task]() mutable {
+        try {
+            if constexpr (std::is_void_v<return_type>) {
+                std::invoke(*bound_task);
+                promise->set_value();
+            } else {
+                promise->set_value(std::invoke(*bound_task));
+            }
+            promise_ready->store(true, std::memory_order_release);
+        } catch (...) {
+            auto exception = std::current_exception();
+            promise->set_exception(exception);
+            promise_ready->store(true, std::memory_order_release);
+            record_task_exception(
+                executor_name,
+                task_id,
+                "Priority async task threw an exception",
+                exception);
+            throw;
+        }
+    };
+
+    if (!executor->try_submit_priority_task(priority, std::move(task_wrapper))) {
+        auto exception = std::make_exception_ptr(
+            std::runtime_error("Async executor rejected priority task submission"));
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+            record_submit_rejected(
+                executor_name,
+                task_id,
+                "Async executor rejected priority task submission",
+                exception);
+        }
+    }
+
+    return future;
 }
 
 template<typename F, typename... Args>
@@ -596,12 +708,76 @@ auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
 template<typename F>
 std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& tasks) {
     auto* executor = manager_->get_default_async_executor();
+    const std::string executor_name = executor ? executor->get_name() : "default";
     if (!executor) {
+        record_submit_rejected(
+            executor_name,
+            "facade_submit_batch",
+            "Async executor not initialized. Call initialize() first.");
         throw std::runtime_error("Async executor not initialized. Call initialize() first.");
     }
 
-    // 直接调用 IAsyncExecutor::submit_batch，使用底层批量优化路径。
-    return executor->submit_batch(tasks);
+    std::vector<std::function<void()>> task_wrappers;
+    std::vector<std::future<void>> futures;
+    std::vector<std::shared_ptr<std::promise<void>>> promises;
+    std::vector<std::shared_ptr<std::atomic_bool>> promise_ready_flags;
+
+    task_wrappers.reserve(tasks.size());
+    futures.reserve(tasks.size());
+    promises.reserve(tasks.size());
+    promise_ready_flags.reserve(tasks.size());
+
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        auto promise = std::make_shared<std::promise<void>>();
+        auto promise_ready = std::make_shared<std::atomic_bool>(false);
+        futures.push_back(promise->get_future());
+        promises.push_back(promise);
+        promise_ready_flags.push_back(promise_ready);
+
+        std::string task_id = "facade_submit_batch[" + std::to_string(i) + "]";
+
+        task_wrappers.push_back([this, executor_name, task_id, promise, promise_ready, task = tasks[i]]() mutable {
+            try {
+                task();
+                promise->set_value();
+                promise_ready->store(true, std::memory_order_release);
+            } catch (...) {
+                auto exception = std::current_exception();
+                promise->set_exception(exception);
+                promise_ready->store(true, std::memory_order_release);
+                record_task_exception(
+                    executor_name,
+                    task_id,
+                    "Batch async task threw an exception",
+                    exception);
+                throw;
+            }
+        });
+    }
+
+    if (!executor->try_submit_batch_tasks(std::move(task_wrappers))) {
+        auto exception = std::make_exception_ptr(
+            std::runtime_error("Async executor rejected batch task submission"));
+        bool marked_any = false;
+        for (size_t i = 0; i < promises.size(); ++i) {
+            bool expected = false;
+            if (promise_ready_flags[i]->compare_exchange_strong(expected, true)) {
+                promises[i]->set_exception(exception);
+                marked_any = true;
+            }
+        }
+        if (marked_any || tasks.empty()) {
+            record_submit_rejected(
+                executor_name,
+                "facade_submit_batch",
+                tasks.empty()
+                    ? "Async executor rejected empty batch task submission"
+                    : "Async executor rejected batch task submission",
+                exception);
+        }
+    }
+
+    return futures;
 }
 
 template<typename F>
@@ -609,16 +785,20 @@ std::vector<std::future<void>> Executor::submit_batch_priority(
     int priority,
     const std::vector<F>& tasks) {
     auto* executor = manager_->get_default_async_executor();
+    const std::string executor_name = executor ? executor->get_name() : "default";
     if (!executor) {
+        record_submit_rejected(
+            executor_name,
+            "facade_submit_batch_priority",
+            "Async executor not initialized. Call initialize() first.");
         throw std::runtime_error("Async executor not initialized. Call initialize() first.");
     }
 
     std::vector<std::future<void>> futures;
     futures.reserve(tasks.size());
 
-    // TODO: IAsyncExecutor 暂无 submit_batch_priority 批量接口；当前保留逐个提交。
     for (const auto& task : tasks) {
-        futures.push_back(executor->submit_priority(priority, task));
+        futures.push_back(submit_priority(priority, task));
     }
 
     return futures;
@@ -627,12 +807,52 @@ std::vector<std::future<void>> Executor::submit_batch_priority(
 template<typename F>
 void Executor::submit_batch_no_future(const std::vector<F>& tasks) {
     auto* executor = manager_->get_default_async_executor();
+    const std::string executor_name = executor ? executor->get_name() : "default";
     if (!executor) {
+        record_submit_rejected(
+            executor_name,
+            "facade_submit_batch_no_future",
+            "Async executor not initialized. Call initialize() first.");
         throw std::runtime_error("Async executor not initialized. Call initialize() first.");
     }
 
-    // 调用底层的无 future 批量提交
-    executor->submit_batch_no_future(tasks);
+    std::vector<std::function<void()>> task_wrappers;
+    task_wrappers.reserve(tasks.size());
+    auto execution_failure_seen = std::make_shared<std::atomic_bool>(false);
+
+    for (size_t i = 0; i < tasks.size(); ++i) {
+        std::string task_id =
+            "facade_submit_batch_no_future[" + std::to_string(i) + "]";
+
+        task_wrappers.push_back([this, executor_name, task_id, execution_failure_seen, task = tasks[i]]() mutable {
+            try {
+                task();
+            } catch (...) {
+                auto exception = std::current_exception();
+                execution_failure_seen->store(true, std::memory_order_release);
+                record_task_exception(
+                    executor_name,
+                    task_id,
+                    "Fire-and-forget batch async task threw an exception",
+                    exception);
+                throw;
+            }
+        });
+    }
+
+    if (!executor->try_submit_batch_tasks(std::move(task_wrappers))) {
+        auto exception = std::make_exception_ptr(
+            std::runtime_error("Async executor rejected fire-and-forget batch task submission"));
+        if (!execution_failure_seen->load(std::memory_order_acquire)) {
+            record_submit_rejected(
+                executor_name,
+                "facade_submit_batch_no_future",
+                tasks.empty()
+                    ? "Async executor rejected empty fire-and-forget batch task submission"
+                    : "Async executor rejected fire-and-forget batch task submission",
+                exception);
+        }
+    }
 }
 
 // GPU 任务提交模板方法实现

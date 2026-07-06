@@ -295,8 +295,8 @@ void ThreadPool::execute_task(const Task& task) {
     } else {
         // 软超时：跳过执行，记录超时计数
         timeout_count_.fetch_add(1, std::memory_order_relaxed);
-        // 标记 timed_out 用于 update_statistics: completed++ 但不 failed++,
-        // 保持 total_tasks_ == completed + failed 等式成立, 避免破坏 wait_for_completion().
+        // 标记 timed_out 用于 update_statistics: completed++ 但不 failed++。
+        // wait_for_completion() 以 completed 覆盖全部已结束任务，failed 是其子集。
     }
 
     auto end_time = std::chrono::steady_clock::now();
@@ -316,17 +316,14 @@ void ThreadPool::execute_task(const Task& task) {
         //
         // CRITICAL: also fire update_statistics here. Otherwise
         // completed_tasks_ never increments and wait_for_completion()
-        // hangs forever (or up to 300s) waiting for total ==
-        // completed+failed, which the invariant comment on line 229
-        // explicitly requires.
+        // hangs forever (or up to 300s) waiting for total == completed.
         exception_handler_.handle_task_exception("ThreadPool::execute_task",
                                                  std::current_exception());
         // Best-effort stats: counted as completed but NOT failed (a
         // monitor exception is not a task failure — the user code
         // didn't even run). This matches the soft-timeout branch
         // (timed_out=true) which also counts as completed without
-        // incrementing failed_, so wait_for_completion's invariant
-        // total == completed + failed stays true.
+        // incrementing failed_.
         int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                          std::chrono::steady_clock::now() - start_time).count();
         update_statistics(ns, /*success=*/false, /*timed_out=*/true);
@@ -486,7 +483,8 @@ bool ThreadPool::is_completion_ready() const {
     // 等待所有任务完成需要同时满足：
     // 1. 全局调度器 + 所有本地队列为空（没有待执行的任务）
     // 2. 没有活跃线程（没有正在执行的任务）
-    // 3. 所有已提交的任务都已完成（total == completed + failed）
+    // 3. 所有已提交的任务都已完成（total == completed）。
+    // failed_tasks_ 是 completed_tasks_ 的失败子集，不再参与完成等式。
     bool scheduler_empty = scheduler_.empty();
 
     size_t local_queue_total = 0;
@@ -502,13 +500,12 @@ bool ThreadPool::is_completion_ready() const {
 
     size_t total = total_tasks_.load(std::memory_order_acquire);
     size_t completed = completed_tasks_.load(std::memory_order_acquire);
-    size_t failed = failed_tasks_.load(std::memory_order_acquire);
     size_t active = active_threads_.load(std::memory_order_acquire);
 
     return scheduler_empty &&
            local_queue_total == 0 &&
            active == 0 &&
-           total == completed + failed;
+           total == completed;
 }
 
 void ThreadPool::notify_completion_waiters() {
@@ -693,6 +690,42 @@ bool ThreadPool::try_submit(std::function<void()> task) {
     executor_task.timeout_ms = config_.task_timeout_ms;
 
     // 提交到调度器；持锁期间分发并 notify，避免错过唤醒
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stop_.load()) {
+        return false;
+    }
+
+    scheduler_.enqueue(executor_task);
+    total_tasks_.fetch_add(1, std::memory_order_relaxed);
+    if (dispatcher_) {
+        dispatcher_->dispatch_batch(1);
+    }
+    condition_.notify_all();
+
+    return true;
+}
+
+bool ThreadPool::try_submit_priority(int priority, std::function<void()> task) {
+    TaskPriority task_priority = TaskPriority::NORMAL;
+    if (priority <= 0) {
+        task_priority = TaskPriority::LOW;
+    } else if (priority == 1) {
+        task_priority = TaskPriority::NORMAL;
+    } else if (priority == 2) {
+        task_priority = TaskPriority::HIGH;
+    } else {
+        task_priority = TaskPriority::CRITICAL;
+    }
+
+    Task executor_task;
+    executor_task.task_id = generate_task_id();
+    executor_task.priority = task_priority;
+    executor_task.function = std::move(task);
+    executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+    executor_task.timeout_ms = config_.task_timeout_ms;
+
     std::lock_guard<std::mutex> lock(mutex_);
     if (stop_.load()) {
         return false;

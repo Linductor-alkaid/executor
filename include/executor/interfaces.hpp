@@ -39,12 +39,13 @@ public:
         using return_type = typename std::invoke_result<F, Args...>::type;
 
         auto promise = std::make_shared<std::promise<return_type>>();
+        auto promise_ready = std::make_shared<std::atomic_bool>(false);
         auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
         );
 
         std::future<return_type> result = promise->get_future();
-        auto task = [promise, bound_task]() mutable {
+        auto task = [promise, promise_ready, bound_task]() mutable {
             try {
                 if constexpr (std::is_void_v<return_type>) {
                     std::invoke(*bound_task);
@@ -52,15 +53,21 @@ public:
                 } else {
                     promise->set_value(std::invoke(*bound_task));
                 }
+                promise_ready->store(true, std::memory_order_release);
             } catch (...) {
                 promise->set_exception(std::current_exception());
+                promise_ready->store(true, std::memory_order_release);
+                throw;
             }
         };
 
         if (!try_submit_impl(std::move(task))) {
-            promise->set_exception(std::make_exception_ptr(
-                std::runtime_error("Executor is stopped")
-            ));
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(expected, true)) {
+                promise->set_exception(std::make_exception_ptr(
+                    std::runtime_error("Executor is stopped")
+                ));
+            }
         }
 
         return result;
@@ -104,6 +111,17 @@ public:
     virtual void wait_for_completion() = 0;
 
     /**
+     * @brief 提交已包装任务，并报告是否被执行器接受
+     */
+    bool try_submit_task(std::function<void()> task) {
+        try {
+            return try_submit_impl(std::move(task));
+        } catch (...) {
+            return false;
+        }
+    }
+
+    /**
      * @brief 提交优先级任务（返回Future）
      *
      * @tparam F 可调用对象类型
@@ -118,13 +136,49 @@ public:
         -> std::future<typename std::invoke_result<F, Args...>::type> {
         using return_type = typename std::invoke_result<F, Args...>::type;
 
-        auto task = std::make_shared<std::packaged_task<return_type()>>(
+        auto promise = std::make_shared<std::promise<return_type>>();
+        auto promise_ready = std::make_shared<std::atomic_bool>(false);
+        auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
         );
 
-        std::future<return_type> result = task->get_future();
-        submit_priority_impl(priority, [task]() { (*task)(); });
+        std::future<return_type> result = promise->get_future();
+        auto task = [promise, promise_ready, bound_task]() mutable {
+            try {
+                if constexpr (std::is_void_v<return_type>) {
+                    std::invoke(*bound_task);
+                    promise->set_value();
+                } else {
+                    promise->set_value(std::invoke(*bound_task));
+                }
+                promise_ready->store(true, std::memory_order_release);
+            } catch (...) {
+                promise->set_exception(std::current_exception());
+                promise_ready->store(true, std::memory_order_release);
+                throw;
+            }
+        };
+
+        if (!try_submit_priority_impl(priority, std::move(task))) {
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(expected, true)) {
+                promise->set_exception(std::make_exception_ptr(
+                    std::runtime_error("Executor is stopped")
+                ));
+            }
+        }
         return result;
+    }
+
+    /**
+     * @brief 提交已包装优先级任务，并报告是否被执行器接受
+     */
+    bool try_submit_priority_task(int priority, std::function<void()> task) {
+        try {
+            return try_submit_priority_impl(priority, std::move(task));
+        } catch (...) {
+            return false;
+        }
     }
 
     /**
@@ -141,36 +195,57 @@ public:
         std::vector<std::function<void()>> task_wrappers;
         std::vector<std::future<void>> futures;
         std::vector<std::shared_ptr<std::promise<void>>> promises;
+        std::vector<std::shared_ptr<std::atomic_bool>> promise_ready_flags;
 
         task_wrappers.reserve(tasks.size());
         futures.reserve(tasks.size());
         promises.reserve(tasks.size());
+        promise_ready_flags.reserve(tasks.size());
 
         // 准备所有任务和 future
         for (const auto& task : tasks) {
             auto promise = std::make_shared<std::promise<void>>();
+            auto promise_ready = std::make_shared<std::atomic_bool>(false);
             futures.push_back(promise->get_future());
             promises.push_back(promise);
-            task_wrappers.push_back([promise, task]() {
+            promise_ready_flags.push_back(promise_ready);
+            task_wrappers.push_back([promise, promise_ready, task]() {
                 try {
                     task();
                     promise->set_value();
+                    promise_ready->store(true, std::memory_order_release);
                 } catch (...) {
                     promise->set_exception(std::current_exception());
+                    promise_ready->store(true, std::memory_order_release);
+                    throw;
                 }
             });
         }
 
         // 批量提交（减少锁竞争）
         if (!try_submit_batch_impl(std::move(task_wrappers))) {
-            for (auto& promise : promises) {
-                promise->set_exception(std::make_exception_ptr(
-                    std::runtime_error("ThreadPool is stopped")
-                ));
+            for (size_t i = 0; i < promises.size(); ++i) {
+                bool expected = false;
+                if (promise_ready_flags[i]->compare_exchange_strong(expected, true)) {
+                    promises[i]->set_exception(std::make_exception_ptr(
+                        std::runtime_error("ThreadPool is stopped")
+                    ));
+                }
             }
         }
 
         return futures;
+    }
+
+    /**
+     * @brief 批量提交已包装任务，并报告是否被执行器接受
+     */
+    bool try_submit_batch_tasks(std::vector<std::function<void()>> tasks) {
+        try {
+            return try_submit_batch_impl(std::move(tasks));
+        } catch (...) {
+            return false;
+        }
     }
 
     /**
@@ -221,7 +296,23 @@ protected:
      */
     virtual void submit_priority_impl(int priority, std::function<void()> task) {
         // 默认实现：忽略优先级，使用普通提交
+        (void)priority;
         submit_impl(std::move(task));
+    }
+
+    /**
+     * @brief 提交优先级任务实现（可报告拒绝）
+     * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
+     * @param task 任务函数
+     * @return true 表示任务已被接受；false 表示执行器已拒绝任务
+     */
+    virtual bool try_submit_priority_impl(int priority, std::function<void()> task) {
+        try {
+            submit_priority_impl(priority, std::move(task));
+            return true;
+        } catch (...) {
+            return false;
+        }
     }
 
     /**

@@ -15,7 +15,7 @@
 - [x] docs/MIGRATION.md 已补充失败可观察性约定。
 - [x] 实时执行器 `push_task_ex()` 已返回入队结果，并通过 `dropped_task_count` 暴露丢任务。
 - [x] 旧 `push_task()` 虽不返回结果，但失败仍累计到 `dropped_task_count`。
-- [ ] 普通异步任务异常尚未统一进入 facade 可见的失败通道。
+- [x] 普通异步任务异常尚未统一进入 facade 可见的失败通道。
 - [ ] `submit_periodic()` 丢弃 future，周期任务异常可能无可见出口。
 - [ ] `Executor` facade 尚无统一失败回调 / 最近错误 / 失败事件查询入口。
 - [ ] 多个注册/初始化 API 仍只返回 `bool`，失败原因不可诊断。
@@ -75,26 +75,26 @@
 
 ### 任务
 
-- [ ] 调整 `submit()` / `submit_priority()` / `submit_batch()` 的包装方式，使用户任务异常同时：
+- [x] 调整 `submit()` / `submit_priority()` / `submit_batch()` 的包装方式，使用户任务异常同时：
   - 写入对应 `future`
   - 触发统一 failure event
   - 更新失败统计或专用 facade 失败计数
-- [ ] 明确 `AsyncExecutorStatus::failed_tasks` 的语义：
+- [x] 明确 `AsyncExecutorStatus::failed_tasks` 的语义：
   - 方案 A：计入用户任务异常。
   - 方案 B：保持底层执行失败语义，新增 facade 级 `task_exception_count`。
   - 推荐方案 A，但需评估现有测试与 `wait_for_completion()` 不变量。
-- [ ] 对 `submit_batch_no_future()` 增加强制可见性：
+- [x] 对 `submit_batch_no_future()` 增加强制可见性：
   - 用户任务异常没有 future 可承载，必须进入 failure event / status counter。
-- [ ] 对提交被拒绝的场景计数：
+- [x] 对提交被拒绝的场景计数：
   - shutdown 后提交
   - 空 batch
   - executor 未可用
 
 ### 验收
 
-- [ ] 单个 `submit([]{ throw ...; })` 即使不调用 `future.get()`，状态中也能观察到失败。
-- [ ] `submit_batch_no_future()` 内部任务抛异常时，failure callback 被调用且计数递增。
-- [ ] shutdown 后提交被拒绝时，调用方通过 future/返回值/事件至少一种方式可见。
+- [x] 单个 `submit([]{ throw ...; })` 即使不调用 `future.get()`，状态中也能观察到失败。
+- [x] `submit_batch_no_future()` 内部任务抛异常时，failure callback 被调用且计数递增。
+- [x] shutdown 后提交被拒绝时，调用方通过 future/返回值/事件至少一种方式可见。
 
 ---
 

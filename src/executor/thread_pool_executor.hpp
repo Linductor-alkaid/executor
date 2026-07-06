@@ -116,6 +116,15 @@ protected:
     void submit_priority_impl(int priority, std::function<void()> task) override;
 
     /**
+     * @brief 提交优先级任务实现（可报告拒绝）
+     *
+     * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
+     * @param task 任务函数
+     * @return true 表示任务已被线程池接受；false 表示线程池已停止
+     */
+    bool try_submit_priority_impl(int priority, std::function<void()> task) override;
+
+    /**
      * @brief 批量提交任务实现（内部方法）
      *
      * 优化的批量提交，减少锁竞争。

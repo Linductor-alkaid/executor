@@ -314,6 +314,32 @@ void Executor::record_failure(ExecutorFailureEvent event) {
     }
 }
 
+void Executor::record_submit_rejected(const std::string& executor_name,
+                                      const std::string& task_id,
+                                      const std::string& message,
+                                      std::exception_ptr exception) {
+    ExecutorFailureEvent event;
+    event.kind = FailureKind::SubmitRejected;
+    event.executor_name = executor_name;
+    event.task_id = task_id;
+    event.message = message;
+    event.exception = exception;
+    record_failure(std::move(event));
+}
+
+void Executor::record_task_exception(const std::string& executor_name,
+                                     const std::string& task_id,
+                                     const std::string& message,
+                                     std::exception_ptr exception) {
+    ExecutorFailureEvent event;
+    event.kind = FailureKind::TaskException;
+    event.executor_name = executor_name;
+    event.task_id = task_id;
+    event.message = message;
+    event.exception = exception;
+    record_failure(std::move(event));
+}
+
 void Executor::enable_monitoring(bool enable) {
     manager_->enable_monitoring(enable);
 }
