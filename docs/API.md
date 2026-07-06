@@ -560,7 +560,12 @@ for (int i = 0; i < 16; ++i) {  // 效率仅 1-2%
 }
 
 // ✅ 推荐：使用线程池或批量提交
-ThreadPool pool(16);
+ThreadPoolConfig config;
+config.min_threads = 16;
+config.max_threads = 16;
+
+ThreadPool pool;
+pool.initialize(config);
 pool.submit([&]() {
     // 单个线程批量提交
     for (int i = 0; i < 1000; ++i) {
