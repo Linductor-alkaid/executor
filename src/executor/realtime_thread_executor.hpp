@@ -82,9 +82,9 @@ public:
      * @brief 推送任务到无锁队列（在周期回调中处理）
      *
      * 任务通过无锁队列传递，在实时线程的下一个周期回调中执行。
-     * P-001 (260615): 队列满 或 对象池耗尽 时静默丢弃, dropped_task_count_++
-     * (始终累计, 不依赖 enable_stats). 调用方必须通过 get_status()
-     * 观察 dropped_task_count 与 failed_pushes.
+     * P-001 (260615): 未运行、队列满 或 对象池耗尽 时静默丢弃,
+     * dropped_task_count_++ (始终累计, 不依赖 enable_stats). 调用方必须
+     * 通过 get_status() 观察 dropped_task_count 与 failed_pushes.
      *
      * @param task 任务函数
      */
@@ -94,7 +94,8 @@ public:
      * @brief 推送任务并回传是否成功 (P-001 260615)
      *
      * 走与 push_task 完全相同的路径, 但返回值真实反映该次 push 的成败
-     * (无 toctou). 同时 dropped_task_count_ 同步累加 (失败时).
+     * (无 toctou). stop() 后返回 false, 同时 dropped_task_count_ 同步累加
+     * (失败时).
      */
     bool push_task_ex(std::function<void()> task) override;
 
@@ -169,6 +170,7 @@ private:
     };
     std::atomic<bool> running_{false};              // 运行状态标志
     std::mutex drain_mutex_;                        // 串行化 stop() join/drain
+    std::atomic<uint32_t> in_flight_pushes_{0};      // 正在进入队列的 push_task_ex 调用
 
     // 无锁队列（直接传递任务指针）
     util::LockFreeQueue<TaskWrapper*> lockfree_queue_;
@@ -186,7 +188,7 @@ private:
     std::atomic<int64_t> max_cycle_time_ns_{0};     // 最大周期执行时间（纳秒）
 
     // P-001 (260615): 背压可见性 — 始终累计, 与 enable_stats 无关.
-    // 队列满 / 对象池耗尽 任一路径触发 drop 时 +1.
+    // 未运行 / 队列满 / 对象池耗尽 任一路径触发 drop 时 +1.
     std::atomic<uint64_t> dropped_task_count_{0};
     // P-001 (260615): 构造时指定的统计开关, push_task() 路径不依赖此开关.
     const bool enable_stats_;

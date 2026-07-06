@@ -159,6 +159,9 @@ void RealtimeThreadExecutor::stop() {
         }
     }
 
+    while (in_flight_pushes_.load(std::memory_order_acquire) != 0) {
+        std::this_thread::yield();
+    }
     drain_stopped_queue();
 }
 
@@ -189,12 +192,29 @@ void RealtimeThreadExecutor::push_task(std::function<void()> task) {
 }
 
 bool RealtimeThreadExecutor::push_task_ex(std::function<void()> task) {
-    // P-001 (260615): 三条失败路径全部计入 dropped_task_count_ —
-    //   (1) task 为空 (无效输入)
-    //   (2) 对象池耗尽 (task_pool_.acquire() == nullptr)
-    //   (3) 队列满 (lockfree_queue_.push() == false)
+    // P-001 (260615): 失败路径全部计入 dropped_task_count_ —
+    //   (1) 执行器未运行 (stop() 后不再接受任务)
+    //   (2) task 为空 (无效输入)
+    //   (3) 对象池耗尽 (task_pool_.acquire() == nullptr)
+    //   (4) 队列满 (lockfree_queue_.push() == false)
     // 此计数器独立于 enable_stats, 是背压可见性的核心契约.
     if (!task) {
+        dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    // Register before observing running_. stop() flips running_ to false, then
+    // waits for all registered producers before draining the single-consumer
+    // queue, so an accepted task cannot appear after the final drain.
+    in_flight_pushes_.fetch_add(1, std::memory_order_acq_rel);
+    struct InFlightPushGuard {
+        std::atomic<uint32_t>& counter;
+        ~InFlightPushGuard() {
+            counter.fetch_sub(1, std::memory_order_acq_rel);
+        }
+    } in_flight_guard{in_flight_pushes_};
+
+    if (!running_.load(std::memory_order_acquire)) {
         dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
