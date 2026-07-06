@@ -37,6 +37,7 @@ bool test_cuda_executor_creation();
 bool test_cuda_executor_device_info();
 bool test_cuda_executor_memory_management();
 bool test_cuda_executor_memory_pool();
+bool CudaExecutorMemoryPoolStatusReportsUsage();
 bool test_cuda_executor_memory_copy();
 bool test_cuda_executor_kernel_submit();
 bool test_cuda_executor_synchronize();
@@ -223,6 +224,53 @@ bool test_cuda_executor_memory_pool() {
     return true;
 #else
     std::cout << "  CUDA support not enabled at compile time, skipping test" << std::endl;
+    return true;
+#endif
+}
+
+bool CudaExecutorMemoryPoolStatusReportsUsage() {
+    std::cout << "Testing CudaExecutorMemoryPoolStatusReportsUsage..." << std::endl;
+
+#ifdef EXECUTOR_ENABLE_CUDA
+    GpuExecutorConfig config;
+    config.name = "test_cuda_executor_pool_status";
+    config.backend = GpuBackend::CUDA;
+    config.device_id = 0;
+    config.memory_pool_size = 2 * 1024 * 1024;
+
+    CudaExecutor executor(config.name, config);
+
+    if (!executor.start()) {
+        std::cout << "  CUDA not available, skipping CudaExecutorMemoryPoolStatusReportsUsage" << std::endl;
+        return true;
+    }
+
+    auto initial_status = executor.get_status();
+    const size_t initial_used = initial_status.memory_used_bytes;
+    TEST_ASSERT(initial_status.memory_total_bytes > 0,
+                "Memory total should be reported when CUDA is available");
+
+    const size_t allocation_size = 256 * 1024;
+    void* device_ptr = executor.allocate_device_memory(allocation_size);
+    TEST_ASSERT(device_ptr != nullptr, "Memory pool allocation should succeed");
+
+    auto allocated_status = executor.get_status();
+    TEST_ASSERT(allocated_status.memory_used_bytes >= initial_used + allocation_size,
+                "Memory pool allocation should be reflected in status memory_used_bytes");
+    TEST_ASSERT(allocated_status.memory_usage_percent > initial_status.memory_usage_percent,
+                "Memory pool allocation should increase memory_usage_percent");
+
+    executor.free_device_memory(device_ptr);
+
+    auto freed_status = executor.get_status();
+    TEST_ASSERT(freed_status.memory_used_bytes == initial_used,
+                "Memory pool free should return status memory_used_bytes to initial value");
+
+    executor.stop();
+    std::cout << "  CudaExecutorMemoryPoolStatusReportsUsage: PASSED" << std::endl;
+    return true;
+#else
+    std::cout << "  CUDA support not enabled at compile time, skipping CudaExecutorMemoryPoolStatusReportsUsage" << std::endl;
     return true;
 #endif
 }
@@ -1154,6 +1202,7 @@ int main() {
         all_passed &= test_cuda_executor_device_info();
         all_passed &= test_cuda_executor_memory_management();
         all_passed &= test_cuda_executor_memory_pool();
+        all_passed &= CudaExecutorMemoryPoolStatusReportsUsage();
         all_passed &= test_cuda_executor_memory_copy();
         all_passed &= test_cuda_executor_kernel_submit();
         all_passed &= test_cuda_executor_synchronize();
