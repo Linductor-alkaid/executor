@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <chrono>
+#include <iterator>
 
 namespace executor {
 
@@ -37,7 +38,15 @@ Executor::~Executor() {
 
 // 初始化执行器
 bool Executor::initialize(const ExecutorConfig& config) {
-    return manager_->initialize_async_executor(config);
+    bool initialized = manager_->initialize_async_executor(config);
+    if (!initialized) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::SubmitRejected;
+        event.executor_name = "default";
+        event.message = "Async executor initialization failed or was rejected";
+        record_failure(std::move(event));
+    }
+    return initialized;
 }
 
 // 关闭执行器
@@ -117,21 +126,47 @@ bool Executor::register_realtime_task(const std::string& name,
     // 创建实时执行器
     auto executor = manager_->create_realtime_executor(name, config);
     if (!executor) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::SubmitRejected;
+        event.executor_name = name;
+        event.message = "Realtime executor creation failed";
+        record_failure(std::move(event));
         return false;  // 创建失败
     }
     
     // 注册执行器
-    return manager_->register_realtime_executor(name, std::move(executor));
+    bool registered = manager_->register_realtime_executor(name, std::move(executor));
+    if (!registered) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::SubmitRejected;
+        event.executor_name = name;
+        event.message = "Realtime executor registration failed or duplicate name";
+        record_failure(std::move(event));
+    }
+    return registered;
 }
 
 // 启动实时任务
 bool Executor::start_realtime_task(const std::string& name) {
     auto* executor = manager_->get_realtime_executor(name);
     if (!executor) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::SubmitRejected;
+        event.executor_name = name;
+        event.message = "Realtime executor not found";
+        record_failure(std::move(event));
         return false;  // 执行器不存在
     }
     
-    return executor->start();
+    bool started = executor->start();
+    if (!started) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::SubmitRejected;
+        event.executor_name = name;
+        event.message = "Realtime executor start failed";
+        record_failure(std::move(event));
+    }
+    return started;
 }
 
 // 停止实时任务
@@ -178,6 +213,107 @@ RealtimeExecutorStatus Executor::get_realtime_executor_status(const std::string&
     return executor->get_status();
 }
 
+void Executor::set_failure_callback(ExecutorFailureCallback callback) {
+    std::lock_guard<std::mutex> lock(failure_mutex_);
+    failure_callback_ = std::move(callback);
+}
+
+ExecutorFailureStatus Executor::get_failure_status() const {
+    std::lock_guard<std::mutex> lock(failure_mutex_);
+    return failure_status_;
+}
+
+std::vector<ExecutorFailureEvent> Executor::get_recent_failures(size_t max_count) const {
+    std::lock_guard<std::mutex> lock(failure_mutex_);
+
+    const size_t available = recent_failures_.size();
+    const size_t count = (max_count == 0 || max_count > available)
+                             ? available
+                             : max_count;
+
+    std::vector<ExecutorFailureEvent> result;
+    result.reserve(count);
+
+    const size_t start = available - count;
+    auto it = recent_failures_.begin();
+    std::advance(it, static_cast<std::ptrdiff_t>(start));
+    for (; it != recent_failures_.end(); ++it) {
+        result.push_back(*it);
+    }
+
+    return result;
+}
+
+void Executor::clear_recent_failures() {
+    std::lock_guard<std::mutex> lock(failure_mutex_);
+    recent_failures_.clear();
+}
+
+void Executor::set_recent_failure_capacity(size_t capacity) {
+    std::lock_guard<std::mutex> lock(failure_mutex_);
+    recent_failure_capacity_ = capacity;
+    while (recent_failures_.size() > recent_failure_capacity_) {
+        recent_failures_.pop_front();
+    }
+}
+
+size_t Executor::recent_failure_capacity() const {
+    std::lock_guard<std::mutex> lock(failure_mutex_);
+    return recent_failure_capacity_;
+}
+
+void Executor::record_failure(ExecutorFailureEvent event) {
+    ExecutorFailureCallback callback;
+
+    {
+        std::lock_guard<std::mutex> lock(failure_mutex_);
+
+        ++failure_status_.total_count;
+        switch (event.kind) {
+        case FailureKind::TaskException:
+            ++failure_status_.task_exception_count;
+            break;
+        case FailureKind::SubmitRejected:
+            ++failure_status_.submit_rejected_count;
+            break;
+        case FailureKind::TaskTimeout:
+            ++failure_status_.timeout_count;
+            break;
+        case FailureKind::RealtimeDrop:
+            ++failure_status_.realtime_drop_count;
+            break;
+        case FailureKind::GpuFailure:
+            ++failure_status_.gpu_failure_count;
+            break;
+        case FailureKind::WaitTimeout:
+            ++failure_status_.wait_timeout_count;
+            break;
+        case FailureKind::TuningFallback:
+            ++failure_status_.tuning_fallback_count;
+            break;
+        default:
+            break;
+        }
+
+        if (recent_failure_capacity_ > 0) {
+            while (recent_failures_.size() >= recent_failure_capacity_) {
+                recent_failures_.pop_front();
+            }
+            recent_failures_.push_back(event);
+        }
+
+        callback = failure_callback_;
+    }
+
+    if (callback) {
+        try {
+            callback(event);
+        } catch (...) {
+            // Failure observation must never become a new worker/background failure.
+        }
+    }
+}
+
 void Executor::enable_monitoring(bool enable) {
     manager_->enable_monitoring(enable);
 }
@@ -205,16 +341,34 @@ bool Executor::register_gpu_executor(const std::string& name,
     // 创建 GPU 执行器
     auto executor = manager_->create_gpu_executor(config);
     if (!executor) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::GpuFailure;
+        event.executor_name = name;
+        event.message = "GPU executor creation failed";
+        record_failure(std::move(event));
         return false;  // 创建失败
     }
     
     // 启动执行器（必须在注册前启动）
     if (!executor->start()) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::GpuFailure;
+        event.executor_name = name;
+        event.message = "GPU executor start failed";
+        record_failure(std::move(event));
         return false;  // 启动失败
     }
     
     // 注册执行器
-    return manager_->register_gpu_executor(name, std::move(executor));
+    bool registered = manager_->register_gpu_executor(name, std::move(executor));
+    if (!registered) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::GpuFailure;
+        event.executor_name = name;
+        event.message = "GPU executor registration failed or duplicate name";
+        record_failure(std::move(event));
+    }
+    return registered;
 }
 
 // 获取 GPU 执行器

@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
+#include <exception>
 #include <string>
 #include <vector>
 #include <atomic>
@@ -19,6 +21,51 @@ enum class TaskPriority {
     HIGH = 2,
     CRITICAL = 3
 };
+
+/**
+ * @brief Executor facade 统一失败事件类型
+ *
+ * 自动调优类失败允许安全回退；任务运行、提交拒绝、超时等状态必须通过事件、
+ * 状态计数或 future 保持可观察。
+ */
+enum class FailureKind {
+    TaskException,     // 用户任务抛异常
+    SubmitRejected,    // 任务提交被拒绝
+    TaskTimeout,       // 任务执行超时
+    RealtimeDrop,      // 实时队列丢任务/推送失败
+    GpuFailure,        // GPU 执行失败
+    WaitTimeout,       // 等待完成超时
+    TuningFallback     // 平台调优失败并安全回退
+};
+
+/**
+ * @brief Executor facade 失败事件
+ */
+struct ExecutorFailureEvent {
+    FailureKind kind = FailureKind::TaskException;
+    std::string executor_name;
+    std::string task_id;
+    std::string message;
+    std::exception_ptr exception;
+    std::chrono::steady_clock::time_point timestamp =
+        std::chrono::steady_clock::now();
+};
+
+/**
+ * @brief Executor facade 累计失败状态
+ */
+struct ExecutorFailureStatus {
+    uint64_t task_exception_count = 0;
+    uint64_t submit_rejected_count = 0;
+    uint64_t timeout_count = 0;
+    uint64_t realtime_drop_count = 0;
+    uint64_t gpu_failure_count = 0;
+    uint64_t wait_timeout_count = 0;
+    uint64_t tuning_fallback_count = 0;
+    uint64_t total_count = 0;
+};
+
+using ExecutorFailureCallback = std::function<void(const ExecutorFailureEvent&)>;
 
 /**
  * @brief 任务结构体

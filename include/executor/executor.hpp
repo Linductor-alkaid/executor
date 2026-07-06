@@ -17,6 +17,7 @@
 #include <type_traits>
 #include <map>
 #include <queue>
+#include <deque>
 
 namespace executor {
 
@@ -272,6 +273,41 @@ public:
     RealtimeExecutorStatus get_realtime_executor_status(const std::string& name) const;
 
     /**
+     * @brief 设置 facade 失败事件回调
+     *
+     * 未设置回调时，失败事件仍会进入状态计数和最近事件缓冲。
+     * callback 自身抛出的异常会被隔离，不会杀死 worker 或后台线程。
+     */
+    void set_failure_callback(ExecutorFailureCallback callback);
+
+    /**
+     * @brief 获取累计失败状态
+     */
+    ExecutorFailureStatus get_failure_status() const;
+
+    /**
+     * @brief 获取最近失败事件
+     *
+     * @param max_count 最多返回事件数；0 表示返回当前缓冲区内全部事件。
+     * @return 按发生时间从旧到新排序的失败事件列表
+     */
+    std::vector<ExecutorFailureEvent> get_recent_failures(size_t max_count = 0) const;
+
+    /**
+     * @brief 清空最近失败事件
+     *
+     * 只清空 ring buffer，不重置累计计数。
+     */
+    void clear_recent_failures();
+
+    /**
+     * @brief 设置最近失败事件缓冲容量
+     *
+     * 容量为 0 时不保留最近事件，但累计状态和 callback 仍生效。
+     */
+    void set_recent_failure_capacity(size_t capacity);
+
+    /**
      * @brief 启用或禁用任务监控
      */
     void enable_monitoring(bool enable);
@@ -414,6 +450,16 @@ private:
      */
     void stop_timer_thread();
 
+    /**
+     * @brief 记录 facade 失败事件
+     */
+    void record_failure(ExecutorFailureEvent event);
+
+    /**
+     * @brief 当前 facade 最近失败事件缓冲容量
+     */
+    size_t recent_failure_capacity() const;
+
     // ExecutorManager 指针（单例或实例）
     ExecutorManager* manager_;
 
@@ -455,6 +501,14 @@ private:
     std::thread timer_thread_;
     std::atomic<bool> timer_running_{false};
     std::function<std::thread(std::function<void()>)> timer_thread_factory_for_test_;
+
+    static constexpr size_t kDefaultRecentFailureCapacity = 128;
+
+    mutable std::mutex failure_mutex_;
+    ExecutorFailureStatus failure_status_;
+    std::deque<ExecutorFailureEvent> recent_failures_;
+    size_t recent_failure_capacity_ = kDefaultRecentFailureCapacity;
+    ExecutorFailureCallback failure_callback_;
 
     // GPU 调度器
     gpu::GpuScheduler scheduler_;

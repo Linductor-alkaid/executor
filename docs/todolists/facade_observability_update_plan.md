@@ -38,32 +38,32 @@
 
 ### 任务
 
-- [ ] 新增 `FailureEvent` / `ExecutorFailureEvent` 类型，建议字段：
+- [x] 新增 `FailureEvent` / `ExecutorFailureEvent` 类型，建议字段：
   - `FailureKind kind`：`TaskException`、`SubmitRejected`、`TaskTimeout`、`RealtimeDrop`、`GpuFailure`、`WaitTimeout`、`TuningFallback`。
   - `std::string executor_name`
   - `std::string task_id`
   - `std::string message`
   - `std::exception_ptr exception`
   - `std::chrono::steady_clock::time_point timestamp`
-- [ ] 新增 `ExecutorFailureStatus` 或扩展现有状态查询，至少包含累计计数：
+- [x] 新增 `ExecutorFailureStatus` 或扩展现有状态查询，至少包含累计计数：
   - `task_exception_count`
   - `submit_rejected_count`
   - `timeout_count`
   - `realtime_drop_count`
   - `wait_timeout_count`
   - `tuning_fallback_count`
-- [ ] 在 `Executor` facade 暴露：
+- [x] 在 `Executor` facade 暴露：
   - `set_failure_callback(...)`
   - `get_failure_status()`
   - `get_recent_failures(size_t max_count)`
   - `clear_recent_failures()`
-- [ ] 为 failure ring buffer 设置固定容量，避免长期运行进程无限增长；容量可配置或给出合理默认。
+- [x] 为 failure ring buffer 设置固定容量，避免长期运行进程无限增长；容量可配置或给出合理默认。
 
 ### 验收
 
 - [ ] 用户只通过 `Executor` 就能订阅任务失败与提交拒绝。
-- [ ] 未设置 callback 时，失败仍会累计到状态/最近事件，而不是消失。
-- [ ] callback 自身抛异常不会杀死 worker 或后台线程。
+- [x] 未设置 callback 时，失败仍会累计到状态/最近事件，而不是消失。
+- [x] callback 自身抛异常不会杀死 worker 或后台线程。
 
 ---
 
