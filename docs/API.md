@@ -353,17 +353,18 @@ public:
                                   bool enable_stats = false);
     ~LockFreeTaskExecutor();
 
-    bool start();                                    // 启动消费者线程
-    void stop();                                     // 停止并等待
+    bool start();                                    // 启动消费者线程；stop() 后不可再次启动
+    void stop();                                     // 停止接收新任务、处理已接受任务并等待
     bool is_running() const;                         // 检查运行状态
 
     // 单任务提交（线程安全，支持多生产者并发）
+    // stop() 开始后返回 false；未 start 前仍可用于预填充队列
     bool push_task(std::function<void()> task);
 
     // 批量提交（尽力推送，可能部分成功）
     // tasks: 任务数组指针；count: 数组长度；pushed: 实际入队任务数（输出）
     // 返回值：true = 至少部分入队（pushed 可能 < count，剩余任务需由调用方处理）；
-    //         false = 内部对象池耗尽或队列无可用槽位，没有任务入队，pushed 保持 0
+    //         false = stop() 已开始、内部对象池耗尽或队列无可用槽位，没有任务入队，pushed 保持 0
     bool push_tasks_batch(const std::function<void()>* tasks,
                           size_t count,
                           size_t& pushed);
@@ -390,8 +391,12 @@ public:
 | 时间复杂度 | O(count)，一次性申请所有 TaskWrapper，组装后单次调用 `queue_->push_batch` 完成入队 |
 | 线程安全 | 与 `push_task` 相同，线程安全，可多生产者并发调用 |
 | 部分成功 | 返回 true 时仍可能出现 `pushed < count`：队列剩余空间不足时只会入队前 `pushed` 个任务；未入队的 wrapper 自动回收到对象池，调用方必须检查 `pushed` 并对 `tasks[pushed..]` 重试或丢弃 |
-| 返回 false 时机 | (a) 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；或 (b) 队列满且 `queue_->push_batch` 一次 CAS 也未预留到任何槽位。两种情况下都不会有任务入队 |
+| 返回 false 时机 | (a) `stop()` 已开始，执行器拒绝新任务；(b) 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；或 (c) 队列满且 `queue_->push_batch` 一次 CAS 也未预留到任何槽位。以上情况下都不会有任务入队，`pushed` 为 0 |
 | 批量统计 | 每次成功的 `push_tasks_batch` 调用会令 `get_queue_stats().batch_pushes` 递增 1，`total_pushes` 递增 `pushed`（P-260623-004：与 `queue_->push_batch` 的统计语义一致） |
+
+#### 停止后的提交语义
+
+`LockFreeTaskExecutor` 区分“从未启动”和“已停止”状态：从未调用 `start()` 前仍允许 `push_task()` / `push_tasks_batch()` 预填充队列；一旦 `stop()` 开始，新的提交会被拒绝并返回 `false`。`stop()` 会等待已经进入提交路径的生产者完成，再让消费者线程处理所有已接受任务并退出，因此 `stop()` 返回后不会有静默接受但无人消费的任务残留在队列中。
 
 **典型用法：**
 

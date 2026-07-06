@@ -255,6 +255,89 @@ TEST(LockFreeTaskExecutorTest, StopWithPendingTasks) {
     EXPECT_EQ(exec.processed_count(), 50);
 }
 
+TEST(LockFreeTaskExecutorTest, RejectsPushAfterStop) {
+    LockFreeTaskExecutor exec(128);
+    ASSERT_TRUE(exec.start());
+
+    std::atomic<int> counter{0};
+    for (int i = 0; i < 8; ++i) {
+        ASSERT_TRUE(exec.push_task([&counter] {
+            counter.fetch_add(1, std::memory_order_relaxed);
+        }));
+    }
+
+    exec.stop();
+    const size_t pending_before = exec.pending_count();
+
+    EXPECT_FALSE(exec.push_task([&counter] {
+        counter.fetch_add(1, std::memory_order_relaxed);
+    }));
+    EXPECT_EQ(exec.pending_count(), pending_before);
+
+    std::function<void()> batch[2] = {
+        [&counter] { counter.fetch_add(1, std::memory_order_relaxed); },
+        [&counter] { counter.fetch_add(1, std::memory_order_relaxed); },
+    };
+    size_t pushed = 1;
+    EXPECT_FALSE(exec.push_tasks_batch(batch, 2, pushed));
+    EXPECT_EQ(pushed, 0u);
+    EXPECT_EQ(exec.pending_count(), pending_before);
+}
+
+TEST(LockFreeTaskExecutorTest, ConcurrentStopRejectsLateProducers) {
+    LockFreeTaskExecutor exec(4096);
+    ASSERT_TRUE(exec.start());
+
+    std::atomic<bool> stop_returned{false};
+    std::atomic<int> accepted_before_stop_returned{0};
+    std::atomic<int> accepted_after_stop_returned{0};
+    std::atomic<int> rejected_after_stop_returned{0};
+
+    constexpr int kProducerCount = 8;
+    constexpr int kLateAttemptsPerProducer = 64;
+    std::vector<std::thread> producers;
+    producers.reserve(kProducerCount);
+
+    for (int producer = 0; producer < kProducerCount; ++producer) {
+        producers.emplace_back([&] {
+            while (!stop_returned.load(std::memory_order_acquire)) {
+                const bool accepted = exec.push_task([] {});
+                if (accepted) {
+                    accepted_before_stop_returned.fetch_add(1, std::memory_order_relaxed);
+                }
+                std::this_thread::yield();
+            }
+
+            for (int i = 0; i < kLateAttemptsPerProducer; ++i) {
+                if (exec.push_task([] {})) {
+                    accepted_after_stop_returned.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    rejected_after_stop_returned.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    std::thread stopper([&] {
+        while (accepted_before_stop_returned.load(std::memory_order_acquire) == 0) {
+            std::this_thread::yield();
+        }
+        exec.stop();
+        stop_returned.store(true, std::memory_order_release);
+    });
+
+    for (auto& producer : producers) {
+        producer.join();
+    }
+    stopper.join();
+
+    ASSERT_TRUE(stop_returned.load(std::memory_order_acquire));
+    EXPECT_EQ(accepted_after_stop_returned.load(std::memory_order_relaxed), 0);
+    EXPECT_EQ(rejected_after_stop_returned.load(std::memory_order_relaxed),
+              kProducerCount * kLateAttemptsPerProducer);
+    EXPECT_EQ(exec.pending_count(), 0u);
+}
+
 TEST(LockFreeTaskExecutorTest, BatchExceptionSafety) {
     // The original P-004 design used a custom ThrowOnCopy wrapper that
     // threw from its copy ctor to simulate an exception during

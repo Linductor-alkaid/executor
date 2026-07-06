@@ -2,6 +2,7 @@
 #include "util/lockfree_queue.hpp"
 #include "util/object_pool.hpp"
 #include <chrono>
+#include <thread>
 #include <vector>
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #  if defined(_MSC_VER)
@@ -26,6 +27,10 @@ LockFreeTaskExecutor::~LockFreeTaskExecutor() {
 }
 
 bool LockFreeTaskExecutor::start() {
+    if (stopped_.load(std::memory_order_acquire)) {
+        return false;
+    }
+
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
         return false;
@@ -36,11 +41,12 @@ bool LockFreeTaskExecutor::start() {
 }
 
 void LockFreeTaskExecutor::stop() {
-    if (!running_.exchange(false)) {
-        return;
+    stopped_.store(true, std::memory_order_release);
+    while (active_pushes_.load(std::memory_order_acquire) != 0) {
+        std::this_thread::yield();
     }
 
-    if (worker_.joinable()) {
+    if (running_.exchange(false, std::memory_order_acq_rel) && worker_.joinable()) {
         worker_.join();
     }
 }
@@ -50,8 +56,13 @@ bool LockFreeTaskExecutor::is_running() const {
 }
 
 bool LockFreeTaskExecutor::push_task(std::function<void()> task) {
+    if (!enter_push()) {
+        return false;
+    }
+
     auto* wrapper = task_pool_->acquire();
     if (!wrapper) {
+        leave_push();
         return false;
     }
 
@@ -59,15 +70,23 @@ bool LockFreeTaskExecutor::push_task(std::function<void()> task) {
 
     if (!queue_->push(wrapper)) {
         task_pool_->release(wrapper);
+        leave_push();
         return false;
     }
 
+    leave_push();
     return true;
 }
 
 bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, size_t count, size_t& pushed) {
     pushed = 0;
-    if (count == 0) return true;
+    if (!enter_push()) {
+        return false;
+    }
+    if (count == 0) {
+        leave_push();
+        return true;
+    }
 
     // P-260623-004: rewrite to honour the API.md / lockfree_queue.hpp::push_batch
     // contract. We bulk-acquire wrappers from the object pool, populate them,
@@ -87,6 +106,7 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
             for (size_t j = 0; j < acquired; ++j) {
                 task_pool_->release(ptrs[j]);
             }
+            leave_push();
             return false;
         }
         ptrs[i] = wrapper;
@@ -104,6 +124,7 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
                 task_pool_->release(ptrs[j]);
             }
             // pushed stays 0; nothing reached the queue.
+            leave_push();
             return false;
         }
     }
@@ -132,6 +153,7 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
     // happened). In that case nothing was enqueued; report failure so the
     // caller treats the batch as a no-op, matching the historical contract
     // of "false = nothing got in".
+    leave_push();
     return ok;
 }
 
@@ -174,11 +196,29 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     return result;
 }
 
+bool LockFreeTaskExecutor::enter_push() {
+    if (stopped_.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    active_pushes_.fetch_add(1, std::memory_order_acq_rel);
+    if (stopped_.load(std::memory_order_acquire)) {
+        leave_push();
+        return false;
+    }
+
+    return true;
+}
+
+void LockFreeTaskExecutor::leave_push() {
+    active_pushes_.fetch_sub(1, std::memory_order_acq_rel);
+}
+
 void LockFreeTaskExecutor::worker_thread() {
     constexpr size_t BATCH_SIZE = 32;
     std::vector<TaskWrapper*> batch(BATCH_SIZE);
 
-    while (running_.load(std::memory_order_acquire)) {
+    while (true) {
         size_t popped = queue_->pop_batch(batch.data(), BATCH_SIZE);
 
         if (popped > 0) {
@@ -209,6 +249,10 @@ void LockFreeTaskExecutor::worker_thread() {
             }
             processed_count_.fetch_add(popped, std::memory_order_relaxed);
         } else {
+            if (!running_.load(std::memory_order_acquire)) {
+                break;
+            }
+
             // Hybrid backoff: PAUSE spin → yield → 1µs sleep
             static constexpr uint32_t kPauseSpins  = 32;
             static constexpr uint32_t kSleepThresh = 1000;
