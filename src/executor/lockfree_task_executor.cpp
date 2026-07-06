@@ -166,8 +166,10 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     // P-260618-006: expose the exception count alongside the existing queue
     // stats so monitoring code can correlate exceptions with queue state.
     result.exception_count = exception_count_.load(std::memory_order_relaxed);
-    result.success_rate = raw.total_pushes > 0
-        ? static_cast<double>(raw.total_pushes - raw.failed_pushes) / static_cast<double>(raw.total_pushes)
+    const double total_attempts =
+        static_cast<double>(raw.total_pushes) + static_cast<double>(raw.failed_pushes);
+    result.success_rate = total_attempts > 0.0
+        ? static_cast<double>(raw.total_pushes) / total_attempts
         : 0.0;
     return result;
 }
