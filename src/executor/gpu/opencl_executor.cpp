@@ -467,12 +467,15 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
 
         try {
             auto queue_wrapper = get_queue(config.stream_id);
-            if (queue_wrapper) {
-                std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
-                if (queue_wrapper->queue) {
-                    kernel_func(queue_wrapper->queue);
-                }
+            if (!queue_wrapper) {
+                throw std::runtime_error("OpenCLExecutor: invalid stream_id");
             }
+
+            std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+            if (!queue_wrapper->queue) {
+                throw std::runtime_error("OpenCLExecutor: invalid stream_id");
+            }
+            kernel_func(queue_wrapper->queue);
 
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
@@ -543,7 +546,7 @@ std::shared_ptr<OpenCLExecutor::CommandQueueWrapper> OpenCLExecutor::get_queue(i
     std::lock_guard<std::mutex> lock(queues_mutex_);
 
     if (stream_id < 0 || stream_id >= static_cast<int>(queues_.size())) {
-        return queues_.empty() ? nullptr : queues_[0];
+        return nullptr;
     }
 
     return queues_[stream_id];
