@@ -415,17 +415,15 @@ bool test_realtime_stop_drains_queue() {
     TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks),
                 "stop() should count drained queued tasks as dropped");
 
-    // ObjectPool has exactly queue_capacity slots. Re-enqueuing all of them after
-    // stop() proves the stopped queue was drained and every wrapper was released.
+    // stop() 后不再接受新任务; 失败同样计入 dropped_task_count.
     for (int i = 0; i < num_tasks; ++i) {
-        TEST_ASSERT(executor.push_task_ex([]() {}),
-                    "Task pool slot should be reusable after stop drains the queue");
+        TEST_ASSERT(!executor.push_task_ex([]() {}),
+                    "push_task_ex should reject tasks after stop");
     }
 
-    executor.stop();
     status = executor.get_status();
     TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks * 2),
-                "Repeated stop() should drain and count queued tasks after shutdown");
+                "Rejected post-stop tasks should be counted as dropped");
 
     std::cout << "  Stop drains queue: PASSED (dropped "
               << status.dropped_task_count << " tasks)" << std::endl;
@@ -493,18 +491,146 @@ bool test_realtime_concurrent_stop_does_not_double_release() {
     TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks),
                 "Concurrent stop should drain each queued task exactly once");
 
-    for (int i = 0; i < num_tasks; ++i) {
-        TEST_ASSERT(executor.push_task_ex([]() {}),
-                    "Task pool slot should be reusable after concurrent stop drains the queue");
-    }
-
-    executor.stop();
-    status = executor.get_status();
-    TEST_ASSERT(status.dropped_task_count == static_cast<uint64_t>(num_tasks * 2),
-                "Follow-up stop should drain each post-shutdown task exactly once");
-
     std::cout << "  Concurrent stop does not double-release: PASSED (dropped "
               << status.dropped_task_count << " tasks)" << std::endl;
+    return true;
+}
+
+bool test_realtime_push_after_stop_returns_false_and_counts_drop() {
+    std::cout << "Testing RealtimeThreadExecutor PushAfterStopReturnsFalseAndCountsDrop..." << std::endl;
+
+    std::atomic<int> task_count(0);
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_push_after_stop";
+    config.cycle_period_ns = 5000000;  // 5ms
+    config.thread_priority = 0;
+    config.cycle_callback = []() {};
+
+    RealtimeThreadExecutor executor("test_push_after_stop", config,
+                                    /*enable_stats=*/true,
+                                    /*queue_capacity=*/64);
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+
+    for (int i = 0; i < 8; ++i) {
+        TEST_ASSERT(executor.push_task_ex([&task_count]() {
+                        task_count.fetch_add(1, std::memory_order_relaxed);
+                    }),
+                    "Push while running should succeed");
+    }
+
+    for (int i = 0; i < 100; ++i) {
+        if (task_count.load(std::memory_order_acquire) == 8) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    executor.stop();
+
+    const auto before = executor.get_status();
+    TEST_ASSERT(!before.is_running, "Executor should not be running after stop");
+
+    TEST_ASSERT(!executor.push_task_ex([]() {}),
+                "push_task_ex should return false after stop");
+    executor.push_task([]() {});
+
+    const auto after = executor.get_status();
+    TEST_ASSERT(after.dropped_task_count == before.dropped_task_count + 2,
+                "push_task_ex and push_task should count post-stop rejects as drops");
+
+    std::cout << "  PushAfterStopReturnsFalseAndCountsDrop: PASSED (dropped "
+              << after.dropped_task_count << " tasks)" << std::endl;
+    return true;
+}
+
+bool test_realtime_concurrent_stop_push_no_accepted_orphans() {
+    std::cout << "Testing RealtimeThreadExecutor ConcurrentStopPushNoAcceptedOrphans..." << std::endl;
+
+    constexpr int num_producers = 6;
+    constexpr int attempts_after_stop = 64;
+    std::atomic<int> executed_count(0);
+    std::atomic<int> accepted_before_stop(0);
+    std::atomic<int> rejected_before_stop(0);
+    std::atomic<int> accepted_after_stop(0);
+    std::atomic<int> rejected_after_stop(0);
+    std::atomic<bool> release_producers(false);
+    std::atomic<bool> stop_returned(false);
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_stop_push_race";
+    config.cycle_period_ns = 1000000;  // 1ms
+    config.thread_priority = 0;
+    config.cycle_callback = []() {};
+
+    RealtimeThreadExecutor executor("test_stop_push_race", config,
+                                    /*enable_stats=*/true,
+                                    /*queue_capacity=*/1024);
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+
+    std::vector<std::thread> producers;
+    producers.reserve(num_producers);
+    for (int i = 0; i < num_producers; ++i) {
+        producers.emplace_back([&]() {
+            while (!release_producers.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+
+            while (!stop_returned.load(std::memory_order_acquire)) {
+                const bool accepted = executor.push_task_ex([&executed_count]() {
+                    executed_count.fetch_add(1, std::memory_order_relaxed);
+                });
+                if (accepted) {
+                    accepted_before_stop.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    rejected_before_stop.fetch_add(1, std::memory_order_relaxed);
+                }
+                std::this_thread::yield();
+            }
+
+            for (int j = 0; j < attempts_after_stop; ++j) {
+                const bool accepted = executor.push_task_ex([&executed_count]() {
+                    executed_count.fetch_add(1, std::memory_order_relaxed);
+                });
+                if (accepted) {
+                    accepted_after_stop.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    rejected_after_stop.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    release_producers.store(true, std::memory_order_release);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    executor.stop();
+    stop_returned.store(true, std::memory_order_release);
+
+    for (auto& producer : producers) {
+        producer.join();
+    }
+
+    const auto status = executor.get_status();
+    TEST_ASSERT(!status.is_running, "Executor should remain stopped");
+    TEST_ASSERT(accepted_after_stop.load(std::memory_order_acquire) == 0,
+                "No push after stop() returned should be accepted");
+    TEST_ASSERT(rejected_after_stop.load(std::memory_order_acquire) ==
+                    num_producers * attempts_after_stop,
+                "All pushes after stop() returned should be rejected");
+
+    const int accepted_before = accepted_before_stop.load(std::memory_order_acquire);
+    const int executed = executed_count.load(std::memory_order_acquire);
+    TEST_ASSERT(executed <= accepted_before,
+                "Executed tasks must be a subset of accepted tasks");
+    TEST_ASSERT(status.dropped_task_count >=
+                    static_cast<uint64_t>(rejected_after_stop.load(std::memory_order_acquire)),
+                "Post-stop rejected pushes must be reflected in dropped_task_count");
+
+    std::cout << "  ConcurrentStopPushNoAcceptedOrphans: PASSED"
+              << " (accepted_before=" << accepted_before
+              << ", rejected_before=" << rejected_before_stop.load(std::memory_order_acquire)
+              << ", rejected_after=" << rejected_after_stop.load(std::memory_order_acquire)
+              << ", executed=" << executed
+              << ", dropped=" << status.dropped_task_count << ")" << std::endl;
     return true;
 }
 
@@ -834,6 +960,8 @@ int main() {
     all_passed &= test_realtime_executor_task_order();
     all_passed &= test_realtime_stop_drains_queue();
     all_passed &= test_realtime_concurrent_stop_does_not_double_release();
+    all_passed &= test_realtime_push_after_stop_returns_false_and_counts_drop();
+    all_passed &= test_realtime_concurrent_stop_push_no_accepted_orphans();
     
     // 统计信息测试
     all_passed &= test_realtime_executor_statistics();

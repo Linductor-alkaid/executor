@@ -265,14 +265,13 @@ bool test_realtime_push_overflow_without_stats() {
 bool test_realtime_push_overflow_drops_budget() {
     std::cout << "Testing RealtimeThreadExecutor max_tasks_per_cycle budget (P-260618-002)...\n";
 
-    // 短周期 (5ms), 让测试在 ~200ms 内跑完数十个周期.
-    constexpr int64_t kBudgetPeriodNs = 5'000'000;  // 5ms
+    // 50ms 周期给测试足够窗口在两个周期之间 burst 入队.
+    constexpr int64_t kBudgetPeriodNs = 50'000'000;  // 50ms
 
     RealtimeThreadConfig config;
     config.thread_name = "test_p002_budget";
     config.cycle_period_ns = kBudgetPeriodNs;
     config.thread_priority = 0;
-    // fast noop 回调: 不能阻塞 RT 线程, 否则会触发丢任务路径而非验证预算.
     config.cycle_callback = []() { /* fast noop */ };
     // 小预算: 每周期最多处理 8 个任务.
     config.max_tasks_per_cycle = 8;
@@ -282,9 +281,20 @@ bool test_realtime_push_overflow_drops_budget() {
                                     /*enable_stats=*/true,
                                     /*queue_capacity=*/kCapacity);
 
-    // 启动前一次性灌入大量任务 (远超每周期预算 8). 短周期 + 容量 1024 下,
-    // 成功入队 ~1024 个, 余者被静默丢弃 (P-001 已覆盖丢任务计数, 此处不重复断言).
-    // 灌入后队列持续满载, 每个周期都会正好处理 8 个 → 验证预算对 cycle_time 的约束.
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+    for (int i = 0; i < 200; ++i) {
+        if (executor.get_status().cycle_count > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    TEST_ASSERT(executor.get_status().cycle_count > 0,
+                "Executor should complete the first cycle before bulk push");
+
+    // 启动后趁 RT 线程 sleep 到下一周期前, 一次性灌入大量任务 (远超每周期预算 8).
+    // 短周期 + 容量 1024 下, 成功入队 ~1024 个, 余者被静默丢弃
+    // (P-001 已覆盖丢任务计数, 此处不重复断言). 灌入后队列持续满载,
+    // 每个周期都会正好处理 8 个 → 验证预算对 cycle_time 的约束.
     constexpr int kBulkPushes = 2000;
     int pushed_ok = 0;
     for (int i = 0; i < kBulkPushes; ++i) {
@@ -292,12 +302,10 @@ bool test_realtime_push_overflow_drops_budget() {
             ++pushed_ok;
         }
     }
-    std::cout << "  pre-start pushed_ok=" << pushed_ok << "/" << kBulkPushes << "\n";
+    std::cout << "  running bulk pushed_ok=" << pushed_ok << "/" << kBulkPushes << "\n";
 
-    TEST_ASSERT(executor.start(), "Executor should start successfully");
-
-    // 跑约 200ms (~40 个周期). 期间队列始终非空, 每周期正好处理 8 个 noop 任务.
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // 跑约 300ms (~6 个周期). 期间队列始终非空, 每周期正好处理 8 个 noop 任务.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     auto status = executor.get_status();
     std::cout << "  cycle_count=" << status.cycle_count

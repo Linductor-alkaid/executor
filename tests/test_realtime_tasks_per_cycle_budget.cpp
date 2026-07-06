@@ -6,8 +6,8 @@
 // process_tasks, 故两次 callback 之间的任务增量 == 上一周期 process_tasks 的处理量.
 //
 // test_plan:
-//   - max_tasks_per_cycle = 16, 推 64 个计数任务 (启动前 burst).
-//   - 跑 ~200ms (5ms 周期 → ~40 周期).
+//   - max_tasks_per_cycle = 16, 启动后等首个空周期完成再推 64 个计数任务 (burst).
+//   - 跑 ~300ms (50ms 周期 → ~6 周期).
 //   - 断言: 单周期处理量 <= 16 (无预算旧行为下首周期会一口气处理全部 64 → 失败),
 //           cycle_count >= 2, max_cycle_time_ns <= period*1.2, 全部 64 任务最终执行
 //           (队列清空, 无积压).
@@ -54,7 +54,7 @@ bool test_realtime_tasks_per_cycle_budget() {
 
     constexpr int N = 16;                        // max_tasks_per_cycle
     constexpr int kTotalTasks = 4 * N;           // 64, 远超单周期预算
-    constexpr int64_t kPeriodNs = 5'000'000;     // 5ms
+    constexpr int64_t kPeriodNs = 50'000'000;    // 50ms, leaves room to burst during sleep
     constexpr size_t kCapacity = 1024;
 
     RealtimeThreadConfig config;
@@ -81,20 +81,29 @@ bool test_realtime_tasks_per_cycle_budget() {
                                     /*enable_stats=*/false,
                                     /*queue_capacity=*/kCapacity);
 
-    // 启动前一次性 burst 灌入 kTotalTasks 个计数任务 (容量 1024 >> 64, 全部入队).
+    TEST_ASSERT(executor.start(), "Executor should start successfully");
+    for (int i = 0; i < 200; ++i) {
+        if (executor.get_status().cycle_count > 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    TEST_ASSERT(executor.get_status().cycle_count > 0,
+                "Executor should complete the first cycle before burst push");
+
+    // 启动后趁 RT 线程 sleep 到下一周期前, 一次性 burst 灌入 kTotalTasks 个计数任务
+    // (容量 1024 >> 64, 全部入队). 这避免阻塞 cycle_callback 污染 cycle_time 统计.
     // 每个任务仅自增全局计数 (轻量), 真正要测的是预算对"每周期处理量"的约束.
     for (int i = 0; i < kTotalTasks; ++i) {
         bool ok = executor.push_task_ex([]() {
             g_tasks_executed.fetch_add(1, std::memory_order_relaxed);
         });
-        (void)ok;
+        TEST_ASSERT(ok, "Burst push while running should succeed");
     }
 
-    TEST_ASSERT(executor.start(), "Executor should start successfully");
-
-    // 5ms 周期, 64 任务, 预算 16/周期 → 4 周期 (~20ms) 即可全部清空.
-    // 等 ~200ms 保证完全消费.
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // 50ms 周期, 64 任务, 预算 16/周期 → 4 周期 (~200ms) 即可全部清空.
+    // 等 ~300ms 保证完全消费.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     auto status = executor.get_status();
 
