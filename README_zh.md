@@ -20,7 +20,7 @@
   - **线程池自动 CPU 亲和性**（空 affinity → 自动分配 [0..hw-1]，保留用户覆盖）
   - **实时线程自动 CPU 亲和性**（空 → hw >= 2 时绑核 0，否则不绑；保留用户覆盖）
   - **自适应实时线程优先级**（`thread_priority` = 0 → 自动建议：cycle ≤ 1 ms → 80，≤ 10 ms → 50，> 10 ms → 0）
-  所有自动决策**失败静默**，用户显式设值**始终保留**。
+  自动决策在平台探测或调优不可用时会退到安全默认，用户显式设值**始终保留**。任务失败、提交拒绝、丢任务和超时不属于调优失败，必须通过 future、返回值、状态计数或监控统计保持可观察；用户可以选择不响应，但库不能吞掉。
 
 - **软任务超时（P024）**
   `task_timeout_ms` 是执行前软超时：任务在队列中等待超过配置阈值后，worker 开始执行前会跳过该任务并递增 `timeout_count`。
@@ -29,8 +29,8 @@
 
 - **Linux 实时性加固（P016 + P019-A）**
   `RealtimeThreadConfig` 默认值已改为 opt-out：
-  - `enable_memory_lock`（默认 `true` — `mlockall` 锁定内存避免分页抖动；失败静默）
-  - `timer_slack_ns`（默认 `1` — 1 ns slack 以规避内核 50 µs 默认值；失败静默；`0` 为显式 opt-out）
+  - `enable_memory_lock`（默认 `true` — 尽力调用 `mlockall` 锁定内存避免分页抖动；平台不支持或权限不足时回退，不改变任务状态）
+  - `timer_slack_ns`（默认 `1` — 尽力设置 1 ns slack 以规避内核 50 µs 默认值；平台不支持或权限不足时回退；`0` 为显式 opt-out）
   - `thread_name`（仍为 `""` 默认 — 库不猜测用户业务命名）
   参考示例：`tests/test_realtime_hardening.cpp`
 

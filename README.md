@@ -20,7 +20,7 @@
   - **Auto CPU affinity for thread pool** (empty affinity → auto-allocate [0..hw-1], preserves user override)
   - **Auto CPU affinity for real-time threads** (empty → bind core 0 if hw >= 2, else OS-free; preserves override)
   - **Adaptive real-time thread priority** (`thread_priority` = 0 → auto-recommend 80 if cycle ≤ 1 ms, 50 if ≤ 10 ms, 0 if > 10 ms)
-  All auto-decisions **fail silent** and user-supplied values are **always preserved**.
+  Auto-decisions fall back to safe defaults when platform probing or tuning is unavailable, and user-supplied values are **always preserved**. Task failures, rejected submissions, drops, and timeouts are not considered tuning failures: they must remain observable through futures, return values, status counters, or monitoring statistics.
 
 - **Soft Task Timeout (P024)**
   `task_timeout_ms` is a pre-execution soft timeout: if a queued task has waited longer than the configured timeout before a worker starts it, the task is skipped and `timeout_count` is incremented.
@@ -29,8 +29,8 @@
 
 - **Linux Real-Time Hardening (P016 + P019-A)**
   `RealtimeThreadConfig` defaults are now opt-out:
-  - `enable_memory_lock` (default `true` — `mlockall` to avoid page-fault jitter; failure silent)
-  - `timer_slack_ns` (default `1` — 1 ns slack to avoid kernel's 50 µs default; failure silent; `0` is now explicit opt-out)
+  - `enable_memory_lock` (default `true` — best-effort `mlockall` to avoid page-fault jitter; unsupported or denied calls fall back without changing task status)
+  - `timer_slack_ns` (default `1` — best-effort 1 ns slack to avoid kernel's 50 µs default; unsupported or denied calls fall back; `0` is now explicit opt-out)
   - `thread_name` (still `""` by default — library doesn't guess user business names)
   Reference example: `tests/test_realtime_hardening.cpp`
 

@@ -744,22 +744,23 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
 ## 7. 配置与类型
 
-### 7.0 Facade 哲学：默认即最优
+### 7.0 Facade 哲学：默认即最优，失败可观察
 
 executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 
 1. **默认即最优** — 零配置用户拿到平台/负载下最好的行为
 2. **自动决策** — 库在内部探测环境（`hw_concurrency`、timer slack）选最优路径
-3. **失败静默** — 自动决策失败时退到安全默认，不抛异常，不打 error 日志
-4. **用户覆盖** — 显式设的非默认/非空值永远保留
+3. **自动降级可诊断** — 平台探测或系统级调优不可用时退到安全默认，不把调优失败伪装成任务失败
+4. **任务失败可观察** — 任务异常、提交拒绝、实时队列丢任务、超时等运行时失败必须通过 `future`、返回值、状态计数或监控统计暴露；调用方可以选择不处理，但库不应让失败无迹可寻
+5. **用户覆盖** — 显式设的非默认/非空值永远保留
 
 实现：
 
 - `ThreadPoolConfig.min_threads` / `max_threads` = 0（sentinel，自适应）
 - `ThreadPoolConfig.enable_work_stealing` = `true`（默认开）
 - `ThreadPoolConfig.cpu_affinity` 空 → auto-allocate [0..hw-1]
-- `RealtimeThreadConfig.enable_memory_lock` = `true`（mlockall，失败静默）
-- `RealtimeThreadConfig.timer_slack_ns` = 1（1 ns，失败静默）
+- `RealtimeThreadConfig.enable_memory_lock` = `true`（尽力调用 mlockall；不可用或权限不足时安全回退）
+- `RealtimeThreadConfig.timer_slack_ns` = 1（尽力设置 1 ns；不可用或权限不足时安全回退）
 - `RealtimeThreadConfig.cpu_affinity` 空 → bind core 0（hw >= 2）
 - `RealtimeThreadConfig.thread_priority` = 0 → 自适应按 `cycle_period_ns` 建议
 - `task_timeout_ms > 0`: 软超时 (执行前 skip + 记录 timeout_count, C++ 无安全 kill 机制, 执行中不强制中断)
@@ -792,8 +793,8 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
 | `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |
-| `enable_memory_lock` | `bool` | 是否调用 `mlockall` 锁定内存（避免分页抖动）；默认 `true`（opt-out，失败静默） |
-| `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，失败静默）；`0` = 显式 opt-out 保留内核默认 |
+| `enable_memory_lock` | `bool` | 是否尽力调用 `mlockall` 锁定内存（避免分页抖动）；默认 `true`（opt-out，不可用或权限不足时安全回退） |
+| `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，尽力设置，不可用或权限不足时安全回退）；`0` = 显式 opt-out 保留内核默认 |
 
 ### 7.3 状态与统计类型
 

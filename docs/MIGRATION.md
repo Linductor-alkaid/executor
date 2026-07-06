@@ -10,7 +10,7 @@
 
 ### 默认值变化：默认即最优 Facade
 
-- `RealtimeThreadConfig.enable_memory_lock` 默认 `true`：Linux 下尝试 `mlockall`，降低分页导致的实时抖动；失败静默。
+- `RealtimeThreadConfig.enable_memory_lock` 默认 `true`：Linux 下尽力尝试 `mlockall`，降低分页导致的实时抖动；平台不支持或权限不足时安全回退，不改变任务状态。
 - `RealtimeThreadConfig.timer_slack_ns` 默认 `1`：Linux 下将 timer slack 调到 1 ns；设置为 `0` 表示显式 opt-out。
 - `ThreadPoolConfig.min_threads` / `max_threads` 默认 `0`：作为 sentinel，初始化时自动探测 `hardware_concurrency()`；探测失败退到安全默认。
 - `ThreadPoolConfig.enable_work_stealing` 默认 `true`：`max_threads == 1` 时自动关闭。
@@ -21,6 +21,10 @@
 - `IRealtimeExecutor::push_task_ex(std::function<void()>) -> bool`：背压可见版本的实时任务推送 API。返回 `true` 表示成功入队，返回 `false` 表示任务因空任务、队列满或对象池耗尽被丢弃；`push_task()` 的 `void` 签名保留以保证兼容。
 - `RealtimeExecutorStatus` 新增背压字段：`dropped_task_count`、`failed_pushes`、`peak_queue_size`、`queue_capacity`，用于观察实时任务队列是否出现丢任务。
 - `task_timeout_ms` 软超时：当任务开始执行前发现排队时间 `elapsed >= timeout` 时跳过任务并增加 `timeout_count`。执行中的任务不会被强制中断。
+
+### 失败可观察性约定
+
+Facade 的默认调优可以安全回退，但运行时任务状态不能静默丢失。任务异常、提交拒绝、实时队列丢任务和超时应通过 `future`、返回值、状态计数或监控统计暴露；调用方可以选择不响应这些信号，但库不应让失败无迹可寻。
 
 ### 破坏性变更
 
