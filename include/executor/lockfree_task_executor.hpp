@@ -126,6 +126,8 @@ public:
         // P-260618-006: 暴露异常计数, 与 processed_count() 一起是任务执行
         // 端到端可观测性的两个核心指标.
         uint64_t exception_count;
+        // 成功入队数占全部入队尝试数的比例:
+        // total_pushes / (total_pushes + failed_pushes).
         double success_rate;
     };
     QueueStats get_queue_stats() const;

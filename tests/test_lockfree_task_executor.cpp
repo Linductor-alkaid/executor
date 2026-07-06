@@ -93,6 +93,34 @@ TEST(LockFreeTaskExecutorTest, QueueFull) {
     EXPECT_FALSE(result);
 }
 
+TEST(LockFreeTaskExecutorTest, SuccessRateWithFailedPushes) {
+    LockFreeTaskExecutor exec(/*queue_capacity=*/16,
+                              /*backoff_multiplier=*/1,
+                              /*enable_stats=*/true);
+    // 不启动 worker, 让队列保持满状态并稳定触发失败 push.
+
+    constexpr uint64_t kSuccessfulPushes = 15; // 容量16时保留一个空槽位
+    for (uint64_t i = 0; i < kSuccessfulPushes; ++i) {
+        ASSERT_TRUE(exec.push_task([]() {}));
+    }
+
+    constexpr uint64_t kFailedPushes = kSuccessfulPushes + 1;
+    for (uint64_t i = 0; i < kFailedPushes; ++i) {
+        EXPECT_FALSE(exec.push_task([]() {}));
+    }
+
+    const auto stats = exec.get_queue_stats();
+    ASSERT_EQ(stats.total_pushes, kSuccessfulPushes);
+    ASSERT_GE(stats.failed_pushes, kFailedPushes);
+
+    const double expected_upper_bound =
+        static_cast<double>(stats.total_pushes) /
+        static_cast<double>(stats.total_pushes + stats.failed_pushes);
+    EXPECT_GE(stats.success_rate, 0.0);
+    EXPECT_LE(stats.success_rate, 1.0);
+    EXPECT_LE(stats.success_rate, expected_upper_bound);
+}
+
 TEST(LockFreeTaskExecutorTest, ExceptionHandling) {
     LockFreeTaskExecutor exec(128);
     exec.start();
