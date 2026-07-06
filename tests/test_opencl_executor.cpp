@@ -2,6 +2,7 @@
 #include "executor/gpu/opencl_executor.hpp"
 #include "executor/gpu/opencl_loader.hpp"
 #include <atomic>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -130,6 +131,50 @@ TEST_F(OpenCLExecutorTest, StreamManagement) {
 
     executor_->synchronize_stream(stream_id);
     executor_->destroy_stream(stream_id);
+}
+
+TEST_F(OpenCLExecutorTest, InvalidStreamIdDoesNotFallbackToDefault) {
+    if (!opencl_available_) {
+        GTEST_SKIP() << "OpenCL not available";
+    }
+
+    if (!executor_->start()) {
+        GTEST_SKIP() << "OpenCL start failed";
+    }
+
+    const size_t size = 16 * sizeof(float);
+    std::vector<float> host_data(16, 1.0f);
+    std::vector<float> result_data(16, 0.0f);
+
+    void* device_ptr = executor_->allocate_device_memory(size);
+    ASSERT_NE(device_ptr, nullptr);
+
+    auto expect_invalid_stream = [&](int stream_id) {
+        EXPECT_FALSE(executor_->copy_to_device(device_ptr, host_data.data(), size, false, stream_id))
+            << "stream_id=" << stream_id;
+        EXPECT_FALSE(executor_->copy_to_host(result_data.data(), device_ptr, size, false, stream_id))
+            << "stream_id=" << stream_id;
+
+        GpuTaskConfig config;
+        config.stream_id = stream_id;
+        bool executed = false;
+        auto future = executor_->submit_kernel([&executed](void*) {
+            executed = true;
+        }, config);
+
+        EXPECT_THROW(future.get(), std::runtime_error) << "stream_id=" << stream_id;
+        EXPECT_FALSE(executed) << "stream_id=" << stream_id;
+    };
+
+    expect_invalid_stream(-1);
+    expect_invalid_stream(9999);
+
+    int stream_id = executor_->create_stream();
+    ASSERT_GE(stream_id, 0);
+    executor_->destroy_stream(stream_id);
+    expect_invalid_stream(stream_id);
+
+    executor_->free_device_memory(device_ptr);
 }
 
 TEST_F(OpenCLExecutorTest, DestroyStreamRaceWithSubmit) {
