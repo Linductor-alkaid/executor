@@ -950,8 +950,11 @@ GpuExecutorStatus CudaExecutor::get_status() const {
             if (error == cudaSuccess) {
                 status.memory_total_bytes = total_mem;
                 
-                // 计算已使用内存
-                {
+                // 计算已使用内存。启用内存池时 allocated_memory_ 不记录池分配。
+                if (memory_manager_) {
+                    auto memory_stats = memory_manager_->get_stats();
+                    status.memory_used_bytes = memory_stats.total_allocated;
+                } else {
                     std::lock_guard<std::mutex> lock(memory_mutex_);
                     size_t allocated = 0;
                     for (const auto& [ptr, size] : allocated_memory_) {
