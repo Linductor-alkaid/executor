@@ -9,6 +9,7 @@
 // stale documentation. Also covers P-008 batch performance claim sources.
 
 #include <executor/types.hpp>
+#include "executor/thread_pool/thread_pool.hpp"
 
 #include <gtest/gtest.h>
 
@@ -163,6 +164,17 @@ TEST(ApiDocStatusFields, ApiDocPerformanceClaimsHaveSources) {
         << "docs/API.md should keep measured ratios separate from public guidance";
     EXPECT_NE(api_md.find("16.47x"), std::string::npos)
         << "docs/API.md should preserve the measured 2000-task ratio";
+}
+
+TEST(ApiDocThreadPoolSnippetCompiles, FixedThreadPoolExampleInitializes) {
+    executor::ThreadPoolConfig config;
+    config.min_threads = 16;
+    config.max_threads = 16;
+
+    executor::ThreadPool pool;
+    ASSERT_TRUE(pool.initialize(config));
+
+    pool.shutdown(true);
 }
 
 }  // namespace
