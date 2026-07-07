@@ -295,6 +295,20 @@ void ThreadPool::execute_task(const Task& task) {
     } else {
         // 软超时：跳过执行，记录超时计数
         timeout_count_.fetch_add(1, std::memory_order_relaxed);
+        auto timeout_exception = std::make_exception_ptr(TimedOutException(
+            "Task timed out after " + std::to_string(task.timeout_ms) + "ms"));
+        if (task.on_timeout) {
+            try {
+                task.on_timeout(timeout_exception);
+            } catch (...) {
+                exception_handler_.handle_task_exception(
+                    "ThreadPool::execute_task timeout callback",
+                    std::current_exception());
+            }
+        }
+        if (monitor_ && monitor_->is_enabled()) {
+            monitor_->record_task_timeout(task.task_id);
+        }
         // 标记 timed_out 用于 update_statistics: completed++ 但不 failed++。
         // wait_for_completion() 以 completed 覆盖全部已结束任务，failed 是其子集。
     }
@@ -304,7 +318,7 @@ void ThreadPool::execute_task(const Task& task) {
         end_time - start_time
     ).count();
 
-    if (monitor_ && monitor_->is_enabled()) {
+    if (!timed_out && monitor_ && monitor_->is_enabled()) {
         monitor_->record_task_complete(task.task_id, success, execution_time_ns);
     }
     update_statistics(execution_time_ns, success, timed_out);
@@ -680,10 +694,16 @@ void ThreadPool::create_worker_thread(size_t worker_id) {
 }
 
 bool ThreadPool::try_submit(std::function<void()> task) {
+    return try_submit(std::move(task), {});
+}
+
+bool ThreadPool::try_submit(std::function<void()> task,
+                            std::function<void(std::exception_ptr)> on_timeout) {
     Task executor_task;
     executor_task.task_id = generate_task_id();
     executor_task.priority = TaskPriority::NORMAL;
     executor_task.function = std::move(task);
+    executor_task.on_timeout = std::move(on_timeout);
     executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
@@ -706,6 +726,13 @@ bool ThreadPool::try_submit(std::function<void()> task) {
 }
 
 bool ThreadPool::try_submit_priority(int priority, std::function<void()> task) {
+    return try_submit_priority(priority, std::move(task), {});
+}
+
+bool ThreadPool::try_submit_priority(
+    int priority,
+    std::function<void()> task,
+    std::function<void(std::exception_ptr)> on_timeout) {
     TaskPriority task_priority = TaskPriority::NORMAL;
     if (priority <= 0) {
         task_priority = TaskPriority::LOW;
@@ -721,6 +748,7 @@ bool ThreadPool::try_submit_priority(int priority, std::function<void()> task) {
     executor_task.task_id = generate_task_id();
     executor_task.priority = task_priority;
     executor_task.function = std::move(task);
+    executor_task.on_timeout = std::move(on_timeout);
     executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
@@ -746,6 +774,12 @@ void ThreadPool::submit_batch(std::vector<std::function<void()>> tasks) {
 }
 
 bool ThreadPool::try_submit_batch(std::vector<std::function<void()>> tasks) {
+    return try_submit_batch(std::move(tasks), {});
+}
+
+bool ThreadPool::try_submit_batch(
+    std::vector<std::function<void()>> tasks,
+    std::vector<std::function<void(std::exception_ptr)>> on_timeout_handlers) {
     if (tasks.empty()) {
         return false;
     }
@@ -771,6 +805,9 @@ bool ThreadPool::try_submit_batch(std::vector<std::function<void()>> tasks) {
         executor_task.task_id = std::move(task_ids[i]);
         executor_task.priority = TaskPriority::NORMAL;
         executor_task.function = std::move(tasks[i]);
+        if (i < on_timeout_handlers.size()) {
+            executor_task.on_timeout = std::move(on_timeout_handlers[i]);
+        }
         executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()
         ).count();

@@ -66,6 +66,7 @@ bool WorkerLocalQueue::pop(Task& task) {
     task.task_id = front_task.task_id;
     task.priority = front_task.priority;
     task.function = front_task.function;
+    task.on_timeout = front_task.on_timeout;
     task.submit_time_ns = front_task.submit_time_ns;
     task.timeout_ms = front_task.timeout_ms;
     task.dependencies = front_task.dependencies;
@@ -127,6 +128,7 @@ bool WorkerLocalQueue::steal(Task& task) {
     task.task_id = back_task.task_id;
     task.priority = back_task.priority;
     task.function = back_task.function;
+    task.on_timeout = back_task.on_timeout;
     task.submit_time_ns = back_task.submit_time_ns;
     task.timeout_ms = back_task.timeout_ms;
     task.dependencies = back_task.dependencies;

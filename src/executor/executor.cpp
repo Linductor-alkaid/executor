@@ -376,6 +376,19 @@ void Executor::record_task_exception(const std::string& executor_name,
     record_failure(std::move(event));
 }
 
+void Executor::record_task_timeout(const std::string& executor_name,
+                                   const std::string& task_id,
+                                   const std::string& message,
+                                   std::exception_ptr exception) {
+    ExecutorFailureEvent event;
+    event.kind = FailureKind::TaskTimeout;
+    event.executor_name = executor_name;
+    event.task_id = task_id;
+    event.message = message;
+    event.exception = exception;
+    record_failure(std::move(event));
+}
+
 void Executor::record_periodic_task_success(const std::string& task_id) {
     std::lock_guard<std::mutex> lock(periodic_tasks_mutex_);
     auto it = periodic_tasks_.find(task_id);
@@ -636,7 +649,8 @@ void Executor::timer_thread_func() {
                     continue;
                 }
 
-                if (!executor->try_submit_task(std::move(task.task))) {
+                if (!executor->try_submit_task(
+                        std::move(task.task), std::move(task.on_timeout))) {
                     auto exception = std::make_exception_ptr(std::runtime_error(
                         "Async executor rejected delayed task submission"));
                     if (task.on_rejected) {

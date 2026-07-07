@@ -112,6 +112,7 @@ private:
             task.task_id = t.task_id;
             task.priority = t.priority;
             task.function = t.function;
+            task.on_timeout = t.on_timeout;
             task.submit_time_ns = t.submit_time_ns;
             task.timeout_ms = t.timeout_ms;
             task.dependencies = t.dependencies;
@@ -122,6 +123,7 @@ private:
             task.task_id = other.task.task_id;
             task.priority = other.task.priority;
             task.function = other.task.function;
+            task.on_timeout = other.task.on_timeout;
             task.submit_time_ns = other.task.submit_time_ns;
             task.timeout_ms = other.task.timeout_ms;
             task.dependencies = other.task.dependencies;
@@ -133,6 +135,7 @@ private:
                 task.task_id = other.task.task_id;
                 task.priority = other.task.priority;
                 task.function = other.task.function;
+                task.on_timeout = other.task.on_timeout;
                 task.submit_time_ns = other.task.submit_time_ns;
                 task.timeout_ms = other.task.timeout_ms;
                 task.dependencies = other.task.dependencies;

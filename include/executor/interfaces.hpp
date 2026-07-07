@@ -61,7 +61,14 @@ public:
             }
         };
 
-        if (!try_submit_impl(std::move(task))) {
+        auto on_timeout = [promise, promise_ready](std::exception_ptr exception) {
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(expected, true)) {
+                promise->set_exception(exception);
+            }
+        };
+
+        if (!try_submit_with_timeout_impl(std::move(task), std::move(on_timeout))) {
             bool expected = false;
             if (promise_ready->compare_exchange_strong(expected, true)) {
                 promise->set_exception(std::make_exception_ptr(
@@ -121,6 +128,15 @@ public:
         }
     }
 
+    bool try_submit_task(std::function<void()> task,
+                         std::function<void(std::exception_ptr)> on_timeout) {
+        try {
+            return try_submit_with_timeout_impl(std::move(task), std::move(on_timeout));
+        } catch (...) {
+            return false;
+        }
+    }
+
     /**
      * @brief 提交优先级任务（返回Future）
      *
@@ -159,7 +175,15 @@ public:
             }
         };
 
-        if (!try_submit_priority_impl(priority, std::move(task))) {
+        auto on_timeout = [promise, promise_ready](std::exception_ptr exception) {
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(expected, true)) {
+                promise->set_exception(exception);
+            }
+        };
+
+        if (!try_submit_priority_with_timeout_impl(
+                priority, std::move(task), std::move(on_timeout))) {
             bool expected = false;
             if (promise_ready->compare_exchange_strong(expected, true)) {
                 promise->set_exception(std::make_exception_ptr(
@@ -181,6 +205,18 @@ public:
         }
     }
 
+    bool try_submit_priority_task(
+        int priority,
+        std::function<void()> task,
+        std::function<void(std::exception_ptr)> on_timeout) {
+        try {
+            return try_submit_priority_with_timeout_impl(
+                priority, std::move(task), std::move(on_timeout));
+        } catch (...) {
+            return false;
+        }
+    }
+
     /**
      * @brief 批量提交任务
      *
@@ -193,11 +229,13 @@ public:
     template<typename F>
     std::vector<std::future<void>> submit_batch(const std::vector<F>& tasks) {
         std::vector<std::function<void()>> task_wrappers;
+        std::vector<std::function<void(std::exception_ptr)>> timeout_handlers;
         std::vector<std::future<void>> futures;
         std::vector<std::shared_ptr<std::promise<void>>> promises;
         std::vector<std::shared_ptr<std::atomic_bool>> promise_ready_flags;
 
         task_wrappers.reserve(tasks.size());
+        timeout_handlers.reserve(tasks.size());
         futures.reserve(tasks.size());
         promises.reserve(tasks.size());
         promise_ready_flags.reserve(tasks.size());
@@ -220,10 +258,17 @@ public:
                     throw;
                 }
             });
+            timeout_handlers.push_back([promise, promise_ready](std::exception_ptr exception) {
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(expected, true)) {
+                    promise->set_exception(exception);
+                }
+            });
         }
 
         // 批量提交（减少锁竞争）
-        if (!try_submit_batch_impl(std::move(task_wrappers))) {
+        if (!try_submit_batch_with_timeout_impl(
+                std::move(task_wrappers), std::move(timeout_handlers))) {
             for (size_t i = 0; i < promises.size(); ++i) {
                 bool expected = false;
                 if (promise_ready_flags[i]->compare_exchange_strong(expected, true)) {
@@ -243,6 +288,17 @@ public:
     bool try_submit_batch_tasks(std::vector<std::function<void()>> tasks) {
         try {
             return try_submit_batch_impl(std::move(tasks));
+        } catch (...) {
+            return false;
+        }
+    }
+
+    bool try_submit_batch_tasks(
+        std::vector<std::function<void()>> tasks,
+        std::vector<std::function<void(std::exception_ptr)>> on_timeout_handlers) {
+        try {
+            return try_submit_batch_with_timeout_impl(
+                std::move(tasks), std::move(on_timeout_handlers));
         } catch (...) {
             return false;
         }
@@ -289,6 +345,13 @@ protected:
         }
     }
 
+    virtual bool try_submit_with_timeout_impl(
+        std::function<void()> task,
+        std::function<void(std::exception_ptr)> on_timeout) {
+        (void)on_timeout;
+        return try_submit_impl(std::move(task));
+    }
+
     /**
      * @brief 提交优先级任务实现（内部方法）
      * @param priority 优先级（0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL）
@@ -315,6 +378,14 @@ protected:
         }
     }
 
+    virtual bool try_submit_priority_with_timeout_impl(
+        int priority,
+        std::function<void()> task,
+        std::function<void(std::exception_ptr)> on_timeout) {
+        (void)on_timeout;
+        return try_submit_priority_impl(priority, std::move(task));
+    }
+
     /**
      * @brief 批量提交任务实现（内部方法）
      * @param tasks 任务列表
@@ -334,6 +405,13 @@ protected:
     virtual bool try_submit_batch_impl(std::vector<std::function<void()>> tasks) {
         submit_batch_impl(std::move(tasks));
         return true;
+    }
+
+    virtual bool try_submit_batch_with_timeout_impl(
+        std::vector<std::function<void()>> tasks,
+        std::vector<std::function<void(std::exception_ptr)>> on_timeout_handlers) {
+        (void)on_timeout_handlers;
+        return try_submit_batch_impl(std::move(tasks));
     }
 };
 

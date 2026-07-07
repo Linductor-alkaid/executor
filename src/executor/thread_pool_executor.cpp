@@ -137,6 +137,21 @@ bool ThreadPoolExecutor::try_submit_impl(std::function<void()> task) {
     return thread_pool->try_submit(std::move(task));
 }
 
+bool ThreadPoolExecutor::try_submit_with_timeout_impl(
+    std::function<void()> task,
+    std::function<void(std::exception_ptr)> on_timeout) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        return false;
+    }
+
+    return thread_pool->try_submit(std::move(task), std::move(on_timeout));
+}
+
 void ThreadPoolExecutor::submit_priority_impl(int priority, std::function<void()> task) {
     std::shared_ptr<ThreadPool> thread_pool;
     {
@@ -162,6 +177,23 @@ bool ThreadPoolExecutor::try_submit_priority_impl(int priority, std::function<vo
     }
 
     return thread_pool->try_submit_priority(priority, std::move(task));
+}
+
+bool ThreadPoolExecutor::try_submit_priority_with_timeout_impl(
+    int priority,
+    std::function<void()> task,
+    std::function<void(std::exception_ptr)> on_timeout) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        return false;
+    }
+
+    return thread_pool->try_submit_priority(
+        priority, std::move(task), std::move(on_timeout));
 }
 
 void ThreadPoolExecutor::submit_batch_impl(std::vector<std::function<void()>> tasks) {
@@ -190,6 +222,22 @@ bool ThreadPoolExecutor::try_submit_batch_impl(std::vector<std::function<void()>
 
     // 调用 ThreadPool 的可报告批量提交方法（一次获取锁）
     return thread_pool->try_submit_batch(std::move(tasks));
+}
+
+bool ThreadPoolExecutor::try_submit_batch_with_timeout_impl(
+    std::vector<std::function<void()>> tasks,
+    std::vector<std::function<void(std::exception_ptr)>> on_timeout_handlers) {
+    std::shared_ptr<ThreadPool> thread_pool;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        thread_pool = thread_pool_;
+    }
+    if (!thread_pool) {
+        return false;
+    }
+
+    return thread_pool->try_submit_batch(
+        std::move(tasks), std::move(on_timeout_handlers));
 }
 
 } // namespace executor
