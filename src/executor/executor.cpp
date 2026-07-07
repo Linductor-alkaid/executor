@@ -213,6 +213,46 @@ void Executor::stop_realtime_task(const std::string& name) {
     }
 }
 
+bool Executor::push_realtime_task(const std::string& name, std::function<void()> task) {
+    auto* executor = manager_->get_realtime_executor(name);
+    if (!executor) {
+        record_submit_rejected(
+            name,
+            "facade_push_realtime_task",
+            "Realtime executor not found");
+        return false;
+    }
+
+    const auto before = executor->get_status();
+    const bool accepted = executor->push_task_ex(std::move(task));
+    if (accepted) {
+        return true;
+    }
+
+    const auto after = executor->get_status();
+    std::string message = "Realtime task push rejected";
+    if (after.rejected_not_running_count > before.rejected_not_running_count) {
+        message = "Realtime task push rejected: executor is not running";
+    } else if (after.rejected_empty_task_count > before.rejected_empty_task_count) {
+        message = "Realtime task push rejected: task is empty";
+    } else if (after.pool_exhausted_count > before.pool_exhausted_count) {
+        message = "Realtime task push rejected: task object pool exhausted";
+    } else if (after.queue_full_count > before.queue_full_count ||
+               after.failed_pushes > before.failed_pushes) {
+        message = "Realtime task push rejected: queue is full";
+    }
+
+    record_realtime_drop(
+        executor->get_name(),
+        "facade_push_realtime_task",
+        message);
+    return false;
+}
+
+bool Executor::try_push_realtime_task(const std::string& name, std::function<void()> task) {
+    return push_realtime_task(name, std::move(task));
+}
+
 // 获取实时执行器
 IRealtimeExecutor* Executor::get_realtime_executor(const std::string& name) {
     return manager_->get_realtime_executor(name);
@@ -382,6 +422,19 @@ void Executor::record_task_timeout(const std::string& executor_name,
                                    std::exception_ptr exception) {
     ExecutorFailureEvent event;
     event.kind = FailureKind::TaskTimeout;
+    event.executor_name = executor_name;
+    event.task_id = task_id;
+    event.message = message;
+    event.exception = exception;
+    record_failure(std::move(event));
+}
+
+void Executor::record_realtime_drop(const std::string& executor_name,
+                                    const std::string& task_id,
+                                    const std::string& message,
+                                    std::exception_ptr exception) {
+    ExecutorFailureEvent event;
+    event.kind = FailureKind::RealtimeDrop;
     event.executor_name = executor_name;
     event.task_id = task_id;
     event.message = message;

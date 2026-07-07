@@ -40,8 +40,8 @@
 - **批量任务提交**
   `submit_batch()` 和 `submit_batch_no_future()` 高效提交大量任务，单线程场景性能提升 **3-5x**（500-2000 个任务）
 
-- **push_task 背压计数器（P-001）**
-  实时执行器提供 `push_task_ex()` 以及 `dropped_task_count` 等状态计数器，可观察队列满或对象池耗尽导致的丢任务，同时保留既有 `push_task()` API 兼容。
+- **实时 facade 推送与背压计数器**
+  新代码优先使用 `Executor::push_realtime_task()` / `try_push_realtime_task()` 推送实时任务，无需接触 `IRealtimeExecutor*`。失败会返回 `false`，并进入 failure event 及 `dropped_task_count`、`queue_full_count`、`pool_exhausted_count` 等状态计数；既有 `push_task()` API 继续兼容。
 
 - **可选 GPU（CUDA/OpenCL）**
   GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端

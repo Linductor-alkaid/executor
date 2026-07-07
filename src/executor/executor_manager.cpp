@@ -184,8 +184,10 @@ std::unique_ptr<IRealtimeExecutor> ExecutorManager::create_realtime_executor(
     }
 
     try {
-        // 创建 RealtimeThreadExecutor 实例
-        auto executor = std::make_unique<RealtimeThreadExecutor>(name, config);
+        // Facade users should get queue-full diagnostics without knowing the
+        // lower-level constructor knobs.
+        auto executor = std::make_unique<RealtimeThreadExecutor>(
+            name, config, /*enable_stats=*/true);
         return executor;
     } catch (const std::exception&) {
         // 创建失败（如配置无效），返回 nullptr

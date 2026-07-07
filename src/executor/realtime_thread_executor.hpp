@@ -188,8 +188,12 @@ private:
     std::atomic<int64_t> max_cycle_time_ns_{0};     // 最大周期执行时间（纳秒）
 
     // P-001 (260615): 背压可见性 — 始终累计, 与 enable_stats 无关.
-    // 未运行 / 队列满 / 对象池耗尽 任一路径触发 drop 时 +1.
+    // 未运行 / 空任务 / 队列满 / 对象池耗尽 任一路径触发 drop 时 +1.
     std::atomic<uint64_t> dropped_task_count_{0};
+    std::atomic<uint64_t> rejected_not_running_count_{0};
+    std::atomic<uint64_t> rejected_empty_task_count_{0};
+    std::atomic<uint64_t> pool_exhausted_count_{0};
+    std::atomic<uint64_t> queue_full_count_{0};
     // P-001 (260615): 构造时指定的统计开关, push_task() 路径不依赖此开关.
     const bool enable_stats_;
     

@@ -40,8 +40,8 @@
 - **Batch Task Submission**
   `submit_batch()` and `submit_batch_no_future()` efficiently submit large numbers of tasks. Public guidance stays conservative at **3–5x** throughput improvement for single-threaded scenarios (500–2000 tasks); source: [docs/performance/lockfree_task_executor_baseline.md](docs/performance/lockfree_task_executor_baseline.md) and [docs/performance/batch_submit_baseline_2026-03-13.json](docs/performance/batch_submit_baseline_2026-03-13.json), benchmark command `JOBS=16 cmake --build build -j16 --target benchmark_batch_submit_real benchmark_batch_submit_concurrent && ./build/tests/benchmark_batch_submit_real && ./build/tests/benchmark_batch_submit_concurrent`, date 2026-03-13.
 
-- **Push-Task Backpressure Counter (P-001)**
-  Real-time executors expose `push_task_ex()` and status counters such as `dropped_task_count`, making queue-full and object-pool-exhaustion drops observable without breaking the existing `push_task()` API.
+- **Real-Time Facade Push and Backpressure Counters**
+  Use `Executor::push_realtime_task()` / `try_push_realtime_task()` to push real-time work without touching `IRealtimeExecutor*`. Failures return `false` and are observable via failure events plus counters such as `dropped_task_count`, `queue_full_count`, and `pool_exhausted_count`; the existing `push_task()` API remains compatible.
 
 - **Optional GPU (CUDA/OpenCL)**
   GPU executor interface with CUDA/OpenCL implementations: kernel submission, device memory and stream management, multi-device, memory pool, monitoring. Runtime dynamic loading with safe graceful degradation when no GPU is available. Device query API automatically recommends the best backend.

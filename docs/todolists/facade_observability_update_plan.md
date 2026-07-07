@@ -19,7 +19,7 @@
 - [ ] `submit_periodic()` 丢弃 future，周期任务异常可能无可见出口。
 - [ ] `Executor` facade 尚无统一失败回调 / 最近错误 / 失败事件查询入口。
 - [ ] 多个注册/初始化 API 仍只返回 `bool`，失败原因不可诊断。
-- [ ] 实时任务推送仍要求用户先拿底层 `IRealtimeExecutor*`，facade 完整度不足。
+- [x] 实时任务推送仍要求用户先拿底层 `IRealtimeExecutor*`，facade 完整度不足。
 - [ ] `wait_for_completion()` 超时返回不可区分，调用方无法知道是否真的完成。
 
 ---
@@ -135,18 +135,18 @@
 
 ### 任务
 
-- [ ] 在 `Executor` facade 增加：
+- [x] 在 `Executor` facade 增加：
   - `bool push_realtime_task(const std::string& name, std::function<void()> task)`
   - `bool try_push_realtime_task(...)`
   - 可选 `submit_realtime_task(...)` 命名别名，需避免与普通 `submit` 混淆。
-- [ ] facade push 失败时统一记录 `RealtimeDrop` 或 `SubmitRejected` 事件：
+- [x] facade push 失败时统一记录 `RealtimeDrop` 或 `SubmitRejected` 事件：
   - 实时 executor 不存在
   - 未启动
   - 空任务
   - 队列满
   - 对象池耗尽
-- [ ] 保留 `get_realtime_executor()` 作为高级逃生口，但 README/API 示例优先使用 facade push。
-- [ ] `RealtimeExecutorStatus` 可选新增：
+- [x] 保留 `get_realtime_executor()` 作为高级逃生口，但 README/API 示例优先使用 facade push。
+- [x] `RealtimeExecutorStatus` 可选新增：
   - `rejected_not_running_count`
   - `rejected_empty_task_count`
   - `pool_exhausted_count`
@@ -155,9 +155,9 @@
 
 ### 验收
 
-- [ ] 不接触 `IRealtimeExecutor*`，用户即可注册、启动、推送、观察实时任务。
-- [ ] facade push 失败同时通过返回值和状态计数可见。
-- [ ] 旧 `push_task()` 仍兼容，但文档标注为兼容入口，推荐新代码使用 facade/`push_task_ex()`。
+- [x] 不接触 `IRealtimeExecutor*`，用户即可注册、启动、推送、观察实时任务。
+- [x] facade push 失败同时通过返回值和状态计数可见。
+- [x] 旧 `push_task()` 仍兼容，但文档标注为兼容入口，推荐新代码使用 facade/`push_task_ex()`。
 
 ---
 
@@ -262,11 +262,11 @@
   - [x] 周期任务抛异常后无 future 也可观察。
   - [x] 连续失败计数和最后错误可查询。
   - [x] cancel 不存在任务返回 false 且可诊断。
-- [ ] `test_realtime_facade_push.cpp`
-  - [ ] facade 推送成功。
-  - [ ] 不存在 RT executor 推送失败可见。
-  - [ ] 未启动 / 已停止推送失败可见。
-  - [ ] 队列满 / 池耗尽推送失败可见。
+- [x] `test_realtime_facade_push.cpp`
+  - [x] facade 推送成功。
+  - [x] 不存在 RT executor 推送失败可见。
+  - [x] 未启动 / 已停止推送失败可见。
+  - [x] 队列满 / 池耗尽推送失败可见。
 - [ ] `test_executor_result_diagnostics.cpp`
   - [ ] 初始化重复。
   - [ ] shutdown 后初始化/提交。

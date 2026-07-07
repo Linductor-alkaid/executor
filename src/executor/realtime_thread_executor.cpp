@@ -179,6 +179,7 @@ void RealtimeThreadExecutor::drain_stopped_queue() {
     }
     if (drained_count > 0) {
         dropped_task_count_.fetch_add(drained_count, std::memory_order_relaxed);
+        rejected_not_running_count_.fetch_add(drained_count, std::memory_order_relaxed);
     }
 }
 
@@ -200,6 +201,7 @@ bool RealtimeThreadExecutor::push_task_ex(std::function<void()> task) {
     // 此计数器独立于 enable_stats, 是背压可见性的核心契约.
     if (!task) {
         dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
+        rejected_empty_task_count_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -216,6 +218,7 @@ bool RealtimeThreadExecutor::push_task_ex(std::function<void()> task) {
 
     if (!running_.load(std::memory_order_acquire)) {
         dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
+        rejected_not_running_count_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -224,6 +227,7 @@ bool RealtimeThreadExecutor::push_task_ex(std::function<void()> task) {
     if (!task_wrapper) {
         // 对象池耗尽: 任务被静默丢弃
         dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
+        pool_exhausted_count_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     task_wrapper->func = std::move(task);
@@ -233,6 +237,7 @@ bool RealtimeThreadExecutor::push_task_ex(std::function<void()> task) {
         // 队列满: 释放回对象池, 任务被静默丢弃
         task_pool_.release(task_wrapper);
         dropped_task_count_.fetch_add(1, std::memory_order_relaxed);
+        queue_full_count_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     return true;
@@ -394,6 +399,12 @@ RealtimeExecutorStatus RealtimeThreadExecutor::get_status() const {
     status.max_cycle_time_ns = static_cast<double>(max_cycle_time_ns_.load(std::memory_order_acquire));
     // P-001 (260615): 背压可见性
     status.dropped_task_count = dropped_task_count_.load(std::memory_order_acquire);
+    status.rejected_not_running_count =
+        rejected_not_running_count_.load(std::memory_order_acquire);
+    status.rejected_empty_task_count =
+        rejected_empty_task_count_.load(std::memory_order_acquire);
+    status.pool_exhausted_count = pool_exhausted_count_.load(std::memory_order_acquire);
+    status.queue_full_count = queue_full_count_.load(std::memory_order_acquire);
     // failed_pushes / peak_queue_size 仅在 enable_stats=true 时有意义;
     // LockFreeQueue 内部在 stats 关闭时 get_stats() 返回零结构.
     if (enable_stats_) {

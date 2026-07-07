@@ -257,6 +257,18 @@ public:
     void stop_realtime_task(const std::string& name);
 
     /**
+     * @brief 通过 facade 推送任务到指定实时执行器
+     *
+     * 失败会同时通过返回值、RealtimeExecutorStatus 计数和 facade failure event 可见。
+     */
+    bool push_realtime_task(const std::string& name, std::function<void()> task);
+
+    /**
+     * @brief push_realtime_task 的显式 try 命名别名
+     */
+    bool try_push_realtime_task(const std::string& name, std::function<void()> task);
+
+    /**
      * @brief 获取实时执行器
      * 
      * @param name 执行器名称
@@ -483,6 +495,11 @@ private:
                              const std::string& task_id,
                              const std::string& message,
                              std::exception_ptr exception);
+
+    void record_realtime_drop(const std::string& executor_name,
+                              const std::string& task_id,
+                              const std::string& message,
+                              std::exception_ptr exception = nullptr);
 
     void record_periodic_task_success(const std::string& task_id);
 

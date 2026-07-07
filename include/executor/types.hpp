@@ -121,7 +121,8 @@ struct AsyncExecutorStatus {
  *
  * P-001 (260615): 新增 dropped_task_count / failed_pushes / peak_queue_size /
  * queue_capacity 字段，承载背压下静默丢任务的可见性。
- * - dropped_task_count:  push_task() 因 队列满 或 对象池耗尽 而被丢弃的累计数
+ * - dropped_task_count:  push_task() 因 未运行、空任务、队列满 或 对象池耗尽
+ *                       而被丢弃的累计数
  *                       (即使 enable_stats=false 也会累计, 是背压可见性的核心指标)
  * - failed_pushes:       仅 enable_stats=true 时由 LockFreeQueue 统计的入队失败数
  *                       (== 队列满 触发的丢弃, 与 dropped_task_count 的子集)
@@ -137,10 +138,14 @@ struct RealtimeExecutorStatus {
     double avg_cycle_time_ns = 0.0;                // 平均周期执行时间（纳秒）
     double max_cycle_time_ns = 0.0;               // 最大周期执行时间（纳秒）
     // P-001 (260615): 背压可见性字段
-    uint64_t dropped_task_count = 0;              // 累计丢任务数 (队列满+池耗尽, 始终累计)
+    uint64_t dropped_task_count = 0;              // 累计丢任务数 (未运行+空任务+队列满+池耗尽, 始终累计)
     uint64_t failed_pushes = 0;                   // LockFreeQueue 失败入队数 (仅 enable_stats=true)
     uint64_t peak_queue_size = 0;                 // 队列峰值 (仅 enable_stats=true)
     uint64_t queue_capacity = 0;                  // 队列固定容量
+    uint64_t rejected_not_running_count = 0;      // 未运行/已停止时拒绝的累计数
+    uint64_t rejected_empty_task_count = 0;       // 空任务拒绝累计数
+    uint64_t pool_exhausted_count = 0;            // 对象池耗尽拒绝累计数
+    uint64_t queue_full_count = 0;                // 队列满拒绝累计数
 };
 
 /**
