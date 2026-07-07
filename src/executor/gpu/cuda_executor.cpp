@@ -91,14 +91,13 @@ CudaExecutor::~CudaExecutor() {
         }
 
         // 销毁所有流（除了默认流）
+        std::vector<std::shared_ptr<StreamWrapper>> detached_streams;
         {
             std::lock_guard<std::mutex> lock(streams_mutex_);
-            for (auto stream : streams_) {
-                if (stream != nullptr && funcs.cudaStreamDestroy != nullptr) {
-                    funcs.cudaStreamDestroy(stream);
-                }
-            }
-            streams_.clear();
+            detached_streams.swap(streams_);
+        }
+        for (auto& stream_wrapper : detached_streams) {
+            destroy_stream_wrapper(stream_wrapper);
         }
     }
 #endif
@@ -263,22 +262,34 @@ bool CudaExecutor::start() {
         return false;
     }
 
+    bool needs_default_streams = false;
     {
         std::lock_guard<std::mutex> lock(streams_mutex_);
-        if (streams_.empty() && config_.default_stream_count > 0) {
-            for (int i = 0; i < config_.default_stream_count; ++i) {
-                cudaStream_t s = create_one_stream();
-                if (s == nullptr) {
-                    for (cudaStream_t t : streams_) {
-                        if (t != nullptr) {
-                            funcs.cudaStreamDestroy(t);
-                        }
-                    }
-                    streams_.clear();
-                    is_running_.store(false);
-                    return false;
+        needs_default_streams = streams_.empty() && config_.default_stream_count > 0;
+    }
+
+    if (needs_default_streams) {
+        std::vector<std::shared_ptr<StreamWrapper>> created_streams;
+        for (int i = 0; i < config_.default_stream_count; ++i) {
+            cudaStream_t s = create_one_stream();
+            if (s == nullptr) {
+                for (auto& stream_wrapper : created_streams) {
+                    destroy_stream_wrapper(stream_wrapper);
                 }
-                streams_.push_back(s);
+                is_running_.store(false);
+                return false;
+            }
+            auto stream_wrapper = std::make_shared<StreamWrapper>();
+            stream_wrapper->stream = s;
+            created_streams.push_back(std::move(stream_wrapper));
+        }
+
+        std::lock_guard<std::mutex> lock(streams_mutex_);
+        if (streams_.empty()) {
+            streams_ = std::move(created_streams);
+        } else {
+            for (auto& stream_wrapper : created_streams) {
+                destroy_stream_wrapper(stream_wrapper);
             }
         }
     }
@@ -539,13 +550,19 @@ bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, 
         return false;  // 不支持内存预取
     }
 
-    cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
-    if (stream_id != 0 && stream == nullptr) {
-        return false;  // 无效 stream_id
+    if (stream_id == 0) {
+        cudaError_t error = funcs.cudaMemPrefetchAsync(ptr, size, device_id, get_default_stream());
+        return check_cuda_error(error, "cudaMemPrefetchAsync");
     }
 
-    cudaError_t error = funcs.cudaMemPrefetchAsync(ptr, size, device_id, stream);
-    return check_cuda_error(error, "cudaMemPrefetchAsync");
+    auto stream_wrapper = get_stream(stream_id);
+    if (!stream_wrapper) {
+        return false;  // 无效 stream_id
+    }
+    return call_stream(stream_wrapper, "cudaMemPrefetchAsync",
+        [&](cudaStream_t stream) {
+            return funcs.cudaMemPrefetchAsync(ptr, size, device_id, stream);
+        });
 #else
     (void)ptr;
     (void)size;
@@ -566,15 +583,25 @@ bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool 
     }
     auto funcs = loader_->get_functions();
     cudaError_t error;
+    std::shared_ptr<StreamWrapper> stream_wrapper;
+    if (stream_id != 0) {
+        stream_wrapper = get_stream(stream_id);
+        if (!stream_wrapper || !validate_stream(stream_wrapper)) {
+            return false;  // 无效或已销毁 stream_id
+        }
+    }
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
             return false;
         }
-        cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
-        if (stream_id != 0 && stream == nullptr) {
-            return false;  // 无效 stream_id
+        if (stream_id == 0) {
+            error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, get_default_stream());
+            return check_cuda_error(error, "cudaMemcpyAsync (H2D)");
         }
-        error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream);
+        return call_stream(stream_wrapper, "cudaMemcpyAsync (H2D)",
+            [&](cudaStream_t stream) {
+                return funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream);
+            });
     } else {
         if (funcs.cudaMemcpy == nullptr) {
             return false;
@@ -603,15 +630,25 @@ bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool as
     }
     auto funcs = loader_->get_functions();
     cudaError_t error;
+    std::shared_ptr<StreamWrapper> stream_wrapper;
+    if (stream_id != 0) {
+        stream_wrapper = get_stream(stream_id);
+        if (!stream_wrapper || !validate_stream(stream_wrapper)) {
+            return false;  // 无效或已销毁 stream_id
+        }
+    }
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
             return false;
         }
-        cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
-        if (stream_id != 0 && stream == nullptr) {
-            return false;  // 无效 stream_id
+        if (stream_id == 0) {
+            error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost, get_default_stream());
+            return check_cuda_error(error, "cudaMemcpyAsync (D2H)");
         }
-        error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost, stream);
+        return call_stream(stream_wrapper, "cudaMemcpyAsync (D2H)",
+            [&](cudaStream_t stream) {
+                return funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToHost, stream);
+            });
     } else {
         if (funcs.cudaMemcpy == nullptr) {
             return false;
@@ -640,15 +677,25 @@ bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size
     }
     auto funcs = loader_->get_functions();
     cudaError_t error;
+    std::shared_ptr<StreamWrapper> stream_wrapper;
+    if (stream_id != 0) {
+        stream_wrapper = get_stream(stream_id);
+        if (!stream_wrapper || !validate_stream(stream_wrapper)) {
+            return false;  // 无效或已销毁 stream_id
+        }
+    }
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
             return false;
         }
-        cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
-        if (stream_id != 0 && stream == nullptr) {
-            return false;  // 无效 stream_id
+        if (stream_id == 0) {
+            error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToDevice, get_default_stream());
+            return check_cuda_error(error, "cudaMemcpyAsync (D2D)");
         }
-        error = funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToDevice, stream);
+        return call_stream(stream_wrapper, "cudaMemcpyAsync (D2D)",
+            [&](cudaStream_t stream) {
+                return funcs.cudaMemcpyAsync(dst, src, size, cudaMemcpyDeviceToDevice, stream);
+            });
     } else {
         if (funcs.cudaMemcpy == nullptr) {
             return false;
@@ -722,13 +769,32 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
             std::fprintf(stderr, "P2P copy_from_peer failed: cudaMemcpyPeerAsync not available\n");
             return false;
         }
-        cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
-        if (stream_id != 0 && stream == nullptr) {
-            std::fprintf(stderr, "P2P copy_from_peer failed: invalid stream_id %d\n", stream_id);
-            return false;
+        if (stream_id == 0) {
+            err = funcs.cudaMemcpyPeerAsync(dst_ptr, dst_device, src_ptr, src_device, size, get_default_stream());
+        } else {
+            auto stream_wrapper = get_stream(stream_id);
+            if (!stream_wrapper) {
+                std::fprintf(stderr, "P2P copy_from_peer failed: invalid stream_id %d\n", stream_id);
+                return false;
+            }
+            bool submitted = call_stream(stream_wrapper, "cudaMemcpyPeerAsync",
+                [&](cudaStream_t stream) {
+                    return funcs.cudaMemcpyPeerAsync(dst_ptr, dst_device, src_ptr, src_device, size, stream);
+                });
+            if (!submitted) {
+                std::fprintf(stderr, "P2P copy_from_peer failed: stream_id %d is invalid or destroyed\n", stream_id);
+                return false;
+            }
+            return true;
         }
-        err = funcs.cudaMemcpyPeerAsync(dst_ptr, dst_device, src_ptr, src_device, size, stream);
     } else {
+        if (stream_id != 0) {
+            auto stream_wrapper = get_stream(stream_id);
+            if (!stream_wrapper || !validate_stream(stream_wrapper)) {
+                std::fprintf(stderr, "P2P copy_from_peer failed: invalid stream_id %d\n", stream_id);
+                return false;
+            }
+        }
         if (funcs.cudaMemcpyPeer == nullptr) {
             std::fprintf(stderr, "P2P copy_from_peer failed: cudaMemcpyPeer not available\n");
             return false;
@@ -761,15 +827,30 @@ bool CudaExecutor::add_stream_callback(int stream_id, std::function<void()> call
     if (funcs.cudaLaunchHostFunc == nullptr) {
         return false;
     }
-    cudaStream_t stream = (stream_id == 0) ? get_default_stream() : get_stream(stream_id);
-    if (stream_id != 0 && stream == nullptr) {
-        return false;  // 无效 stream_id
-    }
     StreamCallbackContext* ctx = new (std::nothrow) StreamCallbackContext{std::move(callback)};
     if (ctx == nullptr) {
         return false;
     }
-    cudaError_t error = funcs.cudaLaunchHostFunc(stream, &stream_host_callback, ctx);
+
+    cudaError_t error;
+    bool submitted = false;
+    if (stream_id == 0) {
+        error = funcs.cudaLaunchHostFunc(get_default_stream(), &stream_host_callback, ctx);
+        submitted = true;
+    } else {
+        auto stream_wrapper = get_stream(stream_id);
+        if (stream_wrapper) {
+            submitted = call_stream(stream_wrapper, "cudaLaunchHostFunc",
+                [&](cudaStream_t stream) {
+                    error = funcs.cudaLaunchHostFunc(stream, &stream_host_callback, ctx);
+                    return error;
+                });
+        }
+    }
+    if (!submitted) {
+        delete ctx;
+        return false;
+    }
     if (!check_cuda_error(error, "cudaLaunchHostFunc")) {
         delete ctx;
         return false;
@@ -819,13 +900,12 @@ void CudaExecutor::synchronize_stream(int stream_id) {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(streams_mutex_);
-    if (stream_id > 0 && static_cast<size_t>(stream_id) <= streams_.size()) {
-        cudaStream_t stream = streams_[stream_id - 1];
-        if (stream != nullptr) {
-            cudaError_t error = funcs.cudaStreamSynchronize(stream);
-            check_cuda_error(error, "cudaStreamSynchronize");
-        }
+    auto stream_wrapper = get_stream(stream_id);
+    if (stream_wrapper) {
+        (void)call_stream(stream_wrapper, "cudaStreamSynchronize",
+            [&](cudaStream_t stream) {
+                return funcs.cudaStreamSynchronize(stream);
+            });
     }
 #else
     (void)stream_id;
@@ -842,9 +922,17 @@ int CudaExecutor::create_stream() {
     if (stream == nullptr) {
         return -1;
     }
+    auto stream_wrapper = std::make_shared<StreamWrapper>();
+    stream_wrapper->stream = stream;
 
     std::lock_guard<std::mutex> lock(streams_mutex_);
-    streams_.push_back(stream);
+    for (size_t i = 0; i < streams_.size(); ++i) {
+        if (!streams_[i]) {
+            streams_[i] = std::move(stream_wrapper);
+            return static_cast<int>(i + 1);
+        }
+    }
+    streams_.push_back(std::move(stream_wrapper));
     // 返回流ID（从1开始，0是默认流）
     return static_cast<int>(streams_.size());
 #else
@@ -861,19 +949,17 @@ void CudaExecutor::destroy_stream(int stream_id) {
     if (!ensure_device_context()) {
         return;
     }
-    auto funcs = loader_->get_functions();
-    if (funcs.cudaStreamDestroy == nullptr) {
-        return;
-    }
 
-    std::lock_guard<std::mutex> lock(streams_mutex_);
-    if (static_cast<size_t>(stream_id) <= streams_.size()) {
-        cudaStream_t stream = streams_[stream_id - 1];
-        if (stream != nullptr) {
-            funcs.cudaStreamDestroy(stream);
-            streams_[stream_id - 1] = nullptr;
+    std::shared_ptr<StreamWrapper> stream_wrapper;
+    {
+        std::lock_guard<std::mutex> lock(streams_mutex_);
+        if (static_cast<size_t>(stream_id) <= streams_.size()) {
+            stream_wrapper = std::move(streams_[stream_id - 1]);
+            streams_[stream_id - 1].reset();
         }
     }
+
+    destroy_stream_wrapper(stream_wrapper);
 #else
     (void)stream_id;
 #endif
@@ -983,7 +1069,7 @@ GpuExecutorStatus CudaExecutor::get_status() const {
 }
 
 void CudaExecutor::worker_thread_func() {
-#ifdef EXECUTOR_ENABLE_CUDA
+    #ifdef EXECUTOR_ENABLE_CUDA
     while (true) {
         GpuQueuedTask task;
         {
@@ -1020,10 +1106,6 @@ void CudaExecutor::run_one_task(GpuQueuedTask& task) {
 #ifdef EXECUTOR_ENABLE_CUDA
     auto start_time = std::chrono::high_resolution_clock::now();
     void* stream_ptr = nullptr;
-    if (loader_->is_available()) {
-        cudaStream_t s = get_stream(task.config.stream_id);
-        stream_ptr = static_cast<void*>(s);
-    }
     try {
         if (!ensure_device_context()) {
             auto eptr = std::make_exception_ptr(
@@ -1033,9 +1115,11 @@ void CudaExecutor::run_one_task(GpuQueuedTask& task) {
             failed_kernels_++;
             return;
         }
-        task.kernel_func(stream_ptr);
-        if (loader_->is_available()) {
-            auto funcs = loader_->get_functions();
+
+        auto funcs = loader_->get_functions();
+        auto execute_kernel = [&](cudaStream_t stream) {
+            stream_ptr = static_cast<void*>(stream);
+            task.kernel_func(stream_ptr);
             if (funcs.cudaGetLastError != nullptr) {
                 cudaError_t err = funcs.cudaGetLastError();
                 if (err != cudaSuccess) {
@@ -1043,11 +1127,53 @@ void CudaExecutor::run_one_task(GpuQueuedTask& task) {
                     exception_handler_.handle_task_exception(name_, eptr);
                     if (task.promise) task.promise->set_exception(eptr);
                     failed_kernels_++;
-                    return;
+                    return false;
                 }
             }
-            if (!task.config.async) {
-                synchronize_stream(task.config.stream_id);
+            if (!task.config.async && funcs.cudaStreamSynchronize != nullptr && stream != nullptr) {
+                cudaError_t err = funcs.cudaStreamSynchronize(stream);
+                if (!check_cuda_error(err, "cudaStreamSynchronize")) {
+                    std::exception_ptr eptr = make_cuda_exception_ptr(err, "cudaStreamSynchronize");
+                    exception_handler_.handle_task_exception(name_, eptr);
+                    if (task.promise) task.promise->set_exception(eptr);
+                    failed_kernels_++;
+                    return false;
+                }
+            } else if (!task.config.async && stream == nullptr) {
+                synchronize();
+            }
+            return true;
+        };
+
+        if (task.config.stream_id == 0) {
+            if (!execute_kernel(get_default_stream())) {
+                return;
+            }
+        } else {
+            if (!task.stream) {
+                auto eptr = make_invalid_stream_exception_ptr(task.config.stream_id);
+                exception_handler_.handle_task_exception(name_, eptr);
+                if (task.promise) task.promise->set_exception(eptr);
+                failed_kernels_++;
+                return;
+            }
+            if (task.stream->destroyed.load(std::memory_order_acquire)) {
+                auto eptr = make_invalid_stream_exception_ptr(task.config.stream_id);
+                exception_handler_.handle_task_exception(name_, eptr);
+                if (task.promise) task.promise->set_exception(eptr);
+                failed_kernels_++;
+                return;
+            }
+            std::lock_guard<std::mutex> stream_lock(task.stream->mutex);
+            if (task.stream->destroyed.load(std::memory_order_acquire) || task.stream->stream == nullptr) {
+                auto eptr = make_invalid_stream_exception_ptr(task.config.stream_id);
+                exception_handler_.handle_task_exception(name_, eptr);
+                if (task.promise) task.promise->set_exception(eptr);
+                failed_kernels_++;
+                return;
+            }
+            if (!execute_kernel(task.stream->stream)) {
+                return;
             }
         }
         if (task.promise) task.promise->set_value();
@@ -1087,6 +1213,13 @@ std::future<void> CudaExecutor::submit_kernel_impl(
     if (task.config.priority > 3) task.config.priority = 3;
     task.promise = promise;
     task.submit_time_ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    if (task.config.stream_id != 0) {
+        task.stream = get_stream(task.config.stream_id);
+        if (!task.stream || !validate_stream(task.stream)) {
+            promise->set_exception(make_invalid_stream_exception_ptr(task.config.stream_id));
+            return future;
+        }
+    }
     {
         std::unique_lock<std::mutex> lock(queue_mutex_);
         // P-260618-005: also exit the wait when the executor is no longer
@@ -1163,6 +1296,14 @@ std::vector<std::future<void>> CudaExecutor::submit_kernels_batch(
                 task.promise = std::make_shared<std::promise<void>>();
                 result.push_back(task.promise->get_future());
                 task.submit_time_ns = now_ns + static_cast<int64_t>(i);
+                if (task.config.stream_id != 0) {
+                    task.stream = get_stream(task.config.stream_id);
+                    if (!task.stream || !validate_stream(task.stream)) {
+                        task.promise->set_exception(
+                            make_invalid_stream_exception_ptr(task.config.stream_id));
+                        continue;
+                    }
+                }
                 task_queue_.push(std::move(task));
             }
         }
@@ -1187,10 +1328,7 @@ cudaStream_t CudaExecutor::get_default_stream() const {
     return default_stream_;  // nullptr 表示默认流
 }
 
-cudaStream_t CudaExecutor::get_stream(int stream_id) const {
-    if (stream_id == 0) {
-        return nullptr;
-    }
+std::shared_ptr<CudaExecutor::StreamWrapper> CudaExecutor::get_stream(int stream_id) const {
     std::lock_guard<std::mutex> lock(streams_mutex_);
     if (stream_id < 1 || static_cast<size_t>(stream_id) > streams_.size()) {
         return nullptr;
@@ -1215,6 +1353,61 @@ cudaStream_t CudaExecutor::create_one_stream() {
         return nullptr;
     }
     return stream;
+}
+
+void CudaExecutor::destroy_stream_wrapper(const std::shared_ptr<StreamWrapper>& stream_wrapper) {
+    if (!stream_wrapper || !loader_->is_available()) {
+        return;
+    }
+
+    stream_wrapper->destroyed.store(true, std::memory_order_release);
+
+    auto funcs = loader_->get_functions();
+    std::lock_guard<std::mutex> lock(stream_wrapper->mutex);
+    if (stream_wrapper->stream == nullptr) {
+        return;
+    }
+
+    if (funcs.cudaStreamSynchronize != nullptr) {
+        cudaError_t sync_error = funcs.cudaStreamSynchronize(stream_wrapper->stream);
+        check_cuda_error(sync_error, "cudaStreamSynchronize");
+    }
+    if (funcs.cudaStreamDestroy != nullptr) {
+        cudaError_t destroy_error = funcs.cudaStreamDestroy(stream_wrapper->stream);
+        check_cuda_error(destroy_error, "cudaStreamDestroy");
+    }
+    stream_wrapper->stream = nullptr;
+}
+
+bool CudaExecutor::call_stream(const std::shared_ptr<StreamWrapper>& stream_wrapper,
+                               const char* operation,
+                               const std::function<cudaError_t(cudaStream_t)>& call) const {
+    if (!stream_wrapper || stream_wrapper->destroyed.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(stream_wrapper->mutex);
+    if (stream_wrapper->destroyed.load(std::memory_order_acquire) || stream_wrapper->stream == nullptr) {
+        return false;
+    }
+
+    cudaError_t error = call(stream_wrapper->stream);
+    return check_cuda_error(error, operation);
+}
+
+bool CudaExecutor::validate_stream(const std::shared_ptr<StreamWrapper>& stream_wrapper) const {
+    if (!stream_wrapper || stream_wrapper->destroyed.load(std::memory_order_acquire)) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(stream_wrapper->mutex);
+    return !stream_wrapper->destroyed.load(std::memory_order_acquire)
+        && stream_wrapper->stream != nullptr;
+}
+
+std::exception_ptr CudaExecutor::make_invalid_stream_exception_ptr(int stream_id) const {
+    return std::make_exception_ptr(InvalidStreamException(
+        "CudaExecutor: stream_id " + std::to_string(stream_id) + " is invalid or destroyed"));
 }
 #endif
 

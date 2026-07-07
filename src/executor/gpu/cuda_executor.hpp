@@ -8,6 +8,7 @@
 #include "../util/exception_handler.hpp"
 #include <exception>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <atomic>
 #include <mutex>
@@ -26,6 +27,12 @@
 
 namespace executor {
 namespace gpu {
+
+class InvalidStreamException : public std::runtime_error {
+public:
+    explicit InvalidStreamException(const std::string& message)
+        : std::runtime_error(message) {}
+};
 
 /**
  * @brief CUDA 执行器实现
@@ -99,12 +106,23 @@ protected:
         const GpuTaskConfig& config) override;
 
 private:
+#ifdef EXECUTOR_ENABLE_CUDA
+    struct StreamWrapper {
+        cudaStream_t stream = nullptr;
+        std::mutex mutex;
+        std::atomic<bool> destroyed{false};
+    };
+#endif
+
     /** 队列项：优先级高的先执行，同优先级按 submit_time_ns FIFO */
     struct GpuQueuedTask {
         std::function<void(void*)> kernel_func;
         GpuTaskConfig config;
         std::shared_ptr<std::promise<void>> promise;
         int64_t submit_time_ns = 0;
+#ifdef EXECUTOR_ENABLE_CUDA
+        std::shared_ptr<StreamWrapper> stream;
+#endif
     };
     struct GpuQueuedTaskCompare {
         bool operator()(const GpuQueuedTask& a, const GpuQueuedTask& b) const {
@@ -154,12 +172,12 @@ private:
 #endif
 
     /**
-     * @brief 根据 stream_id 解析流句柄（0=默认流，1..N=streams_[id-1]）
+     * @brief 根据 stream_id 解析流 wrapper（1..N=streams_[id-1]）
      * @param stream_id 流ID
-     * @return 流句柄，无效时返回 nullptr（表示默认流）
+     * @return 流 wrapper，无效或已销毁时返回 nullptr
      */
 #ifdef EXECUTOR_ENABLE_CUDA
-    cudaStream_t get_stream(int stream_id) const;
+    std::shared_ptr<StreamWrapper> get_stream(int stream_id) const;
 #endif
 
     /**
@@ -168,6 +186,12 @@ private:
      */
 #ifdef EXECUTOR_ENABLE_CUDA
     cudaStream_t create_one_stream();
+    void destroy_stream_wrapper(const std::shared_ptr<StreamWrapper>& stream_wrapper);
+    bool call_stream(const std::shared_ptr<StreamWrapper>& stream_wrapper,
+                     const char* operation,
+                     const std::function<cudaError_t(cudaStream_t)>& call) const;
+    bool validate_stream(const std::shared_ptr<StreamWrapper>& stream_wrapper) const;
+    std::exception_ptr make_invalid_stream_exception_ptr(int stream_id) const;
 #endif
 
     /**
@@ -210,7 +234,7 @@ private:
 #ifdef EXECUTOR_ENABLE_CUDA
     cudaDeviceProp device_prop_;               // 设备属性
     cudaStream_t default_stream_;              // 默认流
-    std::vector<cudaStream_t> streams_;        // 流列表
+    std::vector<std::shared_ptr<StreamWrapper>> streams_;  // 流列表
     mutable std::mutex streams_mutex_;          // 流列表互斥锁（mutable用于const方法）
 #endif
 
