@@ -133,18 +133,18 @@ LoadBalancer::Strategy LoadBalancer::get_strategy() const {
 
 void LoadBalancer::resize(size_t new_num_workers) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
-    
-    auto now = std::chrono::steady_clock::now();
-    
-    if (new_num_workers > worker_loads_.size()) {
+
+    const size_t old_size = worker_loads_.size();
+
+    if (new_num_workers > old_size) {
         // 扩容：添加新的负载信息
+        auto now = std::chrono::steady_clock::now();
         worker_loads_.resize(new_num_workers);
-        for (size_t i = worker_loads_.size() - (new_num_workers - worker_loads_.size()); 
-             i < worker_loads_.size(); ++i) {
+        for (size_t i = old_size; i < new_num_workers; ++i) {
             worker_loads_[i] = WorkerLoad{};
             worker_loads_[i].last_update = now;
         }
-    } else if (new_num_workers < worker_loads_.size()) {
+    } else if (new_num_workers < old_size) {
         // 缩容：移除多余的负载信息
         worker_loads_.resize(new_num_workers);
     }
