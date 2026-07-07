@@ -479,6 +479,11 @@ private:
                                const std::string& message,
                                std::exception_ptr exception);
 
+    void record_task_timeout(const std::string& executor_name,
+                             const std::string& task_id,
+                             const std::string& message,
+                             std::exception_ptr exception);
+
     void record_periodic_task_success(const std::string& task_id);
 
     void record_periodic_task_exception(const std::string& executor_name,
@@ -507,6 +512,7 @@ private:
         std::string task_id;
         std::chrono::steady_clock::time_point execute_time;
         std::function<void()> task;
+        std::function<void(std::exception_ptr)> on_timeout;
         std::function<void(std::exception_ptr)> on_rejected;
     };
 
@@ -595,7 +601,20 @@ auto Executor::submit(F&& f, Args&&... args)
         }
     };
 
-    if (!executor->try_submit_task(std::move(task_wrapper))) {
+    auto on_timeout = [this, executor_name, task_id, promise, promise_ready](
+                          std::exception_ptr exception) {
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+            record_task_timeout(
+                executor_name,
+                task_id,
+                "Async task timed out before execution",
+                exception);
+        }
+    };
+
+    if (!executor->try_submit_task(std::move(task_wrapper), std::move(on_timeout))) {
         auto exception = std::make_exception_ptr(
             std::runtime_error("Async executor rejected task submission"));
         bool expected = false;
@@ -657,7 +676,21 @@ auto Executor::submit_priority(int priority, F&& f, Args&&... args)
         }
     };
 
-    if (!executor->try_submit_priority_task(priority, std::move(task_wrapper))) {
+    auto on_timeout = [this, executor_name, task_id, promise, promise_ready](
+                          std::exception_ptr exception) {
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+            record_task_timeout(
+                executor_name,
+                task_id,
+                "Priority async task timed out before execution",
+                exception);
+        }
+    };
+
+    if (!executor->try_submit_priority_task(
+            priority, std::move(task_wrapper), std::move(on_timeout))) {
         auto exception = std::make_exception_ptr(
             std::runtime_error("Async executor rejected priority task submission"));
         bool expected = false;
@@ -732,6 +765,18 @@ auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
     delayed_task.task_id = task_id;
     delayed_task.execute_time = execute_time;
     delayed_task.task = std::move(task_wrapper);
+    delayed_task.on_timeout = [this, executor_name, task_id, promise, promise_ready](
+                                  std::exception_ptr exception) {
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+            record_task_timeout(
+                executor_name,
+                task_id,
+                "Delayed async task timed out before execution",
+                exception);
+        }
+    };
     delayed_task.on_rejected = [this, executor_name, task_id, promise, promise_ready](
                                    std::exception_ptr exception) {
         bool expected = false;
@@ -785,11 +830,13 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
     }
 
     std::vector<std::function<void()>> task_wrappers;
+    std::vector<std::function<void(std::exception_ptr)>> timeout_handlers;
     std::vector<std::future<void>> futures;
     std::vector<std::shared_ptr<std::promise<void>>> promises;
     std::vector<std::shared_ptr<std::atomic_bool>> promise_ready_flags;
 
     task_wrappers.reserve(tasks.size());
+    timeout_handlers.reserve(tasks.size());
     futures.reserve(tasks.size());
     promises.reserve(tasks.size());
     promise_ready_flags.reserve(tasks.size());
@@ -820,9 +867,23 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
                 throw;
             }
         });
+        timeout_handlers.push_back(
+            [this, executor_name, task_id, promise, promise_ready](
+                std::exception_ptr exception) {
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(expected, true)) {
+                    promise->set_exception(exception);
+                    record_task_timeout(
+                        executor_name,
+                        task_id,
+                        "Batch async task timed out before execution",
+                        exception);
+                }
+            });
     }
 
-    if (!executor->try_submit_batch_tasks(std::move(task_wrappers))) {
+    if (!executor->try_submit_batch_tasks(
+            std::move(task_wrappers), std::move(timeout_handlers))) {
         auto exception = std::make_exception_ptr(
             std::runtime_error("Async executor rejected batch task submission"));
         bool marked_any = false;

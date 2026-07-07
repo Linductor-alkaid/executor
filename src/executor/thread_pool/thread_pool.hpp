@@ -148,6 +148,9 @@ public:
      */
     bool try_submit(std::function<void()> task);
 
+    bool try_submit(std::function<void()> task,
+                    std::function<void(std::exception_ptr)> on_timeout);
+
     /**
      * @brief 提交优先级任务
      * 
@@ -173,6 +176,10 @@ public:
      */
     bool try_submit_priority(int priority, std::function<void()> task);
 
+    bool try_submit_priority(int priority,
+                             std::function<void()> task,
+                             std::function<void(std::exception_ptr)> on_timeout);
+
     /**
      * @brief 批量提交任务
      *
@@ -189,6 +196,10 @@ public:
      * @return true 表示任务已入队；false 表示线程池已停止或任务为空
      */
     bool try_submit_batch(std::vector<std::function<void()>> tasks);
+
+    bool try_submit_batch(
+        std::vector<std::function<void()>> tasks,
+        std::vector<std::function<void(std::exception_ptr)>> on_timeout_handlers);
 
     /**
      * @brief 获取线程池状态
@@ -451,19 +462,47 @@ auto ThreadPool::submit(F&& f, Args&&... args)
     
     using return_type = typename std::invoke_result<F, Args...>::type;
     
-    // 创建packaged_task
-    auto task = std::make_shared<std::packaged_task<return_type()>>(
+    auto promise = std::make_shared<std::promise<return_type>>();
+    auto promise_ready = std::make_shared<std::atomic_bool>(false);
+    auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
     
-    std::future<return_type> result = task->get_future();
+    std::future<return_type> result = promise->get_future();
+
+    auto task = [promise, promise_ready, bound_task]() mutable {
+        try {
+            if constexpr (std::is_void_v<return_type>) {
+                std::invoke(*bound_task);
+                promise->set_value();
+            } else {
+                promise->set_value(std::invoke(*bound_task));
+            }
+            promise_ready->store(true, std::memory_order_release);
+        } catch (...) {
+            auto exception = std::current_exception();
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(expected, true)) {
+                promise->set_exception(exception);
+            }
+            throw;
+        }
+    };
+
+    auto on_timeout = [promise, promise_ready](std::exception_ptr exception) {
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+        }
+    };
     
-    if (!try_submit([task]() { (*task)(); })) {
-        std::promise<return_type> promise;
-        promise.set_exception(std::make_exception_ptr(
-            std::runtime_error("ThreadPool is stopped")
-        ));
-        return promise.get_future();
+    if (!try_submit(std::move(task), std::move(on_timeout))) {
+        auto exception = std::make_exception_ptr(
+            std::runtime_error("ThreadPool is stopped"));
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+        }
     }
     
     return result;
@@ -475,19 +514,47 @@ auto ThreadPool::submit_priority(int priority, F&& f, Args&&... args)
     
     using return_type = typename std::invoke_result<F, Args...>::type;
     
-    // 创建packaged_task
-    auto task = std::make_shared<std::packaged_task<return_type()>>(
+    auto promise = std::make_shared<std::promise<return_type>>();
+    auto promise_ready = std::make_shared<std::atomic_bool>(false);
+    auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
     
-    std::future<return_type> result = task->get_future();
+    std::future<return_type> result = promise->get_future();
+
+    auto task = [promise, promise_ready, bound_task]() mutable {
+        try {
+            if constexpr (std::is_void_v<return_type>) {
+                std::invoke(*bound_task);
+                promise->set_value();
+            } else {
+                promise->set_value(std::invoke(*bound_task));
+            }
+            promise_ready->store(true, std::memory_order_release);
+        } catch (...) {
+            auto exception = std::current_exception();
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(expected, true)) {
+                promise->set_exception(exception);
+            }
+            throw;
+        }
+    };
+
+    auto on_timeout = [promise, promise_ready](std::exception_ptr exception) {
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+        }
+    };
     
-    if (!try_submit_priority(priority, [task]() { (*task)(); })) {
-        std::promise<return_type> promise;
-        promise.set_exception(std::make_exception_ptr(
-            std::runtime_error("ThreadPool is stopped")
-        ));
-        return promise.get_future();
+    if (!try_submit_priority(priority, std::move(task), std::move(on_timeout))) {
+        auto exception = std::make_exception_ptr(
+            std::runtime_error("ThreadPool is stopped"));
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(expected, true)) {
+            promise->set_exception(exception);
+        }
     }
     
     return result;

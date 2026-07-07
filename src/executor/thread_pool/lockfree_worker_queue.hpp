@@ -153,6 +153,7 @@ private:
         dst.task_id = src.task_id;
         dst.priority = src.priority;
         dst.function = src.function;
+        dst.on_timeout = src.on_timeout;
         dst.submit_time_ns = src.submit_time_ns;
         dst.timeout_ms = src.timeout_ms;
         dst.dependencies = src.dependencies;
@@ -164,6 +165,7 @@ private:
         dst.task_id = std::move(src.task_id);
         dst.priority = src.priority;
         dst.function = std::move(src.function);
+        dst.on_timeout = std::move(src.on_timeout);
         dst.submit_time_ns = src.submit_time_ns;
         dst.timeout_ms = src.timeout_ms;
         dst.dependencies = std::move(src.dependencies);

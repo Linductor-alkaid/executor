@@ -174,7 +174,7 @@ for (int t = 0; t < 4; ++t) {
 
 ### 3.4 软超时
 
-`task_timeout_ms` 是线程池任务的**执行前软超时**。worker 准备执行任务时会检查 `now - submit_time`；若 elapsed >= timeout，则跳过该任务并将 `TaskStatistics::timeout_count` 加 1。
+`task_timeout_ms` 是线程池任务的**执行前软超时**。worker 准备执行任务时会检查 `now - submit_time`；若 elapsed >= timeout，则跳过该任务并将线程池内部 timeout 计数与 `TaskStatistics::timeout_count` 加 1。通过 `ThreadPool::submit()`、`Executor::submit()`、priority submit 或 batch submit 暴露的 `std::future` 会被显式置为异常状态，`future.get()` 抛 `executor::TimedOutException`（例如 `Task timed out after 100ms`），不会变成 `std::future_error(broken_promise)`。
 
 ```cpp
 executor::ExecutorConfig config;
@@ -186,11 +186,11 @@ ex.initialize(config);
 
 | 行为 | 结果 |
 |------|------|
-| 任务排队超时，执行前检测到 | 跳过执行，`timeout_count++` |
+| 任务排队超时，执行前检测到 | 跳过执行，`timeout_count++`；若有 future，`future.get()` 抛 `TimedOutException` |
 | 任务已经开始执行后超时 | 不强制中断，继续运行到任务自行返回 |
 | `task_timeout_ms = 0` | 不检查超时（默认行为） |
 
-C++ 没有安全的通用线程强杀机制，因此 soft timeout 不会终止执行中的任务。长耗时任务应在任务内部自行检查取消条件或 deadline。
+C++ 没有安全的通用线程强杀机制，因此 soft timeout 不会终止执行中的任务。排队超时是独立观测事件：它增加 timeout 计数，但不增加 `fail_count` / `failed_tasks`。长耗时任务应在任务内部自行检查取消条件或 deadline。
 
 ### 3.5 任务背压
 
@@ -763,7 +763,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 - `RealtimeThreadConfig.timer_slack_ns` = 1（尽力设置 1 ns；不可用或权限不足时安全回退）
 - `RealtimeThreadConfig.cpu_affinity` 空 → bind core 0（hw >= 2）
 - `RealtimeThreadConfig.thread_priority` = 0 → 自适应按 `cycle_period_ns` 建议
-- `task_timeout_ms > 0`: 软超时 (执行前 skip + 记录 timeout_count, C++ 无安全 kill 机制, 执行中不强制中断)
+- `task_timeout_ms > 0`: 软超时 (执行前 skip + 记录 timeout_count; future 抛 `TimedOutException`; 不计入 fail_count; C++ 无安全 kill 机制, 执行中不强制中断)
 
 ### 7.1 ExecutorConfig / ThreadPoolConfig（线程池配置）
 
@@ -776,7 +776,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `queue_capacity` | `size_t` | `1000` | 任务队列容量 |
 | `thread_priority` | `int` | `0` | 线程优先级（Linux SCHED_FIFO 1–99，Windows `SetThreadPriority`） |
 | `cpu_affinity` | `std::vector<int>` | 空 | 空 = 自适应 sentinel；`ExecutorManager` 自动填 [0..hw-1]；显式设值保留 |
-| `task_timeout_ms` | `int64_t` | `0` | > 0: 软超时 (执行前 check elapsed >= timeout 则 skip + 记录 timeout_count; 0 = 不超时; 注意: 执行中不强制中断, C++ 无安全 kill 机制) |
+| `task_timeout_ms` | `int64_t` | `0` | > 0: 软超时 (执行前 check elapsed >= timeout 则 skip + 记录 timeout_count; 暴露的 future 抛 `TimedOutException`; 不计入 fail_count; 0 = 不超时; 注意: 执行中不强制中断, C++ 无安全 kill 机制) |
 | `enable_work_stealing` | `bool` | `true` | 无锁工作窃取；`max_threads == 1` 时自动关；-10.7% 性能退化关闭 |
 | `enable_monitoring` | `bool` | `true` | 是否启用监控 |
 
@@ -812,7 +812,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `failed_pushes` (uint64_t)：LockFreeQueue 失败入队数（仅 `enable_stats=true` 时由底层队列统计；与 `dropped_task_count` 的子集：仅含"队列满"那一部分）。
   - `peak_queue_size` (uint64_t)：队列峰值长度（仅 `enable_stats=true`）。
   - `queue_capacity` (uint64_t)：RT 无锁队列固定容量（用于 `dropped/queue_capacity` 比率分析）。
-- **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。
+- **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。执行前软超时增加 `timeout_count`，不增加 `fail_count`。
 - **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
 ### 7.4 TaskPriority

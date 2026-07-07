@@ -105,6 +105,10 @@ protected:
      */
     bool try_submit_impl(std::function<void()> task) override;
 
+    bool try_submit_with_timeout_impl(
+        std::function<void()> task,
+        std::function<void(std::exception_ptr)> on_timeout) override;
+
     /**
      * @brief 提交优先级任务实现（内部方法）
      *
@@ -124,6 +128,11 @@ protected:
      */
     bool try_submit_priority_impl(int priority, std::function<void()> task) override;
 
+    bool try_submit_priority_with_timeout_impl(
+        int priority,
+        std::function<void()> task,
+        std::function<void(std::exception_ptr)> on_timeout) override;
+
     /**
      * @brief 批量提交任务实现（内部方法）
      *
@@ -140,6 +149,10 @@ protected:
      * @return true 表示任务已被线程池接受；false 表示线程池已停止
      */
     bool try_submit_batch_impl(std::vector<std::function<void()>> tasks) override;
+
+    bool try_submit_batch_with_timeout_impl(
+        std::vector<std::function<void()>> tasks,
+        std::vector<std::function<void(std::exception_ptr)>> on_timeout_handlers) override;
 
 private:
     std::string name_;              // 执行器名称

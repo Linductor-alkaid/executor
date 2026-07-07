@@ -10,6 +10,7 @@ void PriorityScheduler::copy_task_out(const std::unique_ptr<Task>& src, Task& ou
     out.task_id = src->task_id;
     out.priority = src->priority;
     out.function = src->function;
+    out.on_timeout = src->on_timeout;
     out.submit_time_ns = src->submit_time_ns;
     out.timeout_ms = src->timeout_ms;
     out.dependencies = src->dependencies;
@@ -22,6 +23,7 @@ void PriorityScheduler::enqueue(const Task& task) {
     task_ptr->task_id = task.task_id;
     task_ptr->priority = task.priority;
     task_ptr->function = task.function;
+    task_ptr->on_timeout = task.on_timeout;
     task_ptr->submit_time_ns = task.submit_time_ns;
     task_ptr->timeout_ms = task.timeout_ms;
     task_ptr->dependencies = task.dependencies;

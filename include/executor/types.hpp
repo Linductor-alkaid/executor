@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <chrono>
 #include <exception>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <atomic>
@@ -11,6 +12,12 @@
 #include <map>
 
 namespace executor {
+
+class TimedOutException : public std::runtime_error {
+public:
+    explicit TimedOutException(const std::string& message)
+        : std::runtime_error(message) {}
+};
 
 /**
  * @brief 任务优先级枚举
@@ -89,6 +96,7 @@ struct Task {
     std::string task_id;                          // 任务ID
     TaskPriority priority = TaskPriority::NORMAL; // 任务优先级
     std::function<void()> function;              // 任务函数
+    std::function<void(std::exception_ptr)> on_timeout; // 软超时时显式满足 future
     int64_t submit_time_ns = 0;                   // 提交时间（纳秒）
     int64_t timeout_ms = 0;                       // 超时时间（毫秒），0表示不超时
     std::vector<std::string> dependencies;       // 依赖任务ID
