@@ -288,6 +288,64 @@ bool test_steal() {
     return true;
 }
 
+bool test_steal_prefetch_visible_to_pop_and_size() {
+    std::cout << "Testing steal prefetch remains visible to pop/size..." << std::endl;
+
+    constexpr size_t TASKS = 20;
+    LockFreeWorkerQueue queue(64);
+
+    for (size_t i = 0; i < TASKS; ++i) {
+        Task task;
+        task.task_id = "prefetch_" + std::to_string(i);
+        task.priority = TaskPriority::NORMAL;
+        task.submit_time_ns = static_cast<int64_t>(i);
+        task.function = []() {};
+        if (!queue.push(task)) {
+            std::cerr << "FAILED: push failed at task " << i << std::endl;
+            return false;
+        }
+    }
+
+    Task stolen;
+    if (!queue.steal(stolen)) {
+        std::cerr << "FAILED: initial steal failed" << std::endl;
+        return false;
+    }
+    if (stolen.submit_time_ns != 0) {
+        std::cerr << "FAILED: first stolen task should be 0, got "
+                  << stolen.submit_time_ns << std::endl;
+        return false;
+    }
+    if (queue.size() != TASKS - 1) {
+        std::cerr << "FAILED: size after steal should include buffered tasks, got "
+                  << queue.size() << std::endl;
+        return false;
+    }
+
+    for (size_t expected = 1; expected < TASKS; ++expected) {
+        Task popped;
+        if (!queue.pop(popped)) {
+            std::cerr << "FAILED: pop failed at expected task " << expected
+                      << std::endl;
+            return false;
+        }
+        if (popped.submit_time_ns != static_cast<int64_t>(expected)) {
+            std::cerr << "FAILED: pop order expected " << expected << ", got "
+                      << popped.submit_time_ns << std::endl;
+            return false;
+        }
+    }
+
+    if (!queue.empty()) {
+        std::cerr << "FAILED: queue should be empty after draining prefetch"
+                  << std::endl;
+        return false;
+    }
+
+    std::cout << "PASSED: steal prefetch visible to pop/size" << std::endl;
+    return true;
+}
+
 bool test_concurrent_push_pop() {
     std::cout << "Testing concurrent push/pop..." << std::endl;
 
@@ -404,6 +462,7 @@ int main() {
     all_passed &= test_basic_operations();
     all_passed &= test_batch_operations();
     all_passed &= test_steal();
+    all_passed &= test_steal_prefetch_visible_to_pop_and_size();
     all_passed &= test_concurrent_push_pop();
     all_passed &= test_steal_no_double_consume();
     all_passed &= test_push_batch_partial_fill_no_leak();

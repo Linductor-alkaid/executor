@@ -8,6 +8,8 @@
 #include <mutex>
 #include <vector>
 #include <cstdint>
+#include <exception>
+#include <stdexcept>
 
 namespace executor {
 
@@ -87,12 +89,20 @@ public:
     bool pop(Task& task) {
         std::lock_guard<std::mutex> lock(consume_mx_);
 
+        if (!steal_buffer_.empty()) {
+            uintptr_t ptr = steal_buffer_.back();
+            steal_buffer_.pop_back();
+            std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
+            move_task(task, std::move(*task_ptr));
+            return true;
+        }
+
         uintptr_t ptr;
         if (!main_queue_.pop(ptr)) {
             return false;
         }
         std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
-        copy_task(task, *task_ptr);
+        move_task(task, std::move(*task_ptr));
         return true;
     }
 
@@ -116,29 +126,38 @@ public:
         uintptr_t ptr = steal_buffer_.back();
         steal_buffer_.pop_back();
         std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
-        copy_task(task, *task_ptr);
+        move_task(task, std::move(*task_ptr));
         return true;
     }
 
     size_t size() const {
-        return main_queue_.size();
+        std::lock_guard<std::mutex> lock(consume_mx_);
+        return main_queue_.size() + steal_buffer_.size();
     }
 
     bool empty() const {
-        return main_queue_.empty();
+        return size() == 0;
     }
 
     void clear() {
-        std::lock_guard<std::mutex> lock(consume_mx_);
+        std::vector<std::unique_ptr<Task>> discarded;
 
-        uintptr_t ptr;
-        while (main_queue_.pop(ptr)) {
-            delete reinterpret_cast<Task*>(ptr);
+        {
+            std::lock_guard<std::mutex> lock(consume_mx_);
+
+            uintptr_t ptr;
+            while (main_queue_.pop(ptr)) {
+                discarded.emplace_back(reinterpret_cast<Task*>(ptr));
+            }
+            for (auto p : steal_buffer_) {
+                discarded.emplace_back(reinterpret_cast<Task*>(p));
+            }
+            steal_buffer_.clear();
         }
-        for (auto p : steal_buffer_) {
-            delete reinterpret_cast<Task*>(p);
+
+        for (auto& task : discarded) {
+            discard_task(*task);
         }
-        steal_buffer_.clear();
     }
 
     /**
@@ -171,6 +190,18 @@ private:
         dst.dependencies = std::move(src.dependencies);
         dst.cancelled.store(src.cancelled.load(std::memory_order_acquire),
                            std::memory_order_release);
+    }
+
+    static void discard_task(Task& task) noexcept {
+        if (!task.on_timeout) {
+            return;
+        }
+
+        try {
+            task.on_timeout(std::make_exception_ptr(std::runtime_error(
+                "Task discarded before execution")));
+        } catch (...) {
+        }
     }
 
     util::LockFreeQueue<uintptr_t> main_queue_;
