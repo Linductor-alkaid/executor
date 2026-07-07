@@ -98,6 +98,53 @@ bool test_load_balancer_update_load() {
     return true;
 }
 
+bool test_load_balancer_resize_initializes_new_workers() {
+    std::cout << "Testing LoadBalancer resize initializes new workers..." << std::endl;
+
+    LoadBalancer balancer(2);
+    balancer.update_load(0, 10, 2);
+    balancer.update_load(1, 8, 1);
+
+    const auto before_resize = std::chrono::steady_clock::now();
+    balancer.resize(5);
+    const auto after_resize = std::chrono::steady_clock::now();
+
+    const auto default_time = std::chrono::steady_clock::time_point{};
+    const auto tolerance = std::chrono::milliseconds(100);
+    auto loads = balancer.get_all_loads();
+    TEST_ASSERT(loads.size() == 5, "Resize should grow load metadata to 5 workers");
+
+    for (size_t i = 2; i < 5; ++i) {
+        TEST_ASSERT(loads[i].queue_size == 0, "New worker queue_size should be 0");
+        TEST_ASSERT(loads[i].active_tasks == 0, "New worker active_tasks should be 0");
+        TEST_ASSERT(loads[i].last_update != default_time,
+                    "New worker last_update should not be default constructed");
+        TEST_ASSERT(loads[i].last_update >= before_resize - tolerance,
+                    "New worker last_update should be no earlier than resize window");
+        TEST_ASSERT(loads[i].last_update <= after_resize + tolerance,
+                    "New worker last_update should be no later than resize window");
+    }
+
+    balancer.set_strategy(LoadBalancer::Strategy::LEAST_LOAD);
+    for (size_t expected = 2; expected < 5; ++expected) {
+        const size_t selected = balancer.select_worker();
+        TEST_ASSERT(selected == expected, "Least-load should select newly initialized workers first");
+        balancer.update_load(selected, 1, 0);
+    }
+
+    balancer.resize(2);
+    loads = balancer.get_all_loads();
+    TEST_ASSERT(loads.size() == 2, "Shrink should drop removed worker metadata");
+
+    const auto removed_load = balancer.get_load(3);
+    TEST_ASSERT(removed_load.queue_size == 0, "Out-of-range load query should return default queue_size");
+    TEST_ASSERT(removed_load.active_tasks == 0, "Out-of-range load query should return default active_tasks");
+    TEST_ASSERT(removed_load.last_update == default_time,
+                "Out-of-range load query should return default last_update");
+
+    return true;
+}
+
 // ========== WorkerLocalQueue 测试 ==========
 
 bool test_worker_local_queue_basic() {
@@ -288,6 +335,7 @@ int main() {
     all_passed &= test_load_balancer_round_robin();
     all_passed &= test_load_balancer_least_tasks();
     all_passed &= test_load_balancer_update_load();
+    all_passed &= test_load_balancer_resize_initializes_new_workers();
     
     // WorkerLocalQueue 测试
     all_passed &= test_worker_local_queue_basic();

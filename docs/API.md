@@ -791,6 +791,8 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `enable_work_stealing` | `bool` | `true` | 无锁工作窃取；`max_threads == 1` 时自动关；-10.7% 性能退化关闭 |
 | `enable_monitoring` | `bool` | `true` | 是否启用监控 |
 
+内部动态 resize 扩容时，新增 worker 的负载元数据会重置为零负载，并将 `last_update` 初始化为当前 `std::chrono::steady_clock::now()`。
+
 ### 7.2 RealtimeThreadConfig（实时线程）
 
 用于 `register_realtime_task()`：
