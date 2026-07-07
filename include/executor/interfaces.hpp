@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <chrono>
 #include <stdexcept>
 #include <utility>
 
@@ -116,6 +117,18 @@ public:
      * @brief 等待所有任务完成
      */
     virtual void wait_for_completion() = 0;
+
+    /**
+     * @brief 等待所有任务完成并返回是否完成
+     *
+     * @param timeout 最长等待时间
+     * @return true 表示所有任务在 timeout 内完成；false 表示等待超时
+     */
+    virtual bool try_wait_for_completion(std::chrono::milliseconds timeout) {
+        (void)timeout;
+        wait_for_completion();
+        return true;
+    }
 
     /**
      * @brief 提交已包装任务，并报告是否被执行器接受

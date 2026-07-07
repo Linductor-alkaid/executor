@@ -511,8 +511,25 @@ std::map<std::string, TaskStatistics> Executor::get_all_task_statistics() const 
 }
 
 void Executor::wait_for_completion() {
+    (void)try_wait_for_completion(kDefaultWaitForCompletionTimeout);
+}
+
+bool Executor::try_wait_for_completion(std::chrono::milliseconds timeout) {
     auto* ex = manager_->get_default_async_executor();
-    if (ex) ex->wait_for_completion();
+    if (!ex) {
+        return true;
+    }
+
+    const bool completed = ex->try_wait_for_completion(timeout);
+    if (!completed) {
+        ExecutorFailureEvent event;
+        event.kind = FailureKind::WaitTimeout;
+        event.executor_name = ex->get_name();
+        event.task_id = "facade_wait_for_completion";
+        event.message = "wait_for_completion timed out before all tasks completed";
+        record_failure(std::move(event));
+    }
+    return completed;
 }
 
 // 注册 GPU 执行器

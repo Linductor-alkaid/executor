@@ -232,9 +232,17 @@ public:
     /**
      * @brief 等待所有任务完成
      * 
-     * 阻塞直到所有已提交的任务执行完成。
+     * 最多阻塞 kDefaultWaitForCompletionTimeout。
      */
     void wait_for_completion();
+
+    /**
+     * @brief 等待所有任务完成并返回是否完成
+     *
+     * @param timeout 最长等待时间
+     * @return true 表示所有任务在 timeout 内完成；false 表示等待超时
+     */
+    bool try_wait_for_completion(std::chrono::milliseconds timeout);
 
     /**
      * @brief 检查线程池是否已停止

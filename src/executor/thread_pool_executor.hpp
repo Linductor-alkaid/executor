@@ -83,6 +83,11 @@ public:
     void wait_for_completion() override;
 
     /**
+     * @brief 等待所有任务完成并返回是否完成
+     */
+    bool try_wait_for_completion(std::chrono::milliseconds timeout) override;
+
+    /**
      * @brief 设置任务监控器（可选）
      */
     void set_task_monitor(monitor::TaskMonitor* m);

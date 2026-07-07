@@ -360,6 +360,16 @@ public:
     void wait_for_completion();
 
     /**
+     * @brief 等待所有已提交的异步任务完成并返回是否完成
+     *
+     * @param timeout 最长等待时间
+     * @return true 表示所有任务在 timeout 内完成；false 表示等待超时。
+     *         超时时记录 FailureKind::WaitTimeout，可通过 get_failure_status()
+     *         观察 wait_timeout_count。
+     */
+    bool try_wait_for_completion(std::chrono::milliseconds timeout);
+
+    /**
      * @brief 注册 GPU 执行器
      * 
      * 创建并注册 GPU 执行器。
