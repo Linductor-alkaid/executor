@@ -61,6 +61,18 @@ public:
     bool initialize_async_executor(const ExecutorConfig& config);
 
     /**
+     * @brief 默认异步执行器是否已经初始化
+     *
+     * 不触发懒初始化，仅报告当前状态。
+     */
+    bool has_default_async_executor() const;
+
+    /**
+     * @brief 默认异步执行器是否已经 shutdown
+     */
+    bool is_default_async_shutdown() const;
+
+    /**
      * @brief 获取默认异步执行器（线程池）
      * 
      * @return 异步执行器指针，如果未初始化则返回 nullptr
@@ -180,7 +192,7 @@ public:
 
 private:
     // Protects default_async_executor_ and default_async_shutdown_.
-    std::mutex default_async_mutex_;
+    mutable std::mutex default_async_mutex_;
     // 默认异步执行器（线程池）
     std::unique_ptr<IAsyncExecutor> default_async_executor_;
 

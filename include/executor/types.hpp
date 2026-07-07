@@ -10,6 +10,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <utility>
 
 namespace executor {
 
@@ -29,6 +30,76 @@ enum class TaskPriority {
     NORMAL = 1,
     HIGH = 2,
     CRITICAL = 3
+};
+
+/**
+ * @brief Executor facade 可诊断 API 的错误码
+ */
+enum class ExecutorErrorCode {
+    Ok,
+    AlreadyInitialized,
+    AlreadyShutdown,
+    InvalidConfig,
+    DuplicateName,
+    NotFound,
+    BackendUnavailable,
+    StartFailed,
+    PermissionDenied,
+    Unknown
+};
+
+inline const char* executor_error_code_to_string(ExecutorErrorCode code) {
+    switch (code) {
+    case ExecutorErrorCode::Ok:
+        return "Ok";
+    case ExecutorErrorCode::AlreadyInitialized:
+        return "AlreadyInitialized";
+    case ExecutorErrorCode::AlreadyShutdown:
+        return "AlreadyShutdown";
+    case ExecutorErrorCode::InvalidConfig:
+        return "InvalidConfig";
+    case ExecutorErrorCode::DuplicateName:
+        return "DuplicateName";
+    case ExecutorErrorCode::NotFound:
+        return "NotFound";
+    case ExecutorErrorCode::BackendUnavailable:
+        return "BackendUnavailable";
+    case ExecutorErrorCode::StartFailed:
+        return "StartFailed";
+    case ExecutorErrorCode::PermissionDenied:
+        return "PermissionDenied";
+    case ExecutorErrorCode::Unknown:
+        return "Unknown";
+    default:
+        return "Unknown";
+    }
+}
+
+/**
+ * @brief Executor facade 轻量结果类型
+ */
+struct ExecutorResult {
+    bool ok = true;
+    ExecutorErrorCode error_code = ExecutorErrorCode::Ok;
+    std::string message;
+
+    explicit operator bool() const noexcept {
+        return ok;
+    }
+
+    static ExecutorResult success(std::string msg = {}) {
+        ExecutorResult result;
+        result.message = std::move(msg);
+        return result;
+    }
+
+    static ExecutorResult failure(ExecutorErrorCode code, std::string msg) {
+        ExecutorResult result;
+        result.ok = false;
+        result.error_code = code;
+        result.message = std::move(msg);
+        return result;
+    }
 };
 
 /**

@@ -29,6 +29,7 @@
 
 ```cpp
 bool initialize(const ExecutorConfig& config);  // 初始化默认异步执行器（线程池）
+ExecutorResult initialize_ex(const ExecutorConfig& config);
 void shutdown(bool wait_for_tasks = true);      // 关闭所有执行器
 void wait_for_completion();                     // 最多等待 300s，超时记录 WaitTimeout
 bool try_wait_for_completion(std::chrono::milliseconds timeout);
@@ -39,6 +40,7 @@ bool try_wait_for_completion(std::chrono::milliseconds timeout);
 - `shutdown(true)` 会等待队列中任务完成后再退出。
 - `wait_for_completion()` 使用公开常量 `executor::kDefaultWaitForCompletionTimeout`，当前为 300 秒；保留 `void` 签名以兼容旧调用方，但超时会记录 `FailureKind::WaitTimeout`。
 - `try_wait_for_completion(timeout)` 返回 `true` 表示所有已提交异步任务在 `timeout` 内完成；返回 `false` 表示等待超时且仍有任务未完成。超时不是 panic，也不抛异常；调用方可继续通过 `get_failure_status().wait_timeout_count` 或 `get_recent_failures()` 观察。
+- `initialize_ex(config)` 返回 `ExecutorResult`，可区分 `AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`StartFailed` 等原因；旧 `initialize()` 保持 `bool` 签名，并委托到 `_ex` 后只返回 `ok`。
 
 **注意事项**：懒初始化后不可再通过 `initialize()` 更换配置（已初始化则返回 false）。atexit 使用 `shutdown(false)`，不等待未完成任务。避免在静态析构中使用 Executor。
 
@@ -249,7 +251,10 @@ bool cancel_task(const std::string& task_id);
 ```cpp
 bool register_realtime_task(const std::string& name,
                             const RealtimeThreadConfig& config);
+ExecutorResult register_realtime_task_ex(const std::string& name,
+                                         const RealtimeThreadConfig& config);
 bool start_realtime_task(const std::string& name);
+ExecutorResult start_realtime_task_ex(const std::string& name);
 void stop_realtime_task(const std::string& name);
 bool push_realtime_task(const std::string& name, std::function<void()> task);
 bool try_push_realtime_task(const std::string& name, std::function<void()> task);
@@ -257,6 +262,7 @@ bool try_push_realtime_task(const std::string& name, std::function<void()> task)
 
 - 每个 `name` 对应一个专用实时线程，按 `RealtimeThreadConfig` 周期执行 `cycle_callback`。
 - 先 `register_realtime_task`，再 `start_realtime_task`；`stop_realtime_task` 停止该线程。
+- `register_realtime_task_ex` / `start_realtime_task_ex` 返回可诊断结果：空名或非法配置为 `InvalidConfig`，重复注册为 `DuplicateName`，启动不存在的实时执行器为 `NotFound`，重复启动为 `AlreadyInitialized`。
 
 ### 4.2 获取执行器与列表
 
@@ -827,6 +833,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `queue_capacity` (uint64_t)：RT 无锁队列固定容量（用于 `dropped/queue_capacity` 比率分析）。
 - **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。执行前软超时增加 `timeout_count`，不增加 `fail_count`。
 - **ExecutorFailureStatus**：`task_exception_count`、`submit_rejected_count`、`timeout_count`、`realtime_drop_count`、`gpu_failure_count`、`wait_timeout_count`、`tuning_fallback_count`、`total_count`。`wait_for_completion()` 或 `try_wait_for_completion(timeout)` 等待超时时记录 `FailureKind::WaitTimeout` 并增加 `wait_timeout_count`；这只表示等待动作超时，不表示任务被取消、panic 或抛异常。
+- **ExecutorResult**：`ok`、`error_code`、`message`，用于 `initialize_ex`、`register_realtime_task_ex`、`start_realtime_task_ex`、`register_gpu_executor_ex`。常见 `ExecutorErrorCode`：`AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed`、`PermissionDenied`。`_ex` 失败会写入 failure/diagnostic event，但配置错误不会计入 `task_exception_count`。
 - **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
 ### 7.4 TaskPriority
@@ -848,6 +855,8 @@ GPU 执行器与 CPU 执行器接口分离，通过 `Executor` 注册与提交 G
 ```cpp
 bool register_gpu_executor(const std::string& name,
                             const gpu::GpuExecutorConfig& config);
+ExecutorResult register_gpu_executor_ex(const std::string& name,
+                                         const gpu::GpuExecutorConfig& config);
 
 template<typename KernelFunc>
 auto submit_gpu(const std::string& executor_name,
@@ -857,6 +866,7 @@ auto submit_gpu(const std::string& executor_name,
 ```
 
 - `register_gpu_executor`：按 `config.backend` 创建并注册 GPU 执行器；当前支持 `GpuBackend::CUDA` 和 `GpuBackend::OPENCL`。对应后端还需在编译时启用 `EXECUTOR_ENABLE_CUDA` / `EXECUTOR_ENABLE_OPENCL`，并且运行时设备、驱动和平台可用；否则创建或启动会失败并返回 `false`。
+- `register_gpu_executor_ex`：推荐在需要诊断时使用，可区分 `InvalidConfig`、`DuplicateName`、`BackendUnavailable` 和 `StartFailed`。例如未编译对应后端、SYCL/HIP 尚未实现、运行时创建失败都会返回 `BackendUnavailable` 或更具体的启动失败信息。
 - `submit_gpu`：向指定 GPU 执行器提交 kernel；kernel 可为 `void()` 或 `void(void*)`（流句柄，CUDA 下为 `cudaStream_t`，OpenCL 下为 `cl_command_queue`）。
 
 ### 8.2 查询与状态

@@ -121,6 +121,16 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
     return true;
 }
 
+bool ExecutorManager::has_default_async_executor() const {
+    std::lock_guard<std::mutex> lock(default_async_mutex_);
+    return default_async_executor_ != nullptr;
+}
+
+bool ExecutorManager::is_default_async_shutdown() const {
+    std::lock_guard<std::mutex> lock(default_async_mutex_);
+    return default_async_shutdown_;
+}
+
 // 获取默认异步执行器（线程池）
 // 若尚未初始化，则使用默认配置懒初始化一次（线程安全由 std::call_once 保证）
 // shutdown 后不再懒初始化，直接返回 nullptr

@@ -9,6 +9,115 @@
 
 namespace executor {
 
+namespace {
+
+ExecutorResult make_failure(ExecutorErrorCode code, const std::string& message) {
+    return ExecutorResult::failure(code, message);
+}
+
+ExecutorResult validate_executor_config(const ExecutorConfig& config) {
+    if (config.min_threads != 0 && config.max_threads != 0 &&
+        config.min_threads > config.max_threads) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "ExecutorConfig invalid: min_threads must be <= max_threads");
+    }
+    return ExecutorResult::success();
+}
+
+ExecutorResult validate_realtime_config(const std::string& name,
+                                        const RealtimeThreadConfig& config) {
+    if (name.empty()) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "Realtime executor name must not be empty");
+    }
+    if (config.thread_name.empty()) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "RealtimeThreadConfig invalid: thread_name must not be empty");
+    }
+    if (config.cycle_period_ns <= 0) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "RealtimeThreadConfig invalid: cycle_period_ns must be greater than 0");
+    }
+    return ExecutorResult::success();
+}
+
+ExecutorResult validate_gpu_config_for_facade(
+    const std::string& name,
+    const gpu::GpuExecutorConfig& config) {
+    if (name.empty()) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "GPU executor name must not be empty");
+    }
+    if (config.name.empty()) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "GpuExecutorConfig invalid: config.name must not be empty");
+    }
+    if (config.max_queue_size == 0) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "GpuExecutorConfig invalid: max_queue_size must be greater than 0");
+    }
+    if (config.device_id < 0) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "GpuExecutorConfig invalid: device_id must be non-negative");
+    }
+    if (config.default_stream_count < 1) {
+        return make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "GpuExecutorConfig invalid: default_stream_count must be at least 1");
+    }
+    return ExecutorResult::success();
+}
+
+ExecutorResult check_gpu_backend_available(const gpu::GpuExecutorConfig& config) {
+#ifndef EXECUTOR_ENABLE_GPU
+    (void)config;
+    return make_failure(
+        ExecutorErrorCode::BackendUnavailable,
+        "GPU support is not enabled in this build");
+#else
+    switch (config.backend) {
+    case gpu::GpuBackend::CUDA:
+#ifndef EXECUTOR_ENABLE_CUDA
+        return make_failure(
+            ExecutorErrorCode::BackendUnavailable,
+            "CUDA backend is not enabled in this build");
+#else
+        return ExecutorResult::success();
+#endif
+    case gpu::GpuBackend::OPENCL:
+#ifndef EXECUTOR_ENABLE_OPENCL
+        return make_failure(
+            ExecutorErrorCode::BackendUnavailable,
+            "OpenCL backend is not enabled in this build");
+#else
+        return ExecutorResult::success();
+#endif
+    case gpu::GpuBackend::SYCL:
+        return make_failure(
+            ExecutorErrorCode::BackendUnavailable,
+            "SYCL backend is not implemented in this build");
+    case gpu::GpuBackend::HIP:
+        return make_failure(
+            ExecutorErrorCode::BackendUnavailable,
+            "HIP backend is not implemented in this build");
+    default:
+        return make_failure(
+            ExecutorErrorCode::BackendUnavailable,
+            "Requested GPU backend is unavailable");
+    }
+#endif
+}
+
+}  // namespace
+
 // 单例模式实现
 Executor& Executor::instance() {
     static Executor inst(ExecutorManager::instance());
@@ -38,15 +147,51 @@ Executor::~Executor() {
 
 // 初始化执行器
 bool Executor::initialize(const ExecutorConfig& config) {
-    bool initialized = manager_->initialize_async_executor(config);
-    if (!initialized) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::SubmitRejected;
-        event.executor_name = "default";
-        event.message = "Async executor initialization failed or was rejected";
-        record_failure(std::move(event));
+    return initialize_ex(config).ok;
+}
+
+ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
+    if (auto validation = validate_executor_config(config); !validation.ok) {
+        record_result_failure(
+            validation, FailureKind::SubmitRejected, "default", "facade_initialize");
+        return validation;
     }
-    return initialized;
+
+    if (manager_->is_default_async_shutdown()) {
+        auto result = make_failure(
+            ExecutorErrorCode::AlreadyShutdown,
+            "Async executor has already been shutdown");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, "default", "facade_initialize");
+        return result;
+    }
+
+    if (manager_->has_default_async_executor()) {
+        auto result = make_failure(
+            ExecutorErrorCode::AlreadyInitialized,
+            "Async executor is already initialized");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, "default", "facade_initialize");
+        return result;
+    }
+
+    if (!manager_->initialize_async_executor(config)) {
+        auto code = manager_->is_default_async_shutdown()
+                        ? ExecutorErrorCode::AlreadyShutdown
+                        : manager_->has_default_async_executor()
+                              ? ExecutorErrorCode::AlreadyInitialized
+                              : ExecutorErrorCode::StartFailed;
+        auto result = make_failure(
+            code,
+            code == ExecutorErrorCode::StartFailed
+                ? "Async executor initialization failed"
+                : "Async executor initialization was rejected");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, "default", "facade_initialize");
+        return result;
+    }
+
+    return ExecutorResult::success("Async executor initialized");
 }
 
 // 关闭执行器
@@ -159,50 +304,90 @@ std::vector<PeriodicTaskStatus> Executor::get_all_periodic_task_status() const {
 // 注册实时任务
 bool Executor::register_realtime_task(const std::string& name,
                                      const RealtimeThreadConfig& config) {
-    // 创建实时执行器
+    return register_realtime_task_ex(name, config).ok;
+}
+
+ExecutorResult Executor::register_realtime_task_ex(
+    const std::string& name,
+    const RealtimeThreadConfig& config) {
+    if (auto validation = validate_realtime_config(name, config); !validation.ok) {
+        record_result_failure(
+            validation, FailureKind::SubmitRejected, name, "facade_register_realtime_task");
+        return validation;
+    }
+
+    if (manager_->get_realtime_executor(name)) {
+        auto result = make_failure(
+            ExecutorErrorCode::DuplicateName,
+            "Realtime executor '" + name + "' is already registered");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_register_realtime_task");
+        return result;
+    }
+
     auto executor = manager_->create_realtime_executor(name, config);
     if (!executor) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::SubmitRejected;
-        event.executor_name = name;
-        event.message = "Realtime executor creation failed";
-        record_failure(std::move(event));
-        return false;  // 创建失败
+        auto result = make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "Realtime executor creation failed");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_register_realtime_task");
+        return result;
     }
-    
-    // 注册执行器
-    bool registered = manager_->register_realtime_executor(name, std::move(executor));
-    if (!registered) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::SubmitRejected;
-        event.executor_name = name;
-        event.message = "Realtime executor registration failed or duplicate name";
-        record_failure(std::move(event));
+
+    if (!manager_->register_realtime_executor(name, std::move(executor))) {
+        auto result = make_failure(
+            ExecutorErrorCode::DuplicateName,
+            "Realtime executor registration failed or duplicate name");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_register_realtime_task");
+        return result;
     }
-    return registered;
+
+    return ExecutorResult::success("Realtime executor registered");
 }
 
 // 启动实时任务
 bool Executor::start_realtime_task(const std::string& name) {
+    return start_realtime_task_ex(name).ok;
+}
+
+ExecutorResult Executor::start_realtime_task_ex(const std::string& name) {
+    if (name.empty()) {
+        auto result = make_failure(
+            ExecutorErrorCode::InvalidConfig,
+            "Realtime executor name must not be empty");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_start_realtime_task");
+        return result;
+    }
+
     auto* executor = manager_->get_realtime_executor(name);
     if (!executor) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::SubmitRejected;
-        event.executor_name = name;
-        event.message = "Realtime executor not found";
-        record_failure(std::move(event));
-        return false;  // 执行器不存在
+        auto result = make_failure(
+            ExecutorErrorCode::NotFound,
+            "Realtime executor '" + name + "' not found");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_start_realtime_task");
+        return result;
     }
-    
-    bool started = executor->start();
-    if (!started) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::SubmitRejected;
-        event.executor_name = name;
-        event.message = "Realtime executor start failed";
-        record_failure(std::move(event));
+
+    if (!executor->start()) {
+        const auto status = executor->get_status();
+        auto code = status.is_running
+                        ? ExecutorErrorCode::AlreadyInitialized
+                        : ExecutorErrorCode::StartFailed;
+        auto result = make_failure(
+            code,
+            status.is_running
+                ? "Realtime executor '" + name + "' is already running"
+                : "Realtime executor '" + name + "' start failed");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_start_realtime_task");
+        return result;
     }
-    return started;
+
+    return ExecutorResult::success("Realtime executor started");
 }
 
 // 停止实时任务
@@ -390,6 +575,23 @@ void Executor::record_failure(ExecutorFailureEvent event) {
     }
 }
 
+void Executor::record_result_failure(const ExecutorResult& result,
+                                     FailureKind kind,
+                                     const std::string& executor_name,
+                                     const std::string& task_id) {
+    if (result.ok) {
+        return;
+    }
+
+    ExecutorFailureEvent event;
+    event.kind = kind;
+    event.executor_name = executor_name;
+    event.task_id = task_id;
+    event.message = std::string(executor_error_code_to_string(result.error_code)) +
+                    ": " + result.message;
+    record_failure(std::move(event));
+}
+
 void Executor::record_submit_rejected(const std::string& executor_name,
                                       const std::string& task_id,
                                       const std::string& message,
@@ -535,37 +737,65 @@ bool Executor::try_wait_for_completion(std::chrono::milliseconds timeout) {
 // 注册 GPU 执行器
 bool Executor::register_gpu_executor(const std::string& name,
                                      const gpu::GpuExecutorConfig& config) {
-    // 创建 GPU 执行器
+    return register_gpu_executor_ex(name, config).ok;
+}
+
+ExecutorResult Executor::register_gpu_executor_ex(
+    const std::string& name,
+    const gpu::GpuExecutorConfig& config) {
+    if (auto validation = validate_gpu_config_for_facade(name, config); !validation.ok) {
+        record_result_failure(
+            validation, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
+        return validation;
+    }
+
+    if (manager_->get_gpu_executor(name)) {
+        auto result = make_failure(
+            ExecutorErrorCode::DuplicateName,
+            "GPU executor '" + name + "' is already registered");
+        record_result_failure(
+            result, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
+        return result;
+    }
+
+    if (auto backend = check_gpu_backend_available(config); !backend.ok) {
+        record_result_failure(
+            backend, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
+        return backend;
+    }
+
     auto executor = manager_->create_gpu_executor(config);
     if (!executor) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::GpuFailure;
-        event.executor_name = name;
-        event.message = "GPU executor creation failed";
-        record_failure(std::move(event));
-        return false;  // 创建失败
+        auto result = make_failure(
+            ExecutorErrorCode::BackendUnavailable,
+            "GPU executor creation failed");
+        record_result_failure(
+            result, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
+        return result;
     }
-    
-    // 启动执行器（必须在注册前启动）
+
     if (!executor->start()) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::GpuFailure;
-        event.executor_name = name;
-        event.message = "GPU executor start failed";
-        record_failure(std::move(event));
-        return false;  // 启动失败
+        auto status = executor->get_status();
+        auto result = make_failure(
+            ExecutorErrorCode::StartFailed,
+            status.last_error_message.empty()
+                ? "GPU executor start failed"
+                : "GPU executor start failed: " + status.last_error_message);
+        record_result_failure(
+            result, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
+        return result;
     }
-    
-    // 注册执行器
-    bool registered = manager_->register_gpu_executor(name, std::move(executor));
-    if (!registered) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::GpuFailure;
-        event.executor_name = name;
-        event.message = "GPU executor registration failed or duplicate name";
-        record_failure(std::move(event));
+
+    if (!manager_->register_gpu_executor(name, std::move(executor))) {
+        auto result = make_failure(
+            ExecutorErrorCode::DuplicateName,
+            "GPU executor registration failed or duplicate name");
+        record_result_failure(
+            result, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
+        return result;
     }
-    return registered;
+
+    return ExecutorResult::success("GPU executor registered");
 }
 
 // 获取 GPU 执行器

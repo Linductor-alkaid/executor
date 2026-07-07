@@ -169,17 +169,17 @@
 
 ### 任务
 
-- [ ] 新增轻量 Result 类型，例如：
+- [x] 新增轻量 Result 类型，例如：
   - `ExecutorResult`
   - `ExecutorErrorCode`
   - `std::string message`
-- [ ] 新增非破坏性 API：
+- [x] 新增非破坏性 API：
   - `initialize_ex(config) -> ExecutorResult`
   - `register_realtime_task_ex(name, config) -> ExecutorResult`
   - `start_realtime_task_ex(name) -> ExecutorResult`
   - `register_gpu_executor_ex(name, config) -> ExecutorResult`
-- [ ] 旧 `bool` API 保留，并委托到 `_ex` 后只返回 `ok`。
-- [ ] 常见错误码：
+- [x] 旧 `bool` API 保留，并委托到 `_ex` 后只返回 `ok`。
+- [x] 常见错误码：
   - `AlreadyInitialized`
   - `AlreadyShutdown`
   - `InvalidConfig`
@@ -188,13 +188,13 @@
   - `BackendUnavailable`
   - `StartFailed`
   - `PermissionDenied`
-- [ ] `_ex` 失败同时写入 failure/diagnostic event，但不把配置错误混为任务失败。
+- [x] `_ex` 失败同时写入 failure/diagnostic event，但不把配置错误混为任务失败。
 
 ### 验收
 
-- [ ] 用户看到 `false` 时，可以通过 `_ex` 或最近诊断知道原因。
-- [ ] GPU 未编译/运行时不可用能清晰区分。
-- [ ] RT 配置无效能返回具体字段原因。
+- [x] 用户看到 `false` 时，可以通过 `_ex` 或最近诊断知道原因。
+- [x] GPU 未编译/运行时不可用能清晰区分。
+- [x] RT 配置无效能返回具体字段原因。
 
 ---
 
@@ -267,11 +267,11 @@
   - [x] 不存在 RT executor 推送失败可见。
   - [x] 未启动 / 已停止推送失败可见。
   - [x] 队列满 / 池耗尽推送失败可见。
-- [ ] `test_executor_result_diagnostics.cpp`
-  - [ ] 初始化重复。
-  - [ ] shutdown 后初始化/提交。
-  - [ ] RT 无效配置。
-  - [ ] GPU 后端不可用。
+- [x] `test_executor_result_diagnostics.cpp`
+  - [x] 初始化重复。
+  - [x] shutdown 后初始化。
+  - [x] RT 无效配置。
+  - [x] GPU 后端不可用。
 - [ ] `test_wait_completion_result.cpp`
   - [ ] wait 完成返回成功。
   - [ ] wait 超时返回 timeout，并保留 pending 状态。
@@ -284,8 +284,8 @@
   - [ ] 示例优先使用 `Executor` facade 完成普通任务、实时任务、状态观察。
   - [ ] 明确 `future.get()` 是获取返回值/异常的方式，但状态计数也能监控失败趋势。
 - [ ] docs/API.md
-  - [ ] 新增 failure event / result / wait result API 文档。
-  - [ ] 标注旧 bool API 与新 `_ex` API 的关系。
+  - [ ] 新增 failure event / result / wait result API 文档。（failure event / result 已完成；wait result 留阶段 6）
+  - [x] 标注旧 bool API 与新 `_ex` API 的关系。
   - [ ] 修正 `AsyncExecutorStatus::failed_tasks` 语义。
 - [ ] docs/MIGRATION.md
   - [ ] 增加从旧接口迁移到 facade push、`*_ex` result、failure callback 的建议。

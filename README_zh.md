@@ -43,6 +43,9 @@
 - **实时 facade 推送与背压计数器**
   新代码优先使用 `Executor::push_realtime_task()` / `try_push_realtime_task()` 推送实时任务，无需接触 `IRealtimeExecutor*`。失败会返回 `false`，并进入 failure event 及 `dropped_task_count`、`queue_full_count`、`pool_exhausted_count` 等状态计数；既有 `push_task()` API 继续兼容。
 
+- **可诊断的 facade 配置 API**
+  `initialize_ex()`、`register_realtime_task_ex()`、`start_realtime_task_ex()`、`register_gpu_executor_ex()` 返回 `ExecutorResult`，可通过 `InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed` 等稳定错误码判断原因；旧 `bool` API 委托到这些路径。
+
 - **可选 GPU（CUDA/OpenCL）**
   GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端
 

@@ -74,6 +74,11 @@ public:
     bool initialize(const ExecutorConfig& config);
 
     /**
+     * @brief 初始化执行器并返回可诊断结果
+     */
+    ExecutorResult initialize_ex(const ExecutorConfig& config);
+
+    /**
      * @brief 关闭执行器
      * 
      * 关闭所有执行器（异步执行器和实时执行器）。
@@ -242,12 +247,23 @@ public:
                                const RealtimeThreadConfig& config);
 
     /**
+     * @brief 注册实时任务并返回可诊断结果
+     */
+    ExecutorResult register_realtime_task_ex(const std::string& name,
+                                             const RealtimeThreadConfig& config);
+
+    /**
      * @brief 启动实时任务
      * 
      * @param name 任务名称
      * @return 是否启动成功
      */
     bool start_realtime_task(const std::string& name);
+
+    /**
+     * @brief 启动实时任务并返回可诊断结果
+     */
+    ExecutorResult start_realtime_task_ex(const std::string& name);
 
     /**
      * @brief 停止实时任务
@@ -382,6 +398,12 @@ public:
                               const gpu::GpuExecutorConfig& config);
 
     /**
+     * @brief 注册 GPU 执行器并返回可诊断结果
+     */
+    ExecutorResult register_gpu_executor_ex(const std::string& name,
+                                            const gpu::GpuExecutorConfig& config);
+
+    /**
      * @brief 提交 GPU kernel 任务
      * 
      * @tparam KernelFunc GPU kernel 函数类型
@@ -490,6 +512,11 @@ private:
      * @brief 记录 facade 失败事件
      */
     void record_failure(ExecutorFailureEvent event);
+
+    void record_result_failure(const ExecutorResult& result,
+                               FailureKind kind,
+                               const std::string& executor_name,
+                               const std::string& task_id);
 
     void record_submit_rejected(const std::string& executor_name,
                                 const std::string& task_id,
