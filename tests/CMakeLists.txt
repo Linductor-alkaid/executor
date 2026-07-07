@@ -145,7 +145,17 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     
     # 根据测试类型设置 LABELS 和 TIMEOUT
     # 单元测试
-    if(TEST_NAME MATCHES "^test_(util|task|thread_pool|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager|push_task_ex_default)$")
+    if(TEST_NAME STREQUAL "test_lockfree_worker_queue_concurrent_steal")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit;concurrency;lockfree"
+            TIMEOUT 60
+        )
+    elseif(TEST_NAME MATCHES "^test_(dispatcher_resize_under_load|thread_pool_resize_uaf|thread_pool_resize_status|concurrent_stop_submit)$")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "integration;concurrency;thread_pool"
+            TIMEOUT 120
+        )
+    elseif(TEST_NAME MATCHES "^test_(util|task|thread_pool|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager|push_task_ex_default)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "unit"
             TIMEOUT 30
@@ -203,6 +213,12 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "unit"
             TIMEOUT 30
+        )
+    endif()
+
+    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|dispatcher_resize_under_load|concurrent_stop_submit)$")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            TIMEOUT 180
         )
     endif()
 endforeach()
