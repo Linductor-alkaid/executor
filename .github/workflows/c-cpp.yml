@@ -5,9 +5,15 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
+  schedule:
+    # Nightly sanitizer coverage. Regular PR gating is handled by build-and-test
+    # plus lockfree-queue below; scheduled runs are intentionally TSAN-only.
+    - cron: '0 19 * * *'
 
 jobs:
   build-and-test:
+    if: github.event_name != 'schedule'
     name: ${{ matrix.os }} - ${{ matrix.compiler.name }} ${{ matrix.compiler.version }} - ${{ matrix.build_type }}
     runs-on: ${{ matrix.os }}
     
@@ -89,7 +95,87 @@ jobs:
           build/tests/executor_*_test
         retention-days: 7
 
+  lockfree-queue:
+    # LockfreeWorkerQueue path is exercised manually + via the nightly TSAN
+    # job for now. Currently known to fail under LOCKFREE_QUEUE=ON with
+    # test_dispatcher_resize_under_load throwing std::future_error
+    # ("Broken promise"); tracked as P-009 / executor daily plan 2026-07-07.
+    # Re-enable `pull_request` here once that is fixed.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    name: Lockfree worker queue - gcc 11 Release
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 安装依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build g++-11 libgtest-dev
+
+    - name: 配置 CMake (Lockfree queue)
+      run: |
+        cmake -B build-lockfree -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_COMPILER=g++-11 \
+          -DEXECUTOR_BUILD_TESTS=ON \
+          -DEXECUTOR_BUILD_EXAMPLES=OFF \
+          -DEXECUTOR_ENABLE_GPU=OFF \
+          -DEXECUTOR_ENABLE_COVERAGE=OFF \
+          -DEXECUTOR_LOCKFREE_QUEUE=ON
+
+    - name: 编译
+      run: cmake --build build-lockfree --config Release -j
+
+    - name: 运行测试
+      working-directory: build-lockfree
+      run: ctest -C Release --output-on-failure --verbose
+
+  thread-sanitizer:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: ThreadSanitizer concurrency tests - gcc 11 Release
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    - name: 安装依赖
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build g++-11 libgtest-dev
+
+    - name: 配置 CMake (TSAN)
+      run: |
+        cmake -B build-tsan -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_CXX_COMPILER=g++-11 \
+          -DEXECUTOR_BUILD_TESTS=ON \
+          -DEXECUTOR_BUILD_EXAMPLES=OFF \
+          -DEXECUTOR_ENABLE_GPU=OFF \
+          -DEXECUTOR_ENABLE_COVERAGE=OFF \
+          -DEXECUTOR_ENABLE_TSAN=ON
+
+    - name: 编译 TSAN 并发测试
+      run: |
+        cmake --build build-tsan --config Release -j --target \
+          test_thread_pool \
+          test_thread_pool_resize_uaf \
+          test_thread_pool_resize_status \
+          test_dispatcher_resize_under_load \
+          test_concurrent_stop_submit
+
+    - name: 运行 TSAN 并发测试
+      working-directory: build-tsan
+      env:
+        TSAN_OPTIONS: halt_on_error=1 history_size=7 second_deadlock_stack=1
+      run: |
+        ctest -C Release --output-on-failure --verbose \
+          -R '^(test_thread_pool|test_thread_pool_resize_uaf|test_thread_pool_resize_status|test_dispatcher_resize_under_load|test_concurrent_stop_submit)$'
+
   gpu-headers-build:
+    if: github.event_name != 'schedule'
     name: GPU headers compile paths
     runs-on: ubuntu-22.04
 
@@ -158,6 +244,7 @@ jobs:
 
   # 可选：代码覆盖率任务
   coverage:
+    if: github.event_name != 'schedule'
     name: Code Coverage
     runs-on: ubuntu-22.04
     
