@@ -361,10 +361,11 @@ public:
     // stop() 开始后返回 false；未 start 前仍可用于预填充队列
     bool push_task(std::function<void()> task);
 
-    // 批量提交（尽力推送，可能部分成功）
+    // 批量提交（原子语义：全成或全败）
     // tasks: 任务数组指针；count: 数组长度；pushed: 实际入队任务数（输出）
-    // 返回值：true = 至少部分入队（pushed 可能 < count，剩余任务需由调用方处理）；
-    //         false = stop() 已开始、内部对象池耗尽或队列无可用槽位，没有任务入队，pushed 保持 0
+    // 返回值：true = 全部入队（pushed == count）；
+    //         false = 空输入、stop() 已开始、内部对象池耗尽或队列空间不足，
+    //                 没有任务入队，pushed 保持 0
     bool push_tasks_batch(const std::function<void()>* tasks,
                           size_t count,
                           size_t& pushed);
@@ -380,6 +381,7 @@ public:
     // 改由用户回调处理(例如记录到全局 logger、计数、转发到 ThreadPool 兜底)
     // QueueStats 字段参考下方 5.5 节。
     uint64_t exception_count() const;
+    uint64_t rejected_empty_count() const;            // 空任务提交拒绝次数
     void set_exception_handler(std::function<void(std::exception_ptr)> handler);
 };
 ```
@@ -388,11 +390,12 @@ public:
 
 | 项目 | 说明 |
 |------|------|
-| 时间复杂度 | O(count)，一次性申请所有 TaskWrapper，组装后单次调用 `queue_->push_batch` 完成入队 |
+| 时间复杂度 | O(count)，一次性申请所有 TaskWrapper，组装后单次调用 exact batch 入队 |
 | 线程安全 | 与 `push_task` 相同，线程安全，可多生产者并发调用 |
-| 部分成功 | 返回 true 时仍可能出现 `pushed < count`：队列剩余空间不足时只会入队前 `pushed` 个任务；未入队的 wrapper 自动回收到对象池，调用方必须检查 `pushed` 并对 `tasks[pushed..]` 重试或丢弃 |
-| 返回 false 时机 | (a) `stop()` 已开始，执行器拒绝新任务；(b) 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；或 (c) 队列满且 `queue_->push_batch` 一次 CAS 也未预留到任何槽位。以上情况下都不会有任务入队，`pushed` 为 0 |
-| 批量统计 | 每次成功的 `push_tasks_batch` 调用会令 `get_queue_stats().batch_pushes` 递增 1，`total_pushes` 递增 `pushed`（P-260623-004：与 `queue_->push_batch` 的统计语义一致） |
+| 原子语义 | 返回 true 时 `pushed == count`；返回 false 时没有任务入队且 `pushed == 0`。队列空间不足时不会部分入队 |
+| 返回 false 时机 | (a) `tasks == nullptr` 或任一 `tasks[i]` 为空；(b) `stop()` 已开始，执行器拒绝新任务；(c) 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；或 (d) 队列剩余空间不足以容纳整个 batch。以上情况下都不会有任务入队，`pushed` 为 0 |
+| 批量统计 | 每次成功的 `push_tasks_batch` 调用会令 `get_queue_stats().batch_pushes` 递增 1，`total_pushes` 递增 `count`（P-260623-004：与队列 batch 统计语义一致） |
+| 空任务统计 | 空任务属于提交拒绝，不进入队列，不增加 `processed_count()` 或 `exception_count()`；可通过 `rejected_empty_count()` 或 `get_queue_stats().rejected_empty_count` 观察 |
 
 #### 停止后的提交语义
 
@@ -415,10 +418,10 @@ for (int i = 0; i < 100; ++i) {
 size_t pushed = 0;
 bool ok = exec.push_tasks_batch(tasks.data(), tasks.size(), pushed);
 if (!ok) {
-    // 对象池耗尽，没有任何任务入队，需要等待或降级处理
-} else if (pushed < tasks.size()) {
-    // 队列空间不足，部分任务未入队
-    // tasks[pushed..] 需要重试或丢弃
+    // 空输入、对象池耗尽、队列空间不足或 stop() 后拒绝；
+    // 没有任何任务入队，需要等待、修正输入或降级处理
+} else {
+    // pushed == tasks.size()
 }
 ```
 

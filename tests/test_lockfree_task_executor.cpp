@@ -93,6 +93,87 @@ TEST(LockFreeTaskExecutorTest, QueueFull) {
     EXPECT_FALSE(result);
 }
 
+TEST(LockFreeTaskExecutorTest, RejectsEmptyTask) {
+    LockFreeTaskExecutor exec(/*queue_capacity=*/16,
+                              /*backoff_multiplier=*/1,
+                              /*enable_stats=*/true);
+    ASSERT_TRUE(exec.start());
+
+    std::function<void()> empty;
+    EXPECT_FALSE(exec.push_task(std::move(empty)));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(exec.pending_count(), 0u);
+    EXPECT_EQ(exec.processed_count(), 0u);
+    EXPECT_EQ(exec.exception_count(), 0u);
+    EXPECT_EQ(exec.rejected_empty_count(), 1u);
+
+    const auto stats = exec.get_queue_stats();
+    EXPECT_EQ(stats.total_pushes, 0u);
+    EXPECT_EQ(stats.failed_pushes, 0u);
+    EXPECT_EQ(stats.exception_count, 0u);
+    EXPECT_EQ(stats.rejected_empty_count, 1u);
+
+    exec.stop();
+}
+
+TEST(LockFreeTaskExecutorTest, BatchRejectsEmptyFunctionAtomically) {
+    LockFreeTaskExecutor exec(/*queue_capacity=*/8,
+                              /*backoff_multiplier=*/1,
+                              /*enable_stats=*/true);
+
+    std::atomic<int> ran{0};
+    std::function<void()> tasks[4] = {
+        [&ran] { ran.fetch_add(1, std::memory_order_relaxed); },
+        std::function<void()>{},
+        [&ran] { ran.fetch_add(1, std::memory_order_relaxed); },
+        [&ran] { ran.fetch_add(1, std::memory_order_relaxed); },
+    };
+
+    size_t pushed = 123;
+    EXPECT_FALSE(exec.push_tasks_batch(tasks, 4, pushed));
+    EXPECT_EQ(pushed, 0u);
+    EXPECT_EQ(exec.pending_count(), 0u);
+    EXPECT_EQ(exec.processed_count(), 0u);
+    EXPECT_EQ(exec.exception_count(), 0u);
+    EXPECT_EQ(exec.rejected_empty_count(), 1u);
+
+    const auto stats = exec.get_queue_stats();
+    EXPECT_EQ(stats.total_pushes, 0u);
+    EXPECT_EQ(stats.failed_pushes, 0u);
+    EXPECT_EQ(stats.batch_pushes, 0u);
+    EXPECT_EQ(stats.exception_count, 0u);
+    EXPECT_EQ(stats.rejected_empty_count, 1u);
+
+    // A failed validation must not acquire or leak wrappers. With capacity 8,
+    // the queue has 7 usable slots, so this full-size follow-up batch should
+    // still succeed after the rejection.
+    std::function<void()> follow_up[7];
+    for (auto& task : follow_up) {
+        task = [] {};
+    }
+    pushed = 0;
+    EXPECT_TRUE(exec.push_tasks_batch(follow_up, 7, pushed));
+    EXPECT_EQ(pushed, 7u);
+    EXPECT_EQ(exec.pending_count(), 7u);
+}
+
+TEST(LockFreeTaskExecutorTest, BatchRejectsNullTaskArray) {
+    LockFreeTaskExecutor exec(16);
+
+    size_t pushed = 99;
+    EXPECT_FALSE(exec.push_tasks_batch(nullptr, 1, pushed));
+    EXPECT_EQ(pushed, 0u);
+    EXPECT_EQ(exec.pending_count(), 0u);
+    EXPECT_EQ(exec.rejected_empty_count(), 1u);
+
+    pushed = 99;
+    EXPECT_FALSE(exec.push_tasks_batch(nullptr, 0, pushed));
+    EXPECT_EQ(pushed, 0u);
+    EXPECT_EQ(exec.pending_count(), 0u);
+    EXPECT_EQ(exec.rejected_empty_count(), 2u);
+}
+
 TEST(LockFreeTaskExecutorTest, SuccessRateWithFailedPushes) {
     LockFreeTaskExecutor exec(/*queue_capacity=*/16,
                               /*backoff_multiplier=*/1,
@@ -368,23 +449,15 @@ TEST(LockFreeTaskExecutorTest, BatchExceptionSafety) {
     ran.store(0);
 
     // Now: ask push_tasks_batch to push more tasks than the queue can
-    // hold. The exact number that lands depends on how much the worker
-    // drained in the meantime, so we just check that the executor
-    // returns control (no crash) and the system is still usable.
-    //
-    // We don't need an actual exception to leak wrappers — the
-    // partial-success path returns ownership of unwrappable wrappers
-    // to the pool. We just verify the pool can still allocate slots
-    // after a partial-failure batch.
+    // hold. Atomic batch semantics require a clean rejection: no prefix
+    // may enter the queue, and every acquired wrapper must be released.
     std::function<void()> filler[256];
     for (int i = 0; i < 256; ++i) filler[i] = [] {};
-    size_t pushed1 = 0;
-    (void)exec.push_tasks_batch(filler, 256, pushed1);
-    // Some non-zero number of tasks landed (or 0 if pool was already
-    // full from the prior 8 — both are fine, no leak either way).
-    EXPECT_GE(pushed1, 0u);  // tautology but documents the contract.
+    size_t pushed1 = 123;
+    EXPECT_FALSE(exec.push_tasks_batch(filler, 256, pushed1));
+    EXPECT_EQ(pushed1, 0u);
 
-    // After partial/failed push, the executor must still be usable.
+    // After a failed push, the executor must still be usable.
     // Give the worker time to drain the queue, then issue another 8
     // tasks — they should all push and run.
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
