@@ -869,6 +869,7 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 
 - **GpuExecutorConfig**：`name`、`backend`（如 CUDA/OpenCL）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`、`enable_unified_memory`（启用 `allocate_unified_memory` 等统一内存 API，CUDA 后端需要 `EXECUTOR_ENABLE_CUDA` 且硬件支持 managed memory）
 - **GpuTaskConfig**：`grid_size`、`block_size`、`shared_memory_bytes`、`stream_id`、`async`；可选 `priority`。`stream_id == 0` 表示默认流/队列；非 0 值必须来自 `create_stream()` 且尚未 `destroy_stream()`，负数、越界或已销毁的 `stream_id` 不会回退到默认流/队列，相关 copy/submit 操作会失败。
+- **CUDA stream 生命周期**：CUDA 后端内部用引用计数 wrapper 管理 `cudaStream_t`。`destroy_stream(stream_id)` 会先从 stream 表中摘除该 slot，并标记旧 wrapper 已销毁；已经拿到旧 wrapper 的并发操作会在 wrapper 锁下完成或观察到销毁状态，不会在已销毁的裸 `cudaStream_t` 上继续调用 CUDA API。销毁后的 copy/prefetch/callback/P2P 操作返回 `false`；销毁后的 `submit_kernel`/`submit_kernels_batch` future 抛出 `gpu::InvalidStreamException`。后续 `create_stream()` 可复用已摘除的 slot，但销毁前已提交的任务仍绑定旧 wrapper，不会误用新 stream。
 - **GpuDeviceInfo**：设备名称、后端、设备 ID、厂商、总/空闲内存、计算能力等
 - **GpuExecutorStatus**：名称、运行状态、活跃/完成/失败 kernel 数、队列大小、平均 kernel 时间、内存使用等
 - **GpuScheduler**：GPU 任务调度器，支持优先级队列与批量提交策略；可通过 `GpuScheduler::Config` 配置
