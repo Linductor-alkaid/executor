@@ -867,10 +867,10 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 
 ### 8.4 配置与类型
 
-- **GpuExecutorConfig**：`name`、`backend`（如 CUDA/OpenCL）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`、`enable_unified_memory`（启用 `allocate_unified_memory` 等统一内存 API，CUDA 后端需要 `EXECUTOR_ENABLE_CUDA` 且硬件支持 managed memory）
+- **GpuExecutorConfig**：`name`、`backend`（如 CUDA/OpenCL）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`、`enable_unified_memory`（启用 `allocate_unified_memory` 等统一内存 API，CUDA 后端需要 `EXECUTOR_ENABLE_CUDA` 且硬件支持 managed memory）。`device_id` 必须非负；`ExecutorManager::create_gpu_executor` 会拒绝负值，直接构造 `OpenCLExecutor` 时也会记录无效配置并在 `start()` 阶段拒绝负 `device_id`，不会用负下标访问设备数组。
 - **GpuTaskConfig**：`grid_size`、`block_size`、`shared_memory_bytes`、`stream_id`、`async`；可选 `priority`。`stream_id == 0` 表示默认流/队列；非 0 值必须来自 `create_stream()` 且尚未 `destroy_stream()`，负数、越界或已销毁的 `stream_id` 不会回退到默认流/队列，相关 copy/submit 操作会失败。
 - **GpuDeviceInfo**：设备名称、后端、设备 ID、厂商、总/空闲内存、计算能力等
-- **GpuExecutorStatus**：名称、运行状态、活跃/完成/失败 kernel 数、队列大小、平均 kernel 时间、内存使用等
+- **GpuExecutorStatus**：名称、运行状态、活跃/完成/失败 kernel 数、队列大小、平均 kernel 时间、内存使用、`last_error_message`（最近一次启动/运行失败原因；空表示无错误）等
 - **GpuScheduler**：GPU 任务调度器，支持优先级队列与批量提交策略；可通过 `GpuScheduler::Config` 配置
 - **KernelLaunchOptimizer**：自动调优 kernel 启动参数（grid/block 尺寸），减少 kernel 配置开销；`KernelLaunchOptimizer::Config` 可定制
 - **TaskSchedulerOptimizer**：优化 GPU 任务调度顺序，提高流水线利用率；`TaskSchedulerOptimizer::Config` 可定制

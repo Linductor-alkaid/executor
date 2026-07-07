@@ -6,6 +6,12 @@
 namespace executor {
 namespace gpu {
 
+namespace {
+
+constexpr const char* kInvalidOpenCLDeviceIdMessage = "OpenCL device_id must be >= 0";
+
+}  // namespace
+
 OpenCLExecutor::OpenCLExecutor(const std::string& name, const GpuExecutorConfig& config)
     : name_(name)
     , config_(config)
@@ -14,6 +20,7 @@ OpenCLExecutor::OpenCLExecutor(const std::string& name, const GpuExecutorConfig&
     , platform_(nullptr)
     , device_(nullptr)
     , context_(nullptr) {
+    validate_config();
 }
 
 OpenCLExecutor::~OpenCLExecutor() {
@@ -22,11 +29,18 @@ OpenCLExecutor::~OpenCLExecutor() {
 }
 
 bool OpenCLExecutor::start() {
+    if (!validate_config()) {
+        return false;
+    }
+
     if (running_) {
         return true;
     }
 
+    clear_last_error();
+
     if (!loader_->load()) {
+        set_last_error("OpenCL loader is unavailable");
         return false;
     }
 
@@ -72,6 +86,10 @@ void OpenCLExecutor::wait_for_completion() {
 }
 
 bool OpenCLExecutor::initialize_opencl() {
+    if (!validate_config()) {
+        return false;
+    }
+
     auto funcs = loader_->get_functions();
     cl_int err;
 
@@ -79,12 +97,14 @@ bool OpenCLExecutor::initialize_opencl() {
     cl_uint num_platforms;
     err = funcs.clGetPlatformIDs(0, nullptr, &num_platforms);
     if (err != CL_SUCCESS || num_platforms == 0) {
+        set_last_error("OpenCL platform enumeration failed");
         return false;
     }
 
     std::vector<cl_platform_id> platforms(num_platforms);
     err = funcs.clGetPlatformIDs(num_platforms, platforms.data(), nullptr);
     if (err != CL_SUCCESS) {
+        set_last_error("OpenCL platform list retrieval failed");
         return false;
     }
     platform_ = platforms[0];
@@ -93,16 +113,24 @@ bool OpenCLExecutor::initialize_opencl() {
     cl_uint num_devices;
     err = funcs.clGetDeviceIDs(platform_, CL_DEVICE_TYPE_GPU, 0, nullptr, &num_devices);
     if (err != CL_SUCCESS || num_devices == 0) {
+        set_last_error("OpenCL GPU device enumeration failed");
         return false;
     }
 
     std::vector<cl_device_id> devices(num_devices);
     err = funcs.clGetDeviceIDs(platform_, CL_DEVICE_TYPE_GPU, num_devices, devices.data(), nullptr);
     if (err != CL_SUCCESS) {
+        set_last_error("OpenCL GPU device list retrieval failed");
+        return false;
+    }
+
+    if (config_.device_id < 0) {
+        set_last_error(kInvalidOpenCLDeviceIdMessage);
         return false;
     }
 
     if (config_.device_id >= static_cast<int>(num_devices)) {
+        set_last_error("OpenCL device_id is out of range");
         return false;
     }
     device_ = devices[config_.device_id];
@@ -110,6 +138,7 @@ bool OpenCLExecutor::initialize_opencl() {
     // 创建上下文
     context_ = funcs.clCreateContext(nullptr, 1, &device_, nullptr, nullptr, &err);
     if (err != CL_SUCCESS) {
+        set_last_error("OpenCL context creation failed");
         return false;
     }
 
@@ -119,13 +148,38 @@ bool OpenCLExecutor::initialize_opencl() {
         queue_wrapper->queue = funcs.clCreateCommandQueue(context_, device_, 0, &err);
         if (err != CL_SUCCESS) {
             cleanup();
+            set_last_error("OpenCL command queue creation failed");
             return false;
         }
         queues_.push_back(std::move(queue_wrapper));
     }
 
     is_available_ = true;
+    clear_last_error();
     return true;
+}
+
+bool OpenCLExecutor::validate_config() {
+    if (config_.device_id < 0) {
+        set_last_error(kInvalidOpenCLDeviceIdMessage);
+        return false;
+    }
+    return true;
+}
+
+void OpenCLExecutor::clear_last_error() {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_message_.clear();
+}
+
+void OpenCLExecutor::set_last_error(const std::string& message) {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_message_ = message;
+}
+
+std::string OpenCLExecutor::get_last_error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    return last_error_message_;
 }
 
 void OpenCLExecutor::cleanup() {
@@ -418,6 +472,7 @@ GpuExecutorStatus OpenCLExecutor::get_status() const {
     status.is_running = running_;
     status.backend = GpuBackend::OPENCL;
     status.device_id = config_.device_id;
+    status.last_error_message = get_last_error();
     status.active_kernels = active_kernels_.load();
     status.completed_kernels = completed_kernels_.load();
     status.failed_kernels = failed_kernels_.load();

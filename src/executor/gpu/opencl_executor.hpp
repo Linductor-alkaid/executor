@@ -68,6 +68,10 @@ private:
     bool check_opencl_error(cl_int error, const char* operation);
     std::shared_ptr<CommandQueueWrapper> get_queue(int stream_id);
     void worker_thread();
+    bool validate_config();
+    void clear_last_error();
+    void set_last_error(const std::string& message);
+    std::string get_last_error() const;
 
     std::string name_;
     GpuExecutorConfig config_;
@@ -89,6 +93,8 @@ private:
     std::atomic<int64_t> total_kernel_time_ns_{0};
 
     std::atomic<bool> running_{false};
+    mutable std::mutex error_mutex_;
+    std::string last_error_message_;
     std::thread worker_;
     std::queue<std::packaged_task<void()>> task_queue_;
     mutable std::mutex queue_mutex_;
