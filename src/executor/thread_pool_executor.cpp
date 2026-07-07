@@ -85,17 +85,20 @@ void ThreadPoolExecutor::stop(bool wait_for_tasks) {
 }
 
 void ThreadPoolExecutor::wait_for_completion() {
+    (void)try_wait_for_completion(kDefaultWaitForCompletionTimeout);
+}
+
+bool ThreadPoolExecutor::try_wait_for_completion(std::chrono::milliseconds timeout) {
     std::shared_ptr<ThreadPool> thread_pool;
     {
         std::lock_guard<std::mutex> lock(thread_pool_mutex_);
         thread_pool = thread_pool_;
     }
     if (!thread_pool) {
-        return;
+        return true;
     }
 
-    // 等待所有任务完成
-    thread_pool->wait_for_completion();
+    return thread_pool->try_wait_for_completion(timeout);
 }
 
 void ThreadPoolExecutor::set_task_monitor(monitor::TaskMonitor* m) {

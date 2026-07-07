@@ -13,6 +13,8 @@
 
 namespace executor {
 
+inline constexpr std::chrono::seconds kDefaultWaitForCompletionTimeout{300};
+
 class TimedOutException : public std::runtime_error {
 public:
     explicit TimedOutException(const std::string& message)

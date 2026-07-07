@@ -487,8 +487,12 @@ bool ThreadPool::resize_local_queues(size_t new_num_queues) {
 }
 
 void ThreadPool::wait_for_completion() {
+    (void)try_wait_for_completion(kDefaultWaitForCompletionTimeout);
+}
+
+bool ThreadPool::try_wait_for_completion(std::chrono::milliseconds timeout) {
     std::unique_lock<std::mutex> lock(completion_mutex_);
-    completion_cv_.wait_for(lock, std::chrono::seconds(300), [this]() {
+    return completion_cv_.wait_for(lock, timeout, [this]() {
         return is_completion_ready();
     });
 }

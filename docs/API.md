@@ -30,12 +30,15 @@
 ```cpp
 bool initialize(const ExecutorConfig& config);  // 初始化默认异步执行器（线程池）
 void shutdown(bool wait_for_tasks = true);      // 关闭所有执行器
-void wait_for_completion();                     // 等待已提交的异步任务完成
+void wait_for_completion();                     // 最多等待 300s，超时记录 WaitTimeout
+bool try_wait_for_completion(std::chrono::milliseconds timeout);
 ```
 
 - **懒初始化**：若不调用 `initialize(config)`，首次提交任务时会使用默认配置自动初始化（不抛异常）。需要自定义线程数、队列容量等时，请在首次提交前显式调用 `initialize(config)`。
 - **退出时自动关闭（单例）**：使用单例时，若未显式调用 `shutdown()`，进程退出时会自动关闭所有执行器。若需在退出前等待未完成任务完成，请在业务逻辑中显式调用 `shutdown(true)`。
 - `shutdown(true)` 会等待队列中任务完成后再退出。
+- `wait_for_completion()` 使用公开常量 `executor::kDefaultWaitForCompletionTimeout`，当前为 300 秒；保留 `void` 签名以兼容旧调用方，但超时会记录 `FailureKind::WaitTimeout`。
+- `try_wait_for_completion(timeout)` 返回 `true` 表示所有已提交异步任务在 `timeout` 内完成；返回 `false` 表示等待超时且仍有任务未完成。超时不是 panic，也不抛异常；调用方可继续通过 `get_failure_status().wait_timeout_count` 或 `get_recent_failures()` 观察。
 
 **注意事项**：懒初始化后不可再通过 `initialize()` 更换配置（已初始化则返回 false）。atexit 使用 `shutdown(false)`，不等待未完成任务。避免在静态析构中使用 Executor。
 
@@ -813,6 +816,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `peak_queue_size` (uint64_t)：队列峰值长度（仅 `enable_stats=true`）。
   - `queue_capacity` (uint64_t)：RT 无锁队列固定容量（用于 `dropped/queue_capacity` 比率分析）。
 - **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。执行前软超时增加 `timeout_count`，不增加 `fail_count`。
+- **ExecutorFailureStatus**：`task_exception_count`、`submit_rejected_count`、`timeout_count`、`realtime_drop_count`、`gpu_failure_count`、`wait_timeout_count`、`tuning_fallback_count`、`total_count`。`wait_for_completion()` 或 `try_wait_for_completion(timeout)` 等待超时时记录 `FailureKind::WaitTimeout` 并增加 `wait_timeout_count`；这只表示等待动作超时，不表示任务被取消、panic 或抛异常。
 - **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
 ### 7.4 TaskPriority
