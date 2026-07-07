@@ -35,6 +35,20 @@ std::string extract_status_entry(const std::string& api_md) {
     return api_md.substr(pos, end - pos);
 }
 
+std::string extract_section(const std::string& api_md,
+                            const std::string& begin_marker,
+                            const std::string& end_marker) {
+    auto pos = api_md.find(begin_marker);
+    if (pos == std::string::npos) {
+        return {};
+    }
+    auto end = api_md.find(end_marker, pos + begin_marker.size());
+    if (end == std::string::npos) {
+        end = api_md.size();
+    }
+    return api_md.substr(pos, end - pos);
+}
+
 std::set<std::string> extract_field_names(const std::string& entry) {
     std::set<std::string> fields;
     std::regex re("`([a-zA-Z_][a-zA-Z0-9_]*)`");
@@ -122,6 +136,39 @@ TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
             ADD_FAILURE() << "  + " << f;
         }
     }
+}
+
+TEST(ApiDocStatusFields, GpuRegistrationDocsMatchSupportedBackends) {
+    std::string api_path;
+    const std::string api_md = read_doc_from_candidates(
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+    ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
+
+    const std::string registration = extract_section(
+        api_md, "### 8.1 注册与任务提交", "### 8.2 查询与状态");
+    ASSERT_FALSE(registration.empty())
+        << "GPU registration section not found in " << api_path;
+
+    const std::string config = extract_section(
+        api_md, "### 8.4 配置与类型", "### 8.5 GPU 设备查询 API");
+    ASSERT_FALSE(config.empty()) << "GPU config section not found in " << api_path;
+
+    const std::string gpu_docs = registration + "\n" + config;
+    EXPECT_NE(gpu_docs.find("CUDA"), std::string::npos)
+        << "GPU registration/config docs must mention CUDA";
+    EXPECT_NE(gpu_docs.find("OpenCL"), std::string::npos)
+        << "GPU registration/config docs must mention OpenCL";
+    EXPECT_NE(gpu_docs.find("EXECUTOR_ENABLE_CUDA"), std::string::npos)
+        << "GPU registration/config docs must mention the CUDA build option";
+    EXPECT_NE(gpu_docs.find("EXECUTOR_ENABLE_OPENCL"), std::string::npos)
+        << "GPU registration/config docs must mention the OpenCL build option";
+
+    EXPECT_EQ(gpu_docs.find("仅支持 `GpuBackend::CUDA`"), std::string::npos)
+        << "GPU docs must not claim that only CUDA is supported";
+    EXPECT_FALSE(contains_regex(gpu_docs, "only supports[^\\n]*CUDA"))
+        << "GPU docs must not contain stale English CUDA-only wording";
+    EXPECT_FALSE(contains_regex(gpu_docs, "currently supports[^\\n]*GpuBackend::CUDA[^\\n]*[).。]"))
+        << "GPU docs must not contain stale English CUDA-only wording";
 }
 
 TEST(ApiDocStatusFields, ApiDocPerformanceClaimsHaveSources) {

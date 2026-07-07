@@ -856,8 +856,8 @@ auto submit_gpu(const std::string& executor_name,
     -> std::future<void>;
 ```
 
-- `register_gpu_executor`：按配置创建并注册 GPU 执行器（当前支持 `GpuBackend::CUDA`）。
-- `submit_gpu`：向指定 GPU 执行器提交 kernel；kernel 可为 `void()` 或 `void(void*)`（流句柄，CUDA 下为 `cudaStream_t`）。
+- `register_gpu_executor`：按 `config.backend` 创建并注册 GPU 执行器；当前支持 `GpuBackend::CUDA` 和 `GpuBackend::OPENCL`。对应后端还需在编译时启用 `EXECUTOR_ENABLE_CUDA` / `EXECUTOR_ENABLE_OPENCL`，并且运行时设备、驱动和平台可用；否则创建或启动会失败并返回 `false`。
+- `submit_gpu`：向指定 GPU 执行器提交 kernel；kernel 可为 `void()` 或 `void(void*)`（流句柄，CUDA 下为 `cudaStream_t`，OpenCL 下为 `cl_command_queue`）。
 
 ### 8.2 查询与状态
 
@@ -881,7 +881,7 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 
 ### 8.4 配置与类型
 
-- **GpuExecutorConfig**：`name`、`backend`（如 CUDA/OpenCL）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`、`enable_unified_memory`（启用 `allocate_unified_memory` 等统一内存 API，CUDA 后端需要 `EXECUTOR_ENABLE_CUDA` 且硬件支持 managed memory）。`device_id` 必须非负；`ExecutorManager::create_gpu_executor` 会拒绝负值，直接构造 `OpenCLExecutor` 时也会记录无效配置并在 `start()` 阶段拒绝负 `device_id`，不会用负下标访问设备数组。
+- **GpuExecutorConfig**：`name`、`backend`（支持 CUDA/OpenCL；分别要求 `EXECUTOR_ENABLE_CUDA` / `EXECUTOR_ENABLE_OPENCL` 且运行时可用）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`、`enable_unified_memory`（启用 `allocate_unified_memory` 等统一内存 API，CUDA 后端需要 `EXECUTOR_ENABLE_CUDA` 且硬件支持 managed memory）。`backend` 默认是 `GpuBackend::CUDA`；需要自动选择时可先调用 `gpu::get_recommended_backend()`，推荐逻辑会优先可用 CUDA 设备，其次 OpenCL，最后回到 CUDA 默认值。`device_id` 必须非负；`ExecutorManager::create_gpu_executor` 会拒绝负值，直接构造 `OpenCLExecutor` 时也会记录无效配置并在 `start()` 阶段拒绝负 `device_id`，不会用负下标访问设备数组。
 - **GpuTaskConfig**：`grid_size`、`block_size`、`shared_memory_bytes`、`stream_id`、`async`；可选 `priority`。`stream_id == 0` 表示默认流/队列；非 0 值必须来自 `create_stream()` 且尚未 `destroy_stream()`，负数、越界或已销毁的 `stream_id` 不会回退到默认流/队列，相关 copy/submit 操作会失败。
 - **CUDA stream 生命周期**：CUDA 后端内部用引用计数 wrapper 管理 `cudaStream_t`。`destroy_stream(stream_id)` 会先从 stream 表中摘除该 slot，并标记旧 wrapper 已销毁；已经拿到旧 wrapper 的并发操作会在 wrapper 锁下完成或观察到销毁状态，不会在已销毁的裸 `cudaStream_t` 上继续调用 CUDA API。销毁后的 copy/prefetch/callback/P2P 操作返回 `false`；销毁后的 `submit_kernel`/`submit_kernels_batch` future 抛出 `gpu::InvalidStreamException`。后续 `create_stream()` 可复用已摘除的 slot，但销毁前已提交的任务仍绑定旧 wrapper，不会误用新 stream。
 - **GpuDeviceInfo**：设备名称、后端、设备 ID、厂商、总/空闲内存、计算能力等
