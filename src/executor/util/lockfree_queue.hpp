@@ -211,6 +211,69 @@ public:
         return false;
     }
 
+    bool push_batch_exact(const T* items, size_t count) {
+        if (count == 0) return true;
+
+        size_t pos;
+        size_t backoff = 1;
+        constexpr size_t MAX_BACKOFF = 16;
+        constexpr int MAX_RETRIES = 64;
+
+        for (int retry = 0; retry < MAX_RETRIES; ++retry) {
+            pos = enqueue_pos_.load(std::memory_order_acquire);
+            size_t deq = dequeue_pos_.load(std::memory_order_acquire);
+            size_t in_flight = (pos >= deq) ? (pos - deq) : 0;
+            size_t available = (in_flight < capacity_ - 1) ? (capacity_ - 1 - in_flight) : 0;
+
+            if (available < count) {
+                if (stats_enabled_.load(std::memory_order_relaxed)) {
+                    stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                }
+                return false;
+            }
+
+            bool slots_available = true;
+            for (size_t i = 0; i < count; ++i) {
+                size_t index = (pos + i) & mask_;
+                size_t seq = sequences_[index].load(std::memory_order_acquire);
+                if (seq != pos + i) { slots_available = false; break; }
+            }
+            if (!slots_available) {
+                size_t scaled_backoff = backoff * backoff_multiplier_;
+                for (size_t i = 0; i < scaled_backoff; ++i) {
+                    PAUSE_INSTRUCTION();
+                }
+                backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
+                continue;
+            }
+
+            if (enqueue_pos_.compare_exchange_weak(pos, pos + count, std::memory_order_relaxed)) {
+                for (size_t i = 0; i < count; ++i) {
+                    size_t index = (pos + i) & mask_;
+                    buffer_[index] = items[i];
+                    sequences_[index].store(pos + i + 1, std::memory_order_release);
+                }
+                if (stats_enabled_.load(std::memory_order_relaxed)) {
+                    stats_.total_pushes.fetch_add(count, std::memory_order_relaxed);
+                    stats_.batch_pushes.fetch_add(1, std::memory_order_relaxed);
+                    update_peak_size();
+                }
+                return true;
+            }
+
+            size_t scaled_backoff = backoff * backoff_multiplier_;
+            for (size_t i = 0; i < scaled_backoff; ++i) {
+                PAUSE_INSTRUCTION();
+            }
+            backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
+        }
+
+        if (stats_enabled_.load(std::memory_order_relaxed)) {
+            stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+        }
+        return false;
+    }
+
     size_t pop_batch(T* items, size_t max_count) {
         size_t popped = 0;
         size_t pos = dequeue_pos_.load(std::memory_order_relaxed);

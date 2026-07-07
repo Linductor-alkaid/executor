@@ -30,7 +30,7 @@ TEST(BatchIntegration, PushTasksBatch) {
     EXPECT_EQ(executor.processed_count(), batch_size);
 }
 
-TEST(BatchIntegration, PushBatchPartialSuccess) {
+TEST(BatchIntegration, PushBatchRejectsWhenInsufficientCapacity) {
     LockFreeTaskExecutor executor(16);
 
     std::vector<std::function<void()>> prefill(5);
@@ -48,9 +48,9 @@ TEST(BatchIntegration, PushBatchPartialSuccess) {
     }
 
     pushed = 0;
-    EXPECT_TRUE(executor.push_tasks_batch(tasks.data(), tasks.size(), pushed));
-    EXPECT_EQ(pushed, 10u);
-    EXPECT_LT(pushed, tasks.size());
+    EXPECT_FALSE(executor.push_tasks_batch(tasks.data(), tasks.size(), pushed));
+    EXPECT_EQ(pushed, 0u);
+    EXPECT_EQ(executor.pending_count(), prefill.size());
 }
 
 TEST(BatchIntegration, WorkerUsesBatchPop) {

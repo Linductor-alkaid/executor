@@ -66,7 +66,7 @@ public:
     /**
      * @brief 提交任务到无锁队列（线程安全，支持多线程并发调用）
      * @param task 任务函数
-     * @return 成功返回true，队列满或 stop() 后返回false
+     * @return 成功返回true，空任务、队列满或 stop() 后返回false
      */
     bool push_task(std::function<void()> task);
 
@@ -74,9 +74,9 @@ public:
      * @brief 批量提交任务
      * @param tasks 任务数组
      * @param count 任务数量
-     * @param pushed 实际提交的任务数量（输出参数）。返回 true 时仍可能小于 count，
-     *               调用方应检查该值并重试或丢弃剩余任务。
-     * @return 至少部分入队返回 true；stop() 后、队列无可用槽位或对象池耗尽返回 false
+     * @param pushed 实际提交的任务数量（输出参数）。返回 true 时等于 count；
+     *               返回 false 时为 0。
+     * @return 全部入队返回 true；空输入、stop() 后、队列空间不足或对象池耗尽返回 false
      */
     bool push_tasks_batch(const std::function<void()>* tasks, size_t count, size_t& pushed);
 
@@ -99,6 +99,14 @@ public:
      * 影响, 是核心可观测性指标.
      */
     uint64_t exception_count() const;
+
+    /**
+     * @brief 获取因空 std::function 输入被拒绝的累计次数
+     *
+     * 空任务是提交端输入错误，不会进入队列，也不会计入 exception_count()
+     * 或 processed_count()。
+     */
+    uint64_t rejected_empty_count() const;
 
     /**
      * @brief 注册异常处理器(可选). 任务抛出异常时, worker 线程会调用
@@ -126,6 +134,8 @@ public:
         // P-260618-006: 暴露异常计数, 与 processed_count() 一起是任务执行
         // 端到端可观测性的两个核心指标.
         uint64_t exception_count;
+        // 因空任务输入被拒绝的次数；不受 enable_stats 影响。
+        uint64_t rejected_empty_count;
         // 成功入队数占全部入队尝试数的比例:
         // total_pushes / (total_pushes + failed_pushes).
         double success_rate;
@@ -151,6 +161,8 @@ private:
     std::atomic<uint64_t> processed_count_{0};
     // P-260618-006: 累计异常计数, 始终累计, worker 线程写, 读取方任意线程.
     std::atomic<uint64_t> exception_count_{0};
+    // 空任务属于提交拒绝，而不是 worker 执行异常。
+    std::atomic<uint64_t> rejected_empty_count_{0};
     // P-260618-006: 可选异常回调. 在 worker 线程中调用, 需自行保证线程安全.
     std::mutex exception_handler_mutex_;
     std::function<void(std::exception_ptr)> exception_handler_;

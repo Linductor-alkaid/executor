@@ -56,6 +56,11 @@ bool LockFreeTaskExecutor::is_running() const {
 }
 
 bool LockFreeTaskExecutor::push_task(std::function<void()> task) {
+    if (!task) {
+        rejected_empty_count_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
     if (!enter_push()) {
         return false;
     }
@@ -80,20 +85,28 @@ bool LockFreeTaskExecutor::push_task(std::function<void()> task) {
 
 bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, size_t count, size_t& pushed) {
     pushed = 0;
-    if (!enter_push()) {
+    if (!tasks) {
+        rejected_empty_count_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     if (count == 0) {
-        leave_push();
         return true;
     }
+    for (size_t i = 0; i < count; ++i) {
+        if (!tasks[i]) {
+            rejected_empty_count_.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+    }
 
-    // P-260623-004: rewrite to honour the API.md / lockfree_queue.hpp::push_batch
-    // contract. We bulk-acquire wrappers from the object pool, populate them,
-    // then dispatch the whole array in a single push_batch call so the queue
-    // records a single batch_pushes++ and a single CAS reservation, instead of
-    // N independent push() calls (which never increment batch_pushes, breaking
-    // monitoring that keys on that counter for capacity alerts).
+    if (!enter_push()) {
+        return false;
+    }
+
+    // P-260623-004: keep batch monitoring meaningful by bulk-acquiring
+    // wrappers, populating them, then dispatching the whole array in one exact
+    // batch call so the queue records a single batch_pushes++ and a single CAS
+    // reservation, instead of N independent push() calls.
     std::vector<TaskWrapper*> ptrs(count, nullptr);
     size_t acquired = 0;
 
@@ -115,7 +128,7 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
 
     // 2) Populate wrappers. An exception while copying a std::function must
     //    release every acquired wrapper so the pool does not leak. We do not
-    //    have to undo any queue mutation because push_batch happens after.
+    //    have to undo any queue mutation because exact enqueue happens after.
     for (size_t i = 0; i < count; ++i) {
         try {
             ptrs[i]->func = tasks[i];
@@ -129,30 +142,18 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
         }
     }
 
-    // 3) Single batched enqueue. push_batch will update batch_pushes and
-    //    total_pushes atomically when stats are enabled. `pushed_out` may be
-    //    < count when the queue runs out of free slots; in that case the
-    //    remaining wrappers are recycled into the pool.
-    size_t pushed_out = 0;
-    bool ok = queue_->push_batch(ptrs.data(), count, pushed_out);
-    pushed = pushed_out;
-
-    // Recycle any wrappers that did not make it into the queue. We do this
-    // unconditionally for [pushed_out, count) regardless of `ok`, because
-    // push_batch is total with respect to its reservation: if it returned
-    // true, every wrapper from [0, pushed_out) is owned by the queue and
-    // [pushed_out, count) is still ours; if it returned false without
-    // recording any progress, the queue is full and every wrapper is still
-    // ours. (push_batch's contract is "reserves batch_size slots in one CAS,
-    // then writes them"; on reservation failure nothing is staged.)
-    for (size_t i = pushed_out; i < count; ++i) {
-        task_pool_->release(ptrs[i]);
+    // 3) Single exact batched enqueue. LockFreeTaskExecutor exposes atomic
+    //    batch semantics: either all wrappers are handed to the queue, or none
+    //    are. The queue-level exact helper refuses to reserve a smaller prefix.
+    bool ok = queue_->push_batch_exact(ptrs.data(), count);
+    if (ok) {
+        pushed = count;
+    } else {
+        for (size_t i = 0; i < count; ++i) {
+            task_pool_->release(ptrs[i]);
+        }
     }
 
-    // push_batch only returns false when the queue is full (zero reservation
-    // happened). In that case nothing was enqueued; report failure so the
-    // caller treats the batch as a no-op, matching the historical contract
-    // of "false = nothing got in".
     leave_push();
     return ok;
 }
@@ -167,6 +168,10 @@ uint64_t LockFreeTaskExecutor::processed_count() const {
 
 uint64_t LockFreeTaskExecutor::exception_count() const {
     return exception_count_.load(std::memory_order_relaxed);
+}
+
+uint64_t LockFreeTaskExecutor::rejected_empty_count() const {
+    return rejected_empty_count_.load(std::memory_order_relaxed);
 }
 
 void LockFreeTaskExecutor::set_exception_handler(std::function<void(std::exception_ptr)> handler) {
@@ -188,6 +193,7 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     // P-260618-006: expose the exception count alongside the existing queue
     // stats so monitoring code can correlate exceptions with queue state.
     result.exception_count = exception_count_.load(std::memory_order_relaxed);
+    result.rejected_empty_count = rejected_empty_count_.load(std::memory_order_relaxed);
     const double total_attempts =
         static_cast<double>(raw.total_pushes) + static_cast<double>(raw.failed_pushes);
     result.success_rate = total_attempts > 0.0
