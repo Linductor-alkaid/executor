@@ -216,6 +216,7 @@ struct GpuExecutorStatus {
     size_t memory_used_bytes = 0;                  // 已使用内存（字节）
     size_t memory_total_bytes = 0;                 // 总内存（字节）
     double memory_usage_percent = 0.0;            // 内存使用率
+    std::string last_error_message;                // 最近一次启动/运行失败原因（空表示无错误）
 };
 
 /**
