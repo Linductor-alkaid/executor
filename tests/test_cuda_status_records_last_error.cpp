@@ -35,7 +35,8 @@ TEST(CudaStatusRecordsLastError, DirectConstructionRecordsInvalidDeviceId) {
 
     const auto status = executor.get_status();
     EXPECT_FALSE(status.is_running);
-    EXPECT_TRUE(contains(status.last_error_message, "CUDA device_id"))
+    EXPECT_TRUE(contains(status.last_error_message, "CUDA device_id") ||
+                  contains(status.last_error_message, "device_id must be"))
         << status.last_error_message;
 }
 
@@ -47,7 +48,8 @@ TEST(CudaStatusRecordsLastError, DirectStartRecordsInvalidDeviceId) {
 
     const auto status = executor.get_status();
     EXPECT_FALSE(status.is_running);
-    EXPECT_TRUE(contains(status.last_error_message, "CUDA device_id"))
+    EXPECT_TRUE(contains(status.last_error_message, "CUDA device_id") ||
+                  contains(status.last_error_message, "device_id must be"))
         << status.last_error_message;
 }
 

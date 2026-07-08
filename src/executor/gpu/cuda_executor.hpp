@@ -137,8 +137,8 @@ private:
 
     /** 执行单任务（设备上下文、kernel、错误检查、promise、统计） */
     void run_one_task(GpuQueuedTask& task);
-    void clear_last_error();
-    void set_last_error(const std::string& message);
+    void clear_last_error() const;
+    void set_last_error(const std::string& message) const;
     std::string get_last_error() const;
 
 private:
@@ -232,10 +232,6 @@ private:
     std::exception_ptr make_cuda_exception_ptr(cudaError_t error_code, const char* operation) const;
 #endif
 
-    void clear_last_error() const;
-    void set_last_error(const std::string& message) const;
-    std::string get_last_error() const;
-
 private:
     std::string name_;                          // 执行器名称
     GpuExecutorConfig config_;                  // 配置
@@ -244,7 +240,7 @@ private:
     std::atomic<bool> is_running_{false};      // 是否运行中
     CudaLoader* loader_;                       // CUDA加载器（单例引用）
     mutable std::mutex error_mutex_;
-    std::string last_error_message_;
+    mutable std::string last_error_message_;
 
 #ifdef EXECUTOR_ENABLE_CUDA
     cudaDeviceProp device_prop_;               // 设备属性
@@ -263,9 +259,6 @@ private:
     std::atomic<size_t> completed_kernels_{0}; // 已完成kernel数
     std::atomic<size_t> failed_kernels_{0};    // 失败kernel数
     std::atomic<int64_t> total_kernel_time_ns_{0}; // 总kernel执行时间（纳秒）
-    mutable std::mutex error_mutex_;           // 最近一次错误状态互斥锁
-    mutable std::string last_error_message_;   // 最近一次启动/运行失败原因
-
     // 任务队列与 worker
     std::priority_queue<GpuQueuedTask, std::vector<GpuQueuedTask>, GpuQueuedTaskCompare> task_queue_;
     mutable std::mutex queue_mutex_;

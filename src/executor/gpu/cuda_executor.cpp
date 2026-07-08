@@ -281,21 +281,6 @@ bool CudaExecutor::check_cuda_error(int error_code, const char* operation) const
 }
 #endif
 
-void CudaExecutor::clear_last_error() const {
-    std::lock_guard<std::mutex> lock(error_mutex_);
-    last_error_message_.clear();
-}
-
-void CudaExecutor::set_last_error(const std::string& message) const {
-    std::lock_guard<std::mutex> lock(error_mutex_);
-    last_error_message_ = message;
-}
-
-std::string CudaExecutor::get_last_error() const {
-    std::lock_guard<std::mutex> lock(error_mutex_);
-    return last_error_message_;
-}
-
 bool CudaExecutor::ensure_device_context() const {
 #ifdef EXECUTOR_ENABLE_CUDA
     if (!loader_->is_available()) {
@@ -434,12 +419,12 @@ void CudaExecutor::set_exception_callback(
     exception_handler_.set_exception_callback(std::move(callback));
 }
 
-void CudaExecutor::clear_last_error() {
+void CudaExecutor::clear_last_error() const {
     std::lock_guard<std::mutex> lock(error_mutex_);
     last_error_message_.clear();
 }
 
-void CudaExecutor::set_last_error(const std::string& message) {
+void CudaExecutor::set_last_error(const std::string& message) const {
     std::lock_guard<std::mutex> lock(error_mutex_);
     last_error_message_ = message;
 }
