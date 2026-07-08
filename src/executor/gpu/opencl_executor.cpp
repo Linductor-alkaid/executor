@@ -10,6 +10,14 @@ namespace {
 
 constexpr const char* kInvalidOpenCLDeviceIdMessage = "OpenCL device_id must be >= 0";
 
+std::string opencl_config_validation_error(const GpuExecutorConfig& config) {
+    auto message = gpu_config_validation_error(config);
+    if (message == "GPU executor device_id must be >= 0") {
+        return kInvalidOpenCLDeviceIdMessage;
+    }
+    return message;
+}
+
 }  // namespace
 
 OpenCLExecutor::OpenCLExecutor(const std::string& name, const GpuExecutorConfig& config)
@@ -160,8 +168,9 @@ bool OpenCLExecutor::initialize_opencl() {
 }
 
 bool OpenCLExecutor::validate_config() {
-    if (config_.device_id < 0) {
-        set_last_error(kInvalidOpenCLDeviceIdMessage);
+    auto message = opencl_config_validation_error(config_);
+    if (!message.empty()) {
+        set_last_error(message);
         return false;
     }
     return true;
@@ -516,6 +525,12 @@ GpuExecutorStatus OpenCLExecutor::get_status() const {
 std::future<void> OpenCLExecutor::submit_kernel_impl(
     std::function<void(void*)> kernel_func,
     const GpuTaskConfig& config) {
+    if (!validate_config()) {
+        std::promise<void> promise;
+        promise.set_exception(std::make_exception_ptr(
+            std::runtime_error("OpenCLExecutor invalid configuration: " + get_last_error())));
+        return promise.get_future();
+    }
 
     std::packaged_task<void()> task([this, kernel_func, config]() {
         auto start = std::chrono::high_resolution_clock::now();

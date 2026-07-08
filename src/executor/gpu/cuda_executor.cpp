@@ -55,6 +55,12 @@ CudaExecutor::CudaExecutor(const std::string& name, const GpuExecutorConfig& con
     }
 
     try {
+        if (!validate_gpu_config(config_)) {
+            set_last_error(gpu_config_validation_error(config_));
+            is_available_ = false;
+            return;
+        }
+
         // 尝试加载CUDA DLL
         if (!loader_->load()) {
             set_last_error("CUDA loader is unavailable");
@@ -64,12 +70,14 @@ CudaExecutor::CudaExecutor(const std::string& name, const GpuExecutorConfig& con
 
         // 检查 CUDA 是否可用
         if (!check_cuda_available()) {
+            set_last_error("CUDA runtime or device is unavailable");
             is_available_ = false;
             return;
         }
 
         // 初始化设备
         if (!initialize_device()) {
+            set_last_error("CUDA device initialization failed");
             is_available_ = false;
             return;
         }
@@ -307,6 +315,11 @@ bool CudaExecutor::ensure_device_context() const {
 }
 
 bool CudaExecutor::start() {
+    if (!validate_gpu_config(config_)) {
+        set_last_error(gpu_config_validation_error(config_));
+        return false;
+    }
+
     if (!is_available_) {
         return false;
     }
@@ -386,6 +399,7 @@ bool CudaExecutor::start() {
     return false;
 #endif
 
+    clear_last_error();
     return true;
 }
 
@@ -418,6 +432,21 @@ void CudaExecutor::stop() {
 void CudaExecutor::set_exception_callback(
     std::function<void(const std::string&, std::exception_ptr)> callback) {
     exception_handler_.set_exception_callback(std::move(callback));
+}
+
+void CudaExecutor::clear_last_error() {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_message_.clear();
+}
+
+void CudaExecutor::set_last_error(const std::string& message) {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_message_ = message;
+}
+
+std::string CudaExecutor::get_last_error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    return last_error_message_;
 }
 
 void CudaExecutor::wait_for_completion() {
@@ -1152,6 +1181,7 @@ GpuExecutorStatus CudaExecutor::get_status() const {
     status.active_kernels = active_kernels_.load();
     status.completed_kernels = completed_kernels_.load();
     status.failed_kernels = failed_kernels_.load();
+    status.last_error_message = get_last_error();
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         status.queue_size = task_queue_.size();
@@ -1339,6 +1369,14 @@ std::future<void> CudaExecutor::submit_kernel_impl(
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
 
+    if (!validate_gpu_config(config_)) {
+        const auto message = gpu_config_validation_error(config_);
+        set_last_error(message);
+        promise->set_exception(std::make_exception_ptr(
+            std::runtime_error("CudaExecutor invalid configuration: " + message)));
+        return future;
+    }
+
     if (!is_available_ || !is_running_.load()) {
         set_last_error("CudaExecutor is not available or not running");
         promise->set_exception(std::make_exception_ptr(
@@ -1393,6 +1431,19 @@ std::vector<std::future<void>> CudaExecutor::submit_kernels_batch(
     const std::vector<std::pair<std::function<void(void*)>, GpuTaskConfig>>& tasks) {
     std::vector<std::future<void>> result;
     result.reserve(tasks.size());
+    if (!validate_gpu_config(config_)) {
+        const auto message = gpu_config_validation_error(config_);
+        set_last_error(message);
+        auto eptr = std::make_exception_ptr(
+            std::runtime_error("CudaExecutor invalid configuration: " + message));
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            (void)i;
+            auto p = std::make_shared<std::promise<void>>();
+            p->set_exception(eptr);
+            result.push_back(p->get_future());
+        }
+        return result;
+    }
     if (!is_available_ || !is_running_.load()) {
         set_last_error("CudaExecutor is not available or not running");
         auto eptr = std::make_exception_ptr(
