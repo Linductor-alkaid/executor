@@ -219,7 +219,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         )
     endif()
 
-    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|dispatcher_resize_under_load|concurrent_stop_submit)$")
+    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|thread_pool_monitor_concurrent_set|dispatcher_resize_under_load|concurrent_stop_submit)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             TIMEOUT 180
         )

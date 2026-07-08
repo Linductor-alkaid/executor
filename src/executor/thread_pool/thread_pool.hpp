@@ -255,6 +255,8 @@ public:
      * @brief 设置任务监控器（可选）
      *
      * 设置后，execute_task 前后将调用 record_task_start / record_task_complete。
+     * ThreadPool 不拥有该指针；调用方必须保证 monitor 对象在所有可能
+     * 已取得该指针快照的任务完成前保持存活。
      * @param m 监控器指针，可为 nullptr 表示禁用
      */
     void set_task_monitor(monitor::TaskMonitor* m);
@@ -446,8 +448,9 @@ private:
     // 异常处理器
     util::ExceptionHandler exception_handler_;
 
-    // 可选任务监控器（不拥有）
-    monitor::TaskMonitor* monitor_{nullptr};
+    // 可选任务监控器（不拥有）。允许运行中 set/unset；execute_task 每个任务
+    // acquire-load 一次快照，set_task_monitor release-store 发布新指针。
+    std::atomic<monitor::TaskMonitor*> monitor_{nullptr};
 
     // 初始化标志
     std::atomic<bool> initialized_{false};

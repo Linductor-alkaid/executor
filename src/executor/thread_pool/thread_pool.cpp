@@ -258,9 +258,10 @@ void ThreadPool::execute_task(const Task& task) {
     auto start_time = std::chrono::steady_clock::now();
 
     try {
-    if (monitor_ && monitor_->is_enabled()) {
-        monitor_->record_task_start(task.task_id, "default");
-    }
+        auto* monitor = monitor_.load(std::memory_order_acquire);
+        if (monitor && monitor->is_enabled()) {
+            monitor->record_task_start(task.task_id, "default");
+        }
 
     // P024 soft timeout: check elapsed time BEFORE execution.
     // If elapsed >= timeout at execution start, skip the task entirely and
@@ -306,8 +307,8 @@ void ThreadPool::execute_task(const Task& task) {
                     std::current_exception());
             }
         }
-        if (monitor_ && monitor_->is_enabled()) {
-            monitor_->record_task_timeout(task.task_id);
+        if (monitor && monitor->is_enabled()) {
+            monitor->record_task_timeout(task.task_id);
         }
         // 标记 timed_out 用于 update_statistics: completed++ 但不 failed++。
         // wait_for_completion() 以 completed 覆盖全部已结束任务，failed 是其子集。
@@ -318,8 +319,8 @@ void ThreadPool::execute_task(const Task& task) {
         end_time - start_time
     ).count();
 
-    if (!timed_out && monitor_ && monitor_->is_enabled()) {
-        monitor_->record_task_complete(task.task_id, success, execution_time_ns);
+    if (!timed_out && monitor && monitor->is_enabled()) {
+        monitor->record_task_complete(task.task_id, success, execution_time_ns);
     }
     update_statistics(execution_time_ns, success, timed_out);
     } catch (...) {
@@ -538,7 +539,7 @@ bool ThreadPool::is_stopped() const {
 }
 
 void ThreadPool::set_task_monitor(monitor::TaskMonitor* m) {
-    monitor_ = m;
+    monitor_.store(m, std::memory_order_release);
 }
 
 bool ThreadPool::try_steal_task(size_t worker_id, Task& task) {
