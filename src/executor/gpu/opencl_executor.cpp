@@ -10,6 +10,43 @@ namespace {
 
 constexpr const char* kInvalidOpenCLDeviceIdMessage = "OpenCL device_id must be >= 0";
 
+const char* opencl_error_name(cl_int error) {
+    switch (error) {
+        case CL_SUCCESS:
+            return "CL_SUCCESS";
+        case -1:
+            return "CL_DEVICE_NOT_FOUND";
+        case -2:
+            return "CL_DEVICE_NOT_AVAILABLE";
+        case -3:
+            return "CL_COMPILER_NOT_AVAILABLE";
+        case -4:
+            return "CL_MEM_OBJECT_ALLOCATION_FAILURE";
+        case -5:
+            return "CL_OUT_OF_RESOURCES";
+        case -6:
+            return "CL_OUT_OF_HOST_MEMORY";
+        case -30:
+            return "CL_INVALID_VALUE";
+        case -36:
+            return "CL_INVALID_COMMAND_QUEUE";
+        case -38:
+            return "CL_INVALID_MEM_OBJECT";
+        case -48:
+            return "CL_INVALID_KERNEL";
+        case -52:
+            return "CL_INVALID_KERNEL_ARGS";
+        case -54:
+            return "CL_INVALID_WORK_GROUP_SIZE";
+        case -57:
+            return "CL_INVALID_EVENT_WAIT_LIST";
+        case -61:
+            return "CL_INVALID_BUFFER_SIZE";
+        default:
+            return "CL_UNKNOWN_ERROR";
+    }
+}
+
 }  // namespace
 
 OpenCLExecutor::OpenCLExecutor(const std::string& name, const GpuExecutorConfig& config)
@@ -371,7 +408,7 @@ void OpenCLExecutor::synchronize() {
             if (!queue_wrapper->queue) {
                 continue;
             }
-            funcs.clFinish(queue_wrapper->queue);
+            check_opencl_error(funcs.clFinish(queue_wrapper->queue), "clFinish");
         }
     }
 }
@@ -387,7 +424,7 @@ void OpenCLExecutor::synchronize_stream(int stream_id) {
     if (!queue_wrapper->queue) {
         return;
     }
-    funcs.clFinish(queue_wrapper->queue);
+    check_opencl_error(funcs.clFinish(queue_wrapper->queue), "clFinish");
 }
 
 int OpenCLExecutor::create_stream() {
@@ -611,6 +648,12 @@ bool OpenCLExecutor::check_opencl_error(cl_int error, const char* operation) {
     if (error == CL_SUCCESS) {
         return true;
     }
+
+    std::ostringstream oss;
+    oss << (operation && operation[0] != '\0' ? operation : "OpenCL operation")
+        << ": " << opencl_error_name(error)
+        << " (" << error << ")";
+    set_last_error(oss.str());
     return false;
 }
 
