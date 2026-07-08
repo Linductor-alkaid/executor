@@ -10,6 +10,14 @@ namespace {
 
 constexpr const char* kInvalidOpenCLDeviceIdMessage = "OpenCL device_id must be >= 0";
 
+std::string opencl_config_validation_error(const GpuExecutorConfig& config) {
+    auto message = gpu_config_validation_error(config);
+    if (message == "GPU executor device_id must be >= 0") {
+        return kInvalidOpenCLDeviceIdMessage;
+    }
+    return message;
+}
+
 const char* opencl_error_name(cl_int error) {
     switch (error) {
         case CL_SUCCESS:
