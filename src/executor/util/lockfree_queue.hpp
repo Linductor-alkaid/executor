@@ -139,9 +139,15 @@ public:
         return false;
     }
 
+    /**
+     * @brief 批量入队。
+     *
+     * 当 count > 0 时，items 必须指向至少 count 个元素；空指针视为失败。
+     */
     bool push_batch(const T* items, size_t count, size_t& pushed) {
         pushed = 0;
         if (count == 0) return true;
+        if (items == nullptr) return false;
 
         size_t pos;
         size_t backoff = 1;
@@ -211,8 +217,14 @@ public:
         return false;
     }
 
+    /**
+     * @brief 精确批量入队，只有全部 count 个元素可写入时才成功。
+     *
+     * 当 count > 0 时，items 必须指向至少 count 个元素；空指针视为失败。
+     */
     bool push_batch_exact(const T* items, size_t count) {
         if (count == 0) return true;
+        if (items == nullptr) return false;
 
         size_t pos;
         size_t backoff = 1;
@@ -274,7 +286,14 @@ public:
         return false;
     }
 
+    /**
+     * @brief 批量出队。
+     *
+     * 当 max_count > 0 时，items 必须指向至少 max_count 个元素；空指针返回 0。
+     */
     size_t pop_batch(T* items, size_t max_count) {
+        if (max_count > 0 && items == nullptr) return 0;
+
         size_t popped = 0;
         size_t pos = dequeue_pos_.load(std::memory_order_relaxed);
 
