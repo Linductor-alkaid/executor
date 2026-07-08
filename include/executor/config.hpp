@@ -101,20 +101,24 @@ struct GpuExecutorConfig {
  * @param config GPU 执行器配置
  * @return 是否有效
  */
-inline bool validate_gpu_config(const GpuExecutorConfig& config) {
+inline std::string gpu_config_validation_error(const GpuExecutorConfig& config) {
     if (config.name.empty()) {
-        return false;
+        return "GPU executor name must not be empty";
     }
     if (config.max_queue_size == 0) {
-        return false;
+        return "GPU executor max_queue_size must be > 0";
     }
     if (config.device_id < 0) {
-        return false;
+        return "GPU executor device_id must be >= 0";
     }
     if (config.default_stream_count < 1) {
-        return false;
+        return "GPU executor default_stream_count must be >= 1";
     }
-    return true;
+    return {};
+}
+
+inline bool validate_gpu_config(const GpuExecutorConfig& config) {
+    return gpu_config_validation_error(config).empty();
 }
 
 } // namespace gpu
