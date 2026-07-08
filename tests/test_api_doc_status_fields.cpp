@@ -35,6 +35,19 @@ std::string extract_status_entry(const std::string& api_md) {
     return api_md.substr(pos, end - pos);
 }
 
+std::string extract_bullet_entry(const std::string& api_md,
+                                 const std::string& marker) {
+    auto pos = api_md.find(marker);
+    if (pos == std::string::npos) {
+        return {};
+    }
+    auto end = api_md.find("\n- **", pos + marker.size());
+    if (end == std::string::npos) {
+        end = api_md.size();
+    }
+    return api_md.substr(pos, end - pos);
+}
+
 std::string extract_section(const std::string& api_md,
                             const std::string& begin_marker,
                             const std::string& end_marker) {
@@ -136,6 +149,29 @@ TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
             ADD_FAILURE() << "  + " << f;
         }
     }
+}
+
+TEST(ApiDocStatusFields, ThreadPoolStatusDocsMatchCurrentUsage) {
+    std::string api_path;
+    const std::string api_md = read_doc_from_candidates(
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+    ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
+
+    const std::string entry =
+        extract_bullet_entry(api_md, "- **ThreadPoolStatus**");
+    ASSERT_FALSE(entry.empty())
+        << "ThreadPoolStatus entry not found in docs/API.md §7.3";
+
+    EXPECT_NE(entry.find("ThreadPool::get_status()"), std::string::npos)
+        << "ThreadPoolStatus docs must state it is still the ThreadPool status API";
+    EXPECT_NE(entry.find("AsyncExecutorStatus"), std::string::npos)
+        << "ThreadPoolStatus docs must direct facade users to AsyncExecutorStatus";
+    EXPECT_EQ(entry.find("全仓库"), std::string::npos)
+        << "ThreadPoolStatus docs must not claim repository-wide non-use";
+    EXPECT_EQ(entry.find("当前无任何代码使用"), std::string::npos)
+        << "ThreadPoolStatus docs must not claim the type is unused";
+    EXPECT_EQ(entry.find("无任何代码使用"), std::string::npos)
+        << "ThreadPoolStatus docs must not claim the type is unused";
 }
 
 TEST(ApiDocStatusFields, GpuRegistrationDocsMatchSupportedBackends) {
