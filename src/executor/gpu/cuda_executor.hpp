@@ -137,6 +137,9 @@ private:
 
     /** 执行单任务（设备上下文、kernel、错误检查、promise、统计） */
     void run_one_task(GpuQueuedTask& task);
+    void clear_last_error();
+    void set_last_error(const std::string& message);
+    std::string get_last_error() const;
 
 private:
     /**
@@ -230,6 +233,8 @@ private:
     bool is_available_;                        // CUDA是否可用
     std::atomic<bool> is_running_{false};      // 是否运行中
     CudaLoader* loader_;                       // CUDA加载器（单例引用）
+    mutable std::mutex error_mutex_;
+    std::string last_error_message_;
 
 #ifdef EXECUTOR_ENABLE_CUDA
     cudaDeviceProp device_prop_;               // 设备属性
