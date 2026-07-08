@@ -96,12 +96,7 @@ jobs:
         retention-days: 7
 
   lockfree-queue:
-    # LockfreeWorkerQueue path is exercised manually + via the nightly TSAN
-    # job for now. Currently known to fail under LOCKFREE_QUEUE=ON with
-    # test_dispatcher_resize_under_load throwing std::future_error
-    # ("Broken promise"); tracked as P-009 / executor daily plan 2026-07-07.
-    # Re-enable `pull_request` here once that is fixed.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: github.event_name == 'pull_request'
     name: Lockfree worker queue - gcc 11 Release
     runs-on: ubuntu-22.04
 

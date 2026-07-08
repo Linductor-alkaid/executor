@@ -4,6 +4,7 @@
 #include <thread>
 #include <vector>
 #include <atomic>
+#include <future>
 #include <memory>
 #include <new>
 #include <stdexcept>
@@ -265,6 +266,81 @@ bool test_push_move_does_not_copy() {
     return true;
 }
 
+bool test_clear_sets_exception_instead_of_broken_promise() {
+    std::cout << "Testing clear satisfies pending futures..." << std::endl;
+
+    constexpr size_t TASKS = 64;
+    LockFreeWorkerQueue queue(128);
+    std::vector<std::future<void>> futures;
+    futures.reserve(TASKS);
+
+    for (size_t i = 0; i < TASKS; ++i) {
+        auto promise = std::make_shared<std::promise<void>>();
+        auto ready = std::make_shared<std::atomic_bool>(false);
+        futures.emplace_back(promise->get_future());
+
+        Task task;
+        task.task_id = "clear_future_" + std::to_string(i);
+        task.priority = TaskPriority::NORMAL;
+        task.function = [promise, ready]() {
+            bool expected = false;
+            if (ready->compare_exchange_strong(expected, true,
+                                               std::memory_order_acq_rel)) {
+                promise->set_value();
+            }
+        };
+        task.on_timeout = [promise, ready](std::exception_ptr exception) {
+            bool expected = false;
+            if (ready->compare_exchange_strong(expected, true,
+                                               std::memory_order_acq_rel)) {
+                promise->set_exception(exception);
+            }
+        };
+
+        if (!queue.push(task)) {
+            std::cerr << "FAILED: push failed at task " << i << std::endl;
+            return false;
+        }
+    }
+
+    queue.clear();
+
+    for (size_t i = 0; i < futures.size(); ++i) {
+        if (futures[i].wait_for(std::chrono::seconds(1)) !=
+            std::future_status::ready) {
+            std::cerr << "FAILED: future " << i
+                      << " was not satisfied by clear()" << std::endl;
+            return false;
+        }
+
+        try {
+            futures[i].get();
+            std::cerr << "FAILED: future " << i
+                      << " completed successfully after clear()" << std::endl;
+            return false;
+        } catch (const std::future_error& e) {
+            std::cerr << "FAILED: future " << i
+                      << " got std::future_error: " << e.what() << std::endl;
+            return false;
+        } catch (const std::runtime_error& e) {
+            if (std::string(e.what()) != "pool shrunk") {
+                std::cerr << "FAILED: future " << i
+                          << " got unexpected runtime_error: " << e.what()
+                          << std::endl;
+                return false;
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "FAILED: future " << i
+                      << " got unexpected exception: " << e.what()
+                      << std::endl;
+            return false;
+        }
+    }
+
+    std::cout << "PASSED: clear satisfies pending futures" << std::endl;
+    return true;
+}
+
 bool test_steal() {
     std::cout << "Testing steal..." << std::endl;
 
@@ -467,6 +543,7 @@ int main() {
     all_passed &= test_steal_no_double_consume();
     all_passed &= test_push_batch_partial_fill_no_leak();
     all_passed &= test_push_move_does_not_copy();
+    all_passed &= test_clear_sets_exception_instead_of_broken_promise();
 
     if (all_passed) {
         std::cout << "\n✓ All tests passed!" << std::endl;

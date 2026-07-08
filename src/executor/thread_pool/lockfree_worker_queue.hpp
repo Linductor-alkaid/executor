@@ -199,7 +199,7 @@ private:
 
         try {
             task.on_timeout(std::make_exception_ptr(std::runtime_error(
-                "Task discarded before execution")));
+                "pool shrunk")));
         } catch (...) {
         }
     }
