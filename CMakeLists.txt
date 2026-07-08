@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(executor LANGUAGES CXX VERSION 0.2.2)
+project(executor LANGUAGES CXX VERSION 0.2.3)
 
 # C++ 标准设置
 set(CMAKE_CXX_STANDARD 20)

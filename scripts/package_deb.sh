@@ -5,7 +5,7 @@
 set -e  # 遇到错误立即退出
 
 # 默认参数
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.2.3}"
 BUILD_DIR="${BUILD_DIR:-build_linux}"
 OUTPUT_DIR="${OUTPUT_DIR:-dist}"
 PACKAGE_TYPE="${PACKAGE_TYPE:-all}"  # all, dev, runtime
@@ -41,7 +41,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--version 0.1.0] [--build-dir build_linux] [--output-dir dist] [--package-type all|dev|runtime] [--maintainer \"Name <email>\"] [--description \"Description\"]"
+            echo "Usage: $0 [--version 0.2.3] [--build-dir build_linux] [--output-dir dist] [--package-type all|dev|runtime] [--maintainer \"Name <email>\"] [--description \"Description\"]"
             exit 1
             ;;
     esac

@@ -6,6 +6,7 @@ build_*/
 dist/
 cmake-build-*/
 output/
+build*/
 
 # 编译输出
 *.o
@@ -66,6 +67,8 @@ logs/
 
 # claude
 .claude/
+.codex/
+.agents/
 
 # 用户配置
 ai_service_config.json

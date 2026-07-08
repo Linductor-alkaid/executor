@@ -4,6 +4,53 @@
 
 ---
 
+## [0.2.3] - 2026-07-08
+
+0.2.3 是面向 `Executor` facade 完整度与运行时失败可观察性的向后兼容版本。已有 0.2.2 代码可以继续编译使用；新代码建议优先使用 `_ex`、failure callback、facade 实时推送和可诊断等待 API。
+
+### 新增
+
+- **统一失败事件模型**：新增 `FailureKind`、`ExecutorFailureEvent`、`ExecutorFailureStatus` 与 `ExecutorFailureCallback`，覆盖任务异常、提交拒绝、任务超时、实时丢任务、GPU 失败、等待超时和调优回退等事件类型。
+- **Facade 失败观察入口**：`Executor` 新增 `set_failure_callback()`、`get_failure_status()`、`get_recent_failures()`、`clear_recent_failures()` 和 `set_recent_failure_capacity()`；未设置 callback 时，失败仍会累计到状态计数和最近事件缓冲。
+- **可诊断 Result API**：新增 `ExecutorResult`、`ExecutorErrorCode` 与 `executor_error_code_to_string()`；`initialize_ex()`、`register_realtime_task_ex()`、`start_realtime_task_ex()`、`register_gpu_executor_ex()` 可返回稳定错误码与说明消息，旧 `bool` API 保持兼容并委托到 `_ex`。
+- **等待与生命周期状态**：新增 `CompletionStatus`、`WaitResult`、`wait_for_completion_for()`、`wait_for_completion_ex()`、`try_wait_for_completion()`、`is_idle()` 和 `get_completion_status()`，等待超时时可查看 active / queued / pending 任务快照。
+- **周期任务状态查询**：新增 `PeriodicTaskStatus`、`get_periodic_task_status()` 与 `get_all_periodic_task_status()`，记录周期任务执行次数、失败次数、连续失败次数、最后错误与下一次执行时间。
+- **实时 facade 推送**：新增 `Executor::push_realtime_task()` 与 `try_push_realtime_task()`，用户无需获取底层 `IRealtimeExecutor*` 即可推送实时任务；失败通过返回值、failure event 和状态计数同时可见。
+- **实时拒绝原因计数**：`RealtimeExecutorStatus` 新增 `rejected_not_running_count`、`rejected_empty_task_count`、`pool_exhausted_count`、`queue_full_count`，将 `dropped_task_count` 的主要原因拆开观测。
+- **失败可观察示例**：新增/更新 `examples/failure_observability.cpp`、`examples/periodic_monitoring.cpp` 与 `examples/realtime_can.cpp`，展示 `_ex` 初始化、failure callback、wait result、周期状态和实时 facade 推送。
+
+### 修复
+
+- **普通异步任务异常可见**：通过 `Executor::submit()` / `submit_priority()` / `submit_batch()` 提交的用户任务即使调用方没有立即 `future.get()`，也会记录 `TaskException` failure event，并让底层失败统计保持可见。
+- **fire-and-forget 批量任务异常可见**：`submit_batch_no_future()` 的用户任务异常进入 failure event / status counter，避免无 future 场景下静默丢失异常。
+- **提交拒绝可见**：未初始化、shutdown 后提交、空 batch、执行器不可用等提交失败路径记录 `SubmitRejected`，有 future 的路径会设置异常。
+- **延迟与周期任务失败可见**：`submit_delayed()` 到期提交失败会设置 promise 异常并记录 failure event；`submit_periodic()` 的周期回调异常会更新周期任务状态并触发 failure event，默认继续调度。
+- **等待超时可诊断**：`wait_for_completion()` 保持兼容签名，但超时不再无声返回；`wait_for_completion_ex()` 返回超时状态快照并累计 `wait_timeout_count`，shutdown 等待超时也会留下诊断事件。
+- **Callback 异常隔离**：failure callback 自身抛出的异常不会杀死 worker、定时器线程或后台执行路径。
+- **实时推送失败归因**：facade 推送在实时 executor 不存在、未运行、空任务、队列满或对象池耗尽时统一返回 `false` 并记录对应 failure event。
+
+### 文档
+
+- **README / README_zh**：同步 `Executor` facade 的失败可观察性、可诊断 `_ex` API、实时推送入口与 `wait_for_completion_ex()` 示例。
+- **API.md**：补充 `ExecutorResult`、failure status、periodic status、wait result、实时背压字段和软超时 future 异常语义。
+- **MIGRATION.md**：新增“从 0.2.2 升级到 0.2.3”，明确无破坏性变更，并给出推荐迁移入口。
+- **Facade 可观察性计划**：`docs/todolists/facade_observability_update_plan.md` 标记阶段 1-6 完成，保留通信 facade 阶段作为后续工作。
+- **Deb 打包指南**：发布命令、版本检查清单和 CUDA 完整包说明更新到 `0.2.3`。
+
+### 测试 / CI
+
+- **失败可观察性测试**：新增/补强 `test_executor_failure_observability`、`test_periodic_failure_observability`、`test_thread_pool_timeout_future`，覆盖任务异常、批量无 future、周期任务失败和软超时 future 异常。
+- **可诊断 API 测试**：新增 `test_executor_result_diagnostics`，覆盖初始化、实时注册/启动、GPU 注册等 `_ex` 错误码。
+- **等待超时测试**：新增/补强 `test_wait_completion_result`、`test_wait_for_completion_timeout_observable`，验证完成、超时、未初始化状态和 failure counter。
+- **实时 facade 推送测试**：新增 `test_realtime_facade_push`，覆盖成功推送、不存在 executor、未运行、空任务、停止后推送和队列满失败路径。
+- **通信 facade 规划测试**：保留 `tests/harness/test_comm_facade_usage.cpp` 的 disabled 用例，作为后续 `executor::comm` facade API 的需求锚点；0.2.3 不发布该 API。
+
+### 兼容性
+
+- **无破坏性变更**：0.2.3 保持 0.2.2 公开 API 兼容；新增 API 均为扩展。旧 `initialize()`、`register_realtime_task()`、`start_realtime_task()`、`register_gpu_executor()`、`wait_for_completion()` 和底层 `push_task()` 继续可用。
+
+---
+
 ## [0.2.2] - 2026-06-18
 
 ### 修复

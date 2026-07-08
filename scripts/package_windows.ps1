@@ -2,7 +2,7 @@
 # 将构建好的库打包成发行版本
 
 param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "0.2.3",
     [string]$BuildDir = "build_windows",
     [string]$OutputDir = "dist",
     [switch]$IncludeStatic = $true,

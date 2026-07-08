@@ -23,7 +23,7 @@
 
 ```powershell
 .\scripts\build_and_package_windows.ps1 `
-    -Version "0.1.0" `
+    -Version "0.2.3" `
     -BuildType "Release" `
     -Generator "Visual Studio 17 2022" `
     -Architecture "x64" `
@@ -35,7 +35,7 @@
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-Version` | `0.1.0` | 版本号，用于打包命名 |
+| `-Version` | `0.2.3` | 版本号，用于打包命名 |
 | `-BuildType` | `Release` | 构建类型（Release/Debug） |
 | `-Generator` | `Visual Studio 17 2022` | CMake 生成器 |
 | `-Architecture` | `x64` | 目标架构（x64/x86） |
@@ -70,7 +70,7 @@
 构建完成后，使用打包脚本创建发行包：
 
 ```powershell
-.\scripts\package_windows.ps1 -Version "0.1.0"
+.\scripts\package_windows.ps1 -Version "0.2.3"
 ```
 
 打包脚本会：
@@ -130,7 +130,7 @@ cmake --install build_shared --config Release
 打包后的目录结构如下：
 
 ```
-executor-0.1.0-windows-x64/
+executor-0.2.3-windows-x64/
 ├── static/                    # 静态库
 │   ├── lib/
 │   │   ├── executor.lib      # 静态库文件
@@ -163,7 +163,7 @@ executor-0.1.0-windows-x64/
 2. 在 CMake 配置时设置路径：
 
 ```powershell
-cmake -B build -DCMAKE_PREFIX_PATH=path\to\executor-0.1.0-windows-x64\static
+cmake -B build -DCMAKE_PREFIX_PATH=path\to\executor-0.2.3-windows-x64\static
 ```
 
 3. 在项目的 `CMakeLists.txt` 中：
@@ -179,7 +179,7 @@ target_link_libraries(your_target PRIVATE executor::executor)
 2. 在 CMake 配置时设置路径：
 
 ```powershell
-cmake -B build -DCMAKE_PREFIX_PATH=path\to\executor-0.1.0-windows-x64\shared
+cmake -B build -DCMAKE_PREFIX_PATH=path\to\executor-0.2.3-windows-x64\shared
 ```
 
 3. 在项目的 `CMakeLists.txt` 中：

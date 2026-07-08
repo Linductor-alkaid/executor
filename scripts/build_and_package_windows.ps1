@@ -2,7 +2,7 @@
 # 一键构建静态库、动态库并打包成发行版本
 
 param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "0.2.3",
     [string]$BuildType = "Release",
     [string]$Generator = "Visual Studio 17 2022",
     [string]$Architecture = "x64",

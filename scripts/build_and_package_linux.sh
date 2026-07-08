@@ -5,7 +5,7 @@
 set -e  # 遇到错误立即退出
 
 # 默认参数
-VERSION="${VERSION:-0.1.0}"
+VERSION="${VERSION:-0.2.3}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_STATIC="${BUILD_STATIC:-true}"
 BUILD_SHARED="${BUILD_SHARED:-true}"
@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--version 0.1.0] [--build-type Release|Debug] [--build-static true|false] [--build-shared true|false] [--build-tests true|false] [--build-examples true|false] [--build-dir build_linux] [--output-dir dist]"
+            echo "Usage: $0 [--version 0.2.3] [--build-type Release|Debug] [--build-static true|false] [--build-shared true|false] [--build-tests true|false] [--build-examples true|false] [--build-dir build_linux] [--output-dir dist]"
             exit 1
             ;;
     esac

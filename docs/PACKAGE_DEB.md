@@ -22,19 +22,19 @@
 
 ### 在带 CUDA 的环境下
 
-发布 v0.2.2 的 deb 包建议在带 CUDA Toolkit 的构建机上完成完整构建。CUDA 执行器运行时通过动态加载 `libcuda` 降级，用户机器没有 CUDA 驱动时不会阻止 CPU 路径使用。
+发布 v0.2.3 的 deb 包建议在带 CUDA Toolkit 的构建机上完成完整构建。CUDA 执行器运行时通过动态加载 `libcuda` 降级，用户机器没有 CUDA 驱动时不会阻止 CPU 路径使用。
 
 ```bash
 # 在带 CUDA Toolkit 的环境下
 cmake -B build -DEXECUTOR_ENABLE_CUDA=ON
-sudo ./scripts/build_and_package_deb.sh --version 0.2.2 --maintainer "Your Name <your.email@example.com>"
+sudo ./scripts/build_and_package_deb.sh --version 0.2.3 --maintainer "Your Name <your.email@example.com>"
 ```
 
 ### 自定义构建选项
 
 ```bash
 ./scripts/build_and_package_deb.sh \
-    --version "0.1.0" \
+    --version "0.2.3" \
     --build-type "Release" \
     --maintainer "Your Name <your.email@example.com>" \
     --deb-package-type "all"
@@ -44,7 +44,7 @@ sudo ./scripts/build_and_package_deb.sh --version 0.2.2 --maintainer "Your Name 
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `--version` | `0.1.0` | 版本号，用于打包命名 |
+| `--version` | `0.2.3` | 版本号，用于打包命名 |
 | `--build-type` | `Release` | 构建类型（Release/Debug） |
 | `--build-static` | `true` | 是否构建静态库 |
 | `--build-shared` | `true` | 是否构建动态库 |
@@ -72,13 +72,13 @@ sudo ./scripts/build_and_package_deb.sh --version 0.2.2 --maintainer "Your Name 
 
 ```bash
 # 打包所有类型（开发包 + 运行时包）
-./scripts/package_deb.sh --version "0.1.0" --maintainer "Your Name <email@example.com>"
+./scripts/package_deb.sh --version "0.2.3" --maintainer "Your Name <email@example.com>"
 
 # 仅打包开发包
-./scripts/package_deb.sh --version "0.1.0" --package-type dev --maintainer "Your Name <email@example.com>"
+./scripts/package_deb.sh --version "0.2.3" --package-type dev --maintainer "Your Name <email@example.com>"
 
 # 仅打包运行时包
-./scripts/package_deb.sh --version "0.1.0" --package-type runtime --maintainer "Your Name <email@example.com>"
+./scripts/package_deb.sh --version "0.2.3" --package-type runtime --maintainer "Your Name <email@example.com>"
 ```
 
 ---
@@ -120,13 +120,13 @@ sudo ./scripts/build_and_package_deb.sh --version 0.2.2 --maintainer "Your Name 
 **对于开发者（推荐）：**
 ```bash
 # 使用默认 all 模式，只需安装一个包
-sudo dpkg -i dist/libexecutor-dev_0.1.0_amd64.deb
+sudo dpkg -i dist/libexecutor-dev_0.2.3_amd64.deb
 ```
 
 **对于仅运行应用程序的用户：**
 ```bash
 # 只需安装运行时包
-sudo dpkg -i dist/libexecutor_0.1.0_amd64.deb
+sudo dpkg -i dist/libexecutor_0.2.3_amd64.deb
 ```
 
 ---
@@ -138,13 +138,13 @@ sudo dpkg -i dist/libexecutor_0.1.0_amd64.deb
 **推荐方式（默认 all 模式，只需安装一个包）：**
 ```bash
 # 安装开发包（包含所有内容：静态库、动态库、头文件、CMake 配置）
-sudo dpkg -i dist/libexecutor-dev_0.1.0_amd64.deb
+sudo dpkg -i dist/libexecutor-dev_0.2.3_amd64.deb
 
 # 如果依赖缺失，修复依赖
 sudo apt-get install -f
 
 # 或者使用 apt 安装（如果已添加到仓库）
-sudo apt install ./dist/libexecutor-dev_0.1.0_amd64.deb
+sudo apt install ./dist/libexecutor-dev_0.2.3_amd64.deb
 ```
 
 **说明：**
@@ -272,13 +272,13 @@ A: 使用 `dpkg-deb` 命令：
 
 ```bash
 # 查看包信息
-dpkg-deb -I dist/libexecutor-dev_0.1.0_amd64.deb
+dpkg-deb -I dist/libexecutor-dev_0.2.3_amd64.deb
 
 # 查看包内容
-dpkg-deb -c dist/libexecutor-dev_0.1.0_amd64.deb
+dpkg-deb -c dist/libexecutor-dev_0.2.3_amd64.deb
 
 # 提取包内容（不解压）
-dpkg-deb -x dist/libexecutor-dev_0.1.0_amd64.deb /tmp/extracted
+dpkg-deb -x dist/libexecutor-dev_0.2.3_amd64.deb /tmp/extracted
 ```
 
 ### Q: 如何创建本地 apt 仓库？
@@ -309,10 +309,10 @@ reprepro -b repo includedeb focal dist/*.deb
 
 在发布 deb 包前，请确认：
 
-- [ ] 版本号正确：`CMakeLists.txt`、README 与打包命令均为 `0.2.2`
+- [ ] 版本号正确：`CMakeLists.txt`、README 与打包命令均为 `0.2.3`
 - [ ] 维护者信息正确
 - [ ] 静态库和动态库都已成功构建
-- [ ] v0.2.2 发布包在带 CUDA Toolkit 的环境下完成完整构建（`EXECUTOR_ENABLE_CUDA=ON`）
+- [ ] v0.2.3 发布包在带 CUDA Toolkit 的环境下完成完整构建（`EXECUTOR_ENABLE_CUDA=ON`）
 - [ ] 无 CUDA 用户机器验证运行时降级路径：CPU 功能可用，CUDA 后端不可用时不崩溃
 - [ ] 所有头文件都已包含在开发包中
 - [ ] CMake 配置文件已正确生成
@@ -337,7 +337,7 @@ reprepro -b repo includedeb focal dist/*.deb
 
 ### 在无 CUDA 环境下
 
-如果用户机器没有 CUDA Toolkit，可以关闭 CUDA 构建；executor 的 CPU 功能和 OpenCL 可选路径不受影响。使用 v0.2.2 CUDA 完整包时，CUDA 后端也会在运行时检测不可用并自动降级。
+如果用户机器没有 CUDA Toolkit，可以关闭 CUDA 构建；executor 的 CPU 功能和 OpenCL 可选路径不受影响。使用 v0.2.3 CUDA 完整包时，CUDA 后端也会在运行时检测不可用并自动降级。
 
 ```bash
 # 用户机器没有 CUDA Toolkit: 运行时自动降级
@@ -348,7 +348,7 @@ cmake -B build -DEXECUTOR_ENABLE_CUDA=OFF
 
 ```bash
 ./scripts/package_deb.sh \
-    --version "0.1.0" \
+    --version "0.2.3" \
     --maintainer "Your Name <email@example.com>" \
     --description "Custom description for the package"
 ```
@@ -359,7 +359,7 @@ cmake -B build -DEXECUTOR_ENABLE_CUDA=OFF
 
 ```bash
 ./scripts/package_deb.sh \
-    --version "0.1.0" \
+    --version "0.2.3" \
     --build-dir build_linux \
     --maintainer "Your Name <email@example.com>"
 ```
@@ -368,8 +368,8 @@ cmake -B build -DEXECUTOR_ENABLE_CUDA=OFF
 
 ```bash
 # 先打包开发包
-./scripts/package_deb.sh --package-type dev --version "0.1.0"
+./scripts/package_deb.sh --package-type dev --version "0.2.3"
 
 # 再打包运行时包
-./scripts/package_deb.sh --package-type runtime --version "0.1.0"
+./scripts/package_deb.sh --package-type runtime --version "0.2.3"
 ```
