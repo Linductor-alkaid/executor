@@ -20,7 +20,7 @@
 - [ ] `Executor` facade 尚无统一失败回调 / 最近错误 / 失败事件查询入口。
 - [ ] 多个注册/初始化 API 仍只返回 `bool`，失败原因不可诊断。
 - [x] 实时任务推送仍要求用户先拿底层 `IRealtimeExecutor*`，facade 完整度不足。
-- [ ] `wait_for_completion()` 超时返回不可区分，调用方无法知道是否真的完成。
+- [x] `wait_for_completion()` 超时返回不可区分，调用方无法知道是否真的完成。
 
 ---
 
@@ -206,18 +206,18 @@
 
 ### 任务
 
-- [ ] 新增：
+- [x] 新增：
   - `bool wait_for_completion_for(std::chrono::duration<...>)`
   - `WaitResult wait_for_completion_ex(timeout)`
   - `bool is_idle()` 或 `get_completion_status()`
-- [ ] 旧 `wait_for_completion()` 保持阻塞语义，文档说明其行为。
-- [ ] 等待超时记录 `WaitTimeout` 事件并累计计数。
-- [ ] shutdown 路径中如果等待超时，应有可观察诊断，而不是继续假装全部完成。
+- [x] 旧 `wait_for_completion()` 保持阻塞语义，文档说明其行为。
+- [x] 等待超时记录 `WaitTimeout` 事件并累计计数。
+- [x] shutdown 路径中如果等待超时，应有可观察诊断，而不是继续假装全部完成。
 
 ### 验收
 
-- [ ] 测试能明确区分完成返回和超时返回。
-- [ ] wait timeout 后状态能说明仍有 active / queued / pending 任务。
+- [x] 测试能明确区分完成返回和超时返回。
+- [x] wait timeout 后状态能说明仍有 active / queued / pending 任务。
 
 ---
 

@@ -372,6 +372,9 @@ public:
 
     /**
      * @brief 等待所有已提交的异步任务完成
+     *
+     * 兼容旧调用方，最多等待 kDefaultWaitForCompletionTimeout。
+     * 超时时不抛异常，但会记录 FailureKind::WaitTimeout。
      */
     void wait_for_completion();
 
@@ -384,6 +387,28 @@ public:
      *         观察 wait_timeout_count。
      */
     bool try_wait_for_completion(std::chrono::milliseconds timeout);
+
+    /**
+     * @brief 等待所有已提交的异步任务完成并返回是否完成
+     */
+    template<typename Rep, typename Period>
+    bool wait_for_completion_for(
+        const std::chrono::duration<Rep, Period>& timeout);
+
+    /**
+     * @brief 等待所有已提交的异步任务完成并返回诊断结果
+     */
+    WaitResult wait_for_completion_ex(std::chrono::milliseconds timeout);
+
+    /**
+     * @brief 当前默认异步执行器是否没有排队或执行中的任务
+     */
+    bool is_idle() const;
+
+    /**
+     * @brief 获取默认异步执行器完成状态快照
+     */
+    CompletionStatus get_completion_status() const;
 
     /**
      * @brief 注册 GPU 执行器
@@ -610,6 +635,13 @@ private:
 };
 
 // 模板方法实现
+template<typename Rep, typename Period>
+bool Executor::wait_for_completion_for(
+    const std::chrono::duration<Rep, Period>& timeout) {
+    return wait_for_completion_ex(
+        std::chrono::duration_cast<std::chrono::milliseconds>(timeout)).completed;
+}
+
 template<typename F, typename... Args>
 auto Executor::submit(F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {

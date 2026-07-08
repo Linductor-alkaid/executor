@@ -146,6 +146,36 @@ struct ExecutorFailureStatus {
 };
 
 /**
+ * @brief Executor facade 等待/完成状态快照
+ */
+struct CompletionStatus {
+    std::string executor_name = "default";
+    bool is_initialized = false;
+    bool is_running = false;
+    bool is_idle = true;
+    size_t active_tasks = 0;
+    size_t queued_tasks = 0;
+    size_t pending_tasks = 0;
+    size_t completed_tasks = 0;
+    size_t failed_tasks = 0;
+};
+
+/**
+ * @brief Executor facade 等待结果
+ */
+struct WaitResult {
+    bool completed = true;
+    bool timed_out = false;
+    std::chrono::milliseconds timeout{0};
+    CompletionStatus status;
+    std::string message;
+
+    explicit operator bool() const noexcept {
+        return completed;
+    }
+};
+
+/**
  * @brief Executor facade 周期任务状态
  */
 struct PeriodicTaskStatus {

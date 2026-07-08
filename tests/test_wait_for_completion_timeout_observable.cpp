@@ -37,10 +37,17 @@ bool test_try_wait_for_completion_returns_true_when_complete() {
         ran.store(true, std::memory_order_release);
     });
 
-    TEST_ASSERT(executor.try_wait_for_completion(std::chrono::seconds(1)),
-                "try_wait_for_completion should return true after completion");
+    TEST_ASSERT(executor.wait_for_completion_for(std::chrono::seconds(1)),
+                "wait_for_completion_for should return true after completion");
     future.get();
     TEST_ASSERT(ran.load(std::memory_order_acquire), "task should run");
+    TEST_ASSERT(executor.is_idle(), "executor should be idle after completion");
+
+    auto completion = executor.get_completion_status();
+    TEST_ASSERT(completion.is_initialized, "completion status should report initialized executor");
+    TEST_ASSERT(completion.is_idle, "completion status should report idle after completion");
+    TEST_ASSERT(completion.pending_tasks == 0,
+                "completion status should report no pending tasks");
 
     auto status = executor.get_failure_status();
     TEST_ASSERT(status.wait_timeout_count == 0,
@@ -67,10 +74,20 @@ bool test_try_wait_for_completion_returns_false_on_timeout() {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
     });
 
-    const bool completed =
-        executor.try_wait_for_completion(std::chrono::milliseconds(50));
-    TEST_ASSERT(!completed,
-                "try_wait_for_completion should return false on timeout");
+    auto wait_result = executor.wait_for_completion_ex(std::chrono::milliseconds(50));
+    TEST_ASSERT(!wait_result.completed,
+                "wait_for_completion_ex should report incomplete on timeout");
+    TEST_ASSERT(wait_result.timed_out,
+                "wait_for_completion_ex should mark timed_out on timeout");
+    TEST_ASSERT(wait_result.timeout == std::chrono::milliseconds(50),
+                "wait_for_completion_ex should echo timeout duration");
+    TEST_ASSERT(!wait_result.status.is_idle,
+                "timeout result should include non-idle completion status");
+    TEST_ASSERT(wait_result.status.pending_tasks > 0,
+                "timeout result should report pending tasks");
+    TEST_ASSERT(wait_result.status.active_tasks > 0 || wait_result.status.queued_tasks > 0,
+                "timeout result should report active or queued tasks");
+    TEST_ASSERT(!executor.is_idle(), "executor should not be idle while task is running");
 
     future.get();
     TEST_ASSERT(executor.try_wait_for_completion(std::chrono::seconds(1)),
@@ -138,6 +155,34 @@ bool test_wait_for_completion_records_wait_timeout_on_timeout_path() {
     return true;
 }
 
+
+bool test_completion_status_before_initialize() {
+    std::cout << "Testing completion status before initialize..." << std::endl;
+
+    Executor executor;
+    auto status = executor.get_completion_status();
+    TEST_ASSERT(!status.is_initialized,
+                "uninitialized completion status should report not initialized");
+    TEST_ASSERT(status.is_idle,
+                "uninitialized executor should be considered idle");
+    TEST_ASSERT(status.pending_tasks == 0,
+                "uninitialized executor should report no pending tasks");
+
+    auto result = executor.wait_for_completion_ex(std::chrono::milliseconds(1));
+    TEST_ASSERT(result.completed,
+                "wait_for_completion_ex should complete for uninitialized executor");
+    TEST_ASSERT(!result.timed_out,
+                "uninitialized wait should not time out");
+    TEST_ASSERT(result.status.is_idle,
+                "uninitialized wait result should report idle status");
+
+    auto failures = executor.get_failure_status();
+    TEST_ASSERT(failures.wait_timeout_count == 0,
+                "uninitialized wait should not record timeout failure");
+
+    std::cout << "  Completion status before initialize: PASSED" << std::endl;
+    return true;
+}
 bool test_thread_pool_try_wait_for_completion_basic() {
     std::cout << "Testing ThreadPool try_wait_for_completion..." << std::endl;
 
@@ -170,6 +215,7 @@ int main() {
     all_passed &= test_try_wait_for_completion_returns_true_when_complete();
     all_passed &= test_try_wait_for_completion_returns_false_on_timeout();
     all_passed &= test_wait_for_completion_records_wait_timeout_on_timeout_path();
+    all_passed &= test_completion_status_before_initialize();
     all_passed &= test_thread_pool_try_wait_for_completion_basic();
 
     if (all_passed) {

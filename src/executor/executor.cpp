@@ -197,6 +197,12 @@ ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
 // 关闭执行器
 void Executor::shutdown(bool wait_for_tasks) {
     stop_timer_thread();
+    if (wait_for_tasks && manager_->has_default_async_executor()) {
+        const auto wait_result = wait_for_completion_ex(kDefaultWaitForCompletionTimeout);
+        manager_->shutdown(wait_result.completed);
+        return;
+    }
+
     manager_->shutdown(wait_for_tasks);
 }
 
@@ -713,25 +719,75 @@ std::map<std::string, TaskStatistics> Executor::get_all_task_statistics() const 
 }
 
 void Executor::wait_for_completion() {
-    (void)try_wait_for_completion(kDefaultWaitForCompletionTimeout);
+    (void)wait_for_completion_ex(kDefaultWaitForCompletionTimeout);
 }
 
 bool Executor::try_wait_for_completion(std::chrono::milliseconds timeout) {
-    auto* ex = manager_->get_default_async_executor();
+    return wait_for_completion_ex(timeout).completed;
+}
+
+WaitResult Executor::wait_for_completion_ex(std::chrono::milliseconds timeout) {
+    WaitResult result;
+    result.timeout = timeout;
+
+    auto* ex = manager_->has_default_async_executor()
+                   ? manager_->get_default_async_executor()
+                   : nullptr;
     if (!ex) {
-        return true;
+        result.completed = true;
+        result.timed_out = false;
+        result.status = get_completion_status();
+        result.message = "Async executor is not initialized";
+        return result;
     }
 
-    const bool completed = ex->try_wait_for_completion(timeout);
-    if (!completed) {
-        ExecutorFailureEvent event;
-        event.kind = FailureKind::WaitTimeout;
-        event.executor_name = ex->get_name();
-        event.task_id = "facade_wait_for_completion";
-        event.message = "wait_for_completion timed out before all tasks completed";
-        record_failure(std::move(event));
+    result.completed = ex->try_wait_for_completion(timeout);
+    result.timed_out = !result.completed;
+    result.status = get_completion_status();
+
+    if (result.completed) {
+        result.message = "All async tasks completed";
+        return result;
     }
-    return completed;
+
+    result.message = "wait_for_completion timed out before all tasks completed";
+
+    ExecutorFailureEvent event;
+    event.kind = FailureKind::WaitTimeout;
+    event.executor_name = result.status.executor_name;
+    event.task_id = "facade_wait_for_completion";
+    event.message = result.message + ": active=" +
+                    std::to_string(result.status.active_tasks) +
+                    ", queued=" + std::to_string(result.status.queued_tasks) +
+                    ", pending=" + std::to_string(result.status.pending_tasks);
+    record_failure(std::move(event));
+    return result;
+}
+
+bool Executor::is_idle() const {
+    return get_completion_status().is_idle;
+}
+
+CompletionStatus Executor::get_completion_status() const {
+    CompletionStatus completion;
+    auto* ex = manager_->has_default_async_executor()
+                   ? manager_->get_default_async_executor()
+                   : nullptr;
+    if (!ex) {
+        return completion;
+    }
+
+    const auto status = ex->get_status();
+    completion.executor_name = status.name;
+    completion.is_initialized = true;
+    completion.is_running = status.is_running;
+    completion.active_tasks = status.active_tasks;
+    completion.queued_tasks = status.queue_size;
+    completion.pending_tasks = status.active_tasks + status.queue_size;
+    completion.completed_tasks = status.completed_tasks;
+    completion.failed_tasks = status.failed_tasks;
+    completion.is_idle = completion.pending_tasks == 0;
+    return completion;
 }
 
 // 注册 GPU 执行器
