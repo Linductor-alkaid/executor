@@ -825,7 +825,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 ### 7.3 状态与统计类型
 
 - **AsyncExecutorStatus**：`name`、`is_running`、`active_tasks`、`completed_tasks`、`failed_tasks`、`queue_size`、`avg_task_time_ms`。`failed_tasks` 表示底层异步执行器已执行并以失败结束的任务数；通过 `Executor` facade 提交的用户任务异常也会让 wrapper 重新抛出，因此会计入该字段，同时计入 facade 的 `ExecutorFailureStatus::task_exception_count`。执行前软超时使用独立 timeout 计数，不计入 `failed_tasks`。
-- **ThreadPoolStatus**：`include/executor/config.hpp:67` 仍定义此结构（与 `AsyncExecutorStatus` 字段几乎重合），但全仓库**当前无任何代码使用**它。视为已弃用的 alias，新代码请直接使用 `AsyncExecutorStatus`。未来版本会移除 `ThreadPoolStatus` 声明。
+- **ThreadPoolStatus**：`include/executor/config.hpp:67` 仍定义此结构（与 `AsyncExecutorStatus` 字段几乎重合），并且仍是底层 `ThreadPool::get_status()` 的返回类型；`ThreadPoolExecutor::get_status()` 会读取它并映射为 `AsyncExecutorStatus`。通过 `Executor` facade 或异步执行器编写的新代码优先使用 `AsyncExecutorStatus`；直接使用底层 `ThreadPool` 时仍应按 `ThreadPoolStatus` 处理。若未来要弃用或移除该类型，需要先提供替代的底层状态 API，并在声明处添加 deprecation 标记。
 - **RealtimeExecutorStatus**：
   - `name` (std::string)：执行器名称。
   - `is_running` (bool)：是否运行中。
