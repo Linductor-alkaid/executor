@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <functional>
@@ -15,6 +16,12 @@
 #endif
 
 namespace {
+
+constexpr const char* kInvalidCudaDeviceIdMessage = "CUDA device_id must be >= 0";
+
+std::string invalid_stream_message(int stream_id) {
+    return "CudaExecutor: stream_id " + std::to_string(stream_id) + " is invalid or destroyed";
+}
 
 struct StreamCallbackContext {
     std::function<void()> callback;
@@ -43,28 +50,43 @@ CudaExecutor::CudaExecutor(const std::string& name, const GpuExecutorConfig& con
     , default_stream_(nullptr)
 #endif
 {
+    if (!validate_config()) {
+        return;
+    }
+
     try {
+        if (!validate_gpu_config(config_)) {
+            set_last_error(gpu_config_validation_error(config_));
+            is_available_ = false;
+            return;
+        }
+
         // 尝试加载CUDA DLL
         if (!loader_->load()) {
+            set_last_error("CUDA loader is unavailable");
             is_available_ = false;
             return;
         }
 
         // 检查 CUDA 是否可用
         if (!check_cuda_available()) {
+            set_last_error("CUDA runtime or device is unavailable");
             is_available_ = false;
             return;
         }
 
         // 初始化设备
         if (!initialize_device()) {
+            set_last_error("CUDA device initialization failed");
             is_available_ = false;
             return;
         }
 
         is_available_ = true;
+        clear_last_error();
     } catch (...) {
         // 捕获所有异常，确保构造函数不会抛出
+        set_last_error("CUDA initialization threw an exception");
         is_available_ = false;
     }
 }
@@ -106,46 +128,60 @@ CudaExecutor::~CudaExecutor() {
 bool CudaExecutor::check_cuda_available() {
 #ifdef EXECUTOR_ENABLE_CUDA
     if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
         return false;
     }
 
     auto funcs = loader_->get_functions();
     if (!funcs.is_complete()) {
+        set_last_error("CUDA runtime symbols are incomplete");
         return false;
     }
 
     try {
         // 尝试初始化 CUDA 运行时（通过调用 cudaFree(0)）
         cudaError_t error = funcs.cudaFree(0);
-        if (error != cudaSuccess) {
+        if (!check_cuda_error(error, "cudaFree(0)")) {
             return false;
         }
 
         // 检查设备数量
         int device_count = 0;
         error = funcs.cudaGetDeviceCount(&device_count);
-        if (error != cudaSuccess || device_count == 0) {
+        if (!check_cuda_error(error, "cudaGetDeviceCount")) {
+            return false;
+        }
+        if (device_count == 0) {
+            set_last_error("CUDA device enumeration failed: no CUDA devices found");
             return false;
         }
 
         return true;
     } catch (...) {
         // 捕获所有C++异常
+        set_last_error("CUDA availability check threw an exception");
         return false;
     }
 #else
+    set_last_error("CUDA support is not enabled");
     return false;
 #endif
 }
 
 bool CudaExecutor::initialize_device() {
 #ifdef EXECUTOR_ENABLE_CUDA
+    if (!validate_config()) {
+        return false;
+    }
+
     if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
         return false;
     }
 
     auto funcs = loader_->get_functions();
     if (!funcs.is_complete()) {
+        set_last_error("CUDA runtime symbols are incomplete");
         return false;
     }
 
@@ -153,11 +189,15 @@ bool CudaExecutor::initialize_device() {
         // 检查设备ID是否有效
         int device_count = 0;
         cudaError_t error = funcs.cudaGetDeviceCount(&device_count);
-        if (error != cudaSuccess) {
+        if (!check_cuda_error(error, "cudaGetDeviceCount")) {
             return false;
         }
 
-        if (device_id_ < 0 || device_id_ >= device_count) {
+        if (device_id_ >= device_count) {
+            std::ostringstream oss;
+            oss << "CUDA device_id " << device_id_
+                << " is out of range for " << device_count << " device(s)";
+            set_last_error(oss.str());
             return false;
         }
 
@@ -176,27 +216,44 @@ bool CudaExecutor::initialize_device() {
         // 默认流就是 nullptr（CUDA 默认流）
         default_stream_ = nullptr;
 
+        clear_last_error();
         return true;
     } catch (...) {
         // 捕获所有C++异常
+        set_last_error("CUDA device initialization threw an exception");
         return false;
     }
 #else
+    set_last_error("CUDA support is not enabled");
     return false;
 #endif
+}
+
+bool CudaExecutor::validate_config() const {
+    if (device_id_ < 0) {
+        set_last_error(kInvalidCudaDeviceIdMessage);
+        return false;
+    }
+    return true;
 }
 
 #ifdef EXECUTOR_ENABLE_CUDA
 bool CudaExecutor::check_cuda_error(cudaError_t error_code, const char* operation) const {
     if (error_code != cudaSuccess) {
+        std::string message = std::string("CudaExecutor: ") + operation + " failed";
         if (loader_->is_available()) {
             auto funcs = loader_->get_functions();
             if (funcs.cudaGetErrorString != nullptr) {
                 const char* msg = funcs.cudaGetErrorString(error_code);
+                if (msg && msg[0] != '\0') {
+                    message += ": ";
+                    message += msg;
+                }
                 std::fprintf(stderr, "CudaExecutor: %s failed: %s\n",
                     operation, msg ? msg : "unknown");
             }
         }
+        set_last_error(message);
         return false;
     }
     return true;
@@ -219,18 +276,35 @@ std::exception_ptr CudaExecutor::make_cuda_exception_ptr(cudaError_t error_code,
 #else
 bool CudaExecutor::check_cuda_error(int error_code, const char* operation) const {
     (void)error_code;
-    (void)operation;
+    set_last_error(std::string("CudaExecutor: ") + operation + " failed: CUDA support is not enabled");
     return false;
 }
 #endif
 
+void CudaExecutor::clear_last_error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_message_.clear();
+}
+
+void CudaExecutor::set_last_error(const std::string& message) const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_message_ = message;
+}
+
+std::string CudaExecutor::get_last_error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    return last_error_message_;
+}
+
 bool CudaExecutor::ensure_device_context() const {
 #ifdef EXECUTOR_ENABLE_CUDA
     if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
         return false;
     }
     auto funcs = loader_->get_functions();
     if (funcs.cudaSetDevice == nullptr) {
+        set_last_error("CUDA cudaSetDevice symbol is unavailable");
         return false;
     }
     cudaError_t err = funcs.cudaSetDevice(device_id_);
@@ -241,7 +315,16 @@ bool CudaExecutor::ensure_device_context() const {
 }
 
 bool CudaExecutor::start() {
+    if (!validate_gpu_config(config_)) {
+        set_last_error(gpu_config_validation_error(config_));
+        return false;
+    }
+
     if (!is_available_) {
+        return false;
+    }
+
+    if (!validate_config()) {
         return false;
     }
 
@@ -250,14 +333,18 @@ bool CudaExecutor::start() {
         return false;  // 已经在运行
     }
 
+    clear_last_error();
+
 #ifdef EXECUTOR_ENABLE_CUDA
     if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
         is_running_.store(false);
         return false;
     }
 
     auto funcs = loader_->get_functions();
     if (funcs.cudaStreamCreate == nullptr || funcs.cudaStreamDestroy == nullptr) {
+        set_last_error("CUDA stream create/destroy symbols are unavailable");
         is_running_.store(false);
         return false;
     }
@@ -275,6 +362,9 @@ bool CudaExecutor::start() {
             if (s == nullptr) {
                 for (auto& stream_wrapper : created_streams) {
                     destroy_stream_wrapper(stream_wrapper);
+                }
+                if (get_last_error().empty()) {
+                    set_last_error("CUDA default stream creation failed");
                 }
                 is_running_.store(false);
                 return false;
@@ -303,8 +393,13 @@ bool CudaExecutor::start() {
 
     worker_thread_ = std::thread(&CudaExecutor::worker_thread_func, this);
     worker_joined_ = false;
+#else
+    set_last_error("CUDA support is not enabled");
+    is_running_.store(false);
+    return false;
 #endif
 
+    clear_last_error();
     return true;
 }
 
@@ -339,6 +434,21 @@ void CudaExecutor::set_exception_callback(
     exception_handler_.set_exception_callback(std::move(callback));
 }
 
+void CudaExecutor::clear_last_error() {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_message_.clear();
+}
+
+void CudaExecutor::set_last_error(const std::string& message) {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    last_error_message_ = message;
+}
+
+std::string CudaExecutor::get_last_error() const {
+    std::lock_guard<std::mutex> lock(error_mutex_);
+    return last_error_message_;
+}
+
 void CudaExecutor::wait_for_completion() {
     if (!is_available_) {
         return;
@@ -365,6 +475,7 @@ void* CudaExecutor::raw_allocate_device_memory(size_t size) {
     }
     auto funcs = loader_->get_functions();
     if (funcs.cudaMalloc == nullptr) {
+        set_last_error("CUDA cudaMalloc symbol is unavailable");
         return nullptr;
     }
     void* ptr = nullptr;
@@ -391,6 +502,8 @@ void CudaExecutor::raw_free_device_memory(void* ptr) {
     if (funcs.cudaFree != nullptr) {
         cudaError_t error = funcs.cudaFree(ptr);
         check_cuda_error(error, "cudaFree");
+    } else {
+        set_last_error("CUDA cudaFree symbol is unavailable");
     }
 #else
     (void)ptr;
@@ -412,6 +525,7 @@ void* CudaExecutor::allocate_device_memory(size_t size) {
     }
     auto funcs = loader_->get_functions();
     if (funcs.cudaMalloc == nullptr) {
+        set_last_error("CUDA cudaMalloc symbol is unavailable");
         return nullptr;
     }
 
@@ -449,6 +563,7 @@ void CudaExecutor::free_device_memory(void* ptr) {
     }
     auto funcs = loader_->get_functions();
     if (funcs.cudaFree == nullptr) {
+        set_last_error("CUDA cudaFree symbol is unavailable");
         return;
     }
 
@@ -473,6 +588,7 @@ void* CudaExecutor::allocate_unified_memory(size_t size) {
     }
 
     if (!config_.enable_unified_memory) {
+        set_last_error("CUDA unified memory is not enabled");
         return nullptr;  // 未启用统一内存
     }
 
@@ -482,6 +598,7 @@ void* CudaExecutor::allocate_unified_memory(size_t size) {
     }
     auto funcs = loader_->get_functions();
     if (!funcs.is_unified_memory_available() || funcs.cudaMallocManaged == nullptr) {
+        set_last_error("CUDA unified memory symbols are unavailable");
         return nullptr;  // 不支持统一内存
     }
 
@@ -514,6 +631,7 @@ void CudaExecutor::free_unified_memory(void* ptr) {
     }
     auto funcs = loader_->get_functions();
     if (funcs.cudaFree == nullptr) {
+        set_last_error("CUDA cudaFree symbol is unavailable");
         return;
     }
 
@@ -538,6 +656,7 @@ bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, 
     }
 
     if (!config_.enable_unified_memory) {
+        set_last_error("CUDA unified memory is not enabled");
         return false;  // 未启用统一内存
     }
 
@@ -547,6 +666,7 @@ bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, 
     }
     auto funcs = loader_->get_functions();
     if (!funcs.is_unified_memory_available() || funcs.cudaMemPrefetchAsync == nullptr) {
+        set_last_error("CUDA memory prefetch symbols are unavailable");
         return false;  // 不支持内存预取
     }
 
@@ -557,6 +677,7 @@ bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, 
 
     auto stream_wrapper = get_stream(stream_id);
     if (!stream_wrapper) {
+        set_last_error(invalid_stream_message(stream_id));
         return false;  // 无效 stream_id
     }
     return call_stream(stream_wrapper, "cudaMemPrefetchAsync",
@@ -587,11 +708,13 @@ bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool 
     if (stream_id != 0) {
         stream_wrapper = get_stream(stream_id);
         if (!stream_wrapper || !validate_stream(stream_wrapper)) {
+            set_last_error(invalid_stream_message(stream_id));
             return false;  // 无效或已销毁 stream_id
         }
     }
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
+            set_last_error("CUDA cudaMemcpyAsync symbol is unavailable");
             return false;
         }
         if (stream_id == 0) {
@@ -604,6 +727,7 @@ bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool 
             });
     } else {
         if (funcs.cudaMemcpy == nullptr) {
+            set_last_error("CUDA cudaMemcpy symbol is unavailable");
             return false;
         }
         error = funcs.cudaMemcpy(dst, src, size, cudaMemcpyHostToDevice);
@@ -634,11 +758,13 @@ bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool as
     if (stream_id != 0) {
         stream_wrapper = get_stream(stream_id);
         if (!stream_wrapper || !validate_stream(stream_wrapper)) {
+            set_last_error(invalid_stream_message(stream_id));
             return false;  // 无效或已销毁 stream_id
         }
     }
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
+            set_last_error("CUDA cudaMemcpyAsync symbol is unavailable");
             return false;
         }
         if (stream_id == 0) {
@@ -651,6 +777,7 @@ bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool as
             });
     } else {
         if (funcs.cudaMemcpy == nullptr) {
+            set_last_error("CUDA cudaMemcpy symbol is unavailable");
             return false;
         }
         error = funcs.cudaMemcpy(dst, src, size, cudaMemcpyDeviceToHost);
@@ -681,11 +808,13 @@ bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size
     if (stream_id != 0) {
         stream_wrapper = get_stream(stream_id);
         if (!stream_wrapper || !validate_stream(stream_wrapper)) {
+            set_last_error(invalid_stream_message(stream_id));
             return false;  // 无效或已销毁 stream_id
         }
     }
     if (async) {
         if (funcs.cudaMemcpyAsync == nullptr) {
+            set_last_error("CUDA cudaMemcpyAsync symbol is unavailable");
             return false;
         }
         if (stream_id == 0) {
@@ -698,6 +827,7 @@ bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size
             });
     } else {
         if (funcs.cudaMemcpy == nullptr) {
+            set_last_error("CUDA cudaMemcpy symbol is unavailable");
             return false;
         }
         error = funcs.cudaMemcpy(dst, src, size, cudaMemcpyDeviceToDevice);
@@ -723,21 +853,34 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
     const int dst_device = device_id_;
     const int src_device = src_executor->get_device_info().device_id;
     if (src_device == dst_device) {
+        set_last_error("P2P copy_from_peer failed: source and destination devices are the same");
         return false;  /* 同设备请使用 copy_device_to_device */
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
     auto funcs = loader_->get_functions();
-    auto p2p_log = [&funcs](const char* step, bool use_cuda_err) {
+    auto p2p_log = [this, &funcs](const char* step, bool use_cuda_err) {
         if (funcs.cudaGetLastError && funcs.cudaGetErrorString) {
             cudaError_t e = funcs.cudaGetLastError();
+            std::string message = std::string("P2P copy_from_peer failed at ") + step + ": ";
+            message += use_cuda_err ? funcs.cudaGetErrorString(e) : "(see above)";
+            if (get_last_error().empty()) {
+                set_last_error(message);
+            }
             std::fprintf(stderr, "P2P copy_from_peer failed at %s: %s\n",
                 step, use_cuda_err ? funcs.cudaGetErrorString(e) : "(see above)");
+        } else {
+            if (get_last_error().empty()) {
+                set_last_error(std::string("P2P copy_from_peer failed at ") + step);
+            }
         }
     };
 
     if (!funcs.is_p2p_available()) {
-        std::fprintf(stderr, "P2P copy_from_peer failed: P2P symbols not loaded (cudaMemcpyPeer etc.)\n");
+        const std::string message =
+            "P2P copy_from_peer failed: P2P symbols not loaded (cudaMemcpyPeer etc.)";
+        set_last_error(message);
+        std::fprintf(stderr, "%s\n", message.c_str());
         return false;
     }
 
@@ -748,6 +891,10 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
         return false;
     }
     if (can != 1) {
+        std::ostringstream oss;
+        oss << "P2P copy_from_peer failed: device " << dst_device
+            << " cannot access peer " << src_device << " (CanAccessPeer=0)";
+        set_last_error(oss.str());
         std::fprintf(stderr, "P2P copy_from_peer failed: device %d cannot access peer %d (CanAccessPeer=0)\n",
             dst_device, src_device);
         return false;
@@ -760,13 +907,17 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
 
     err = funcs.cudaDeviceEnablePeerAccess(src_device, 0);
     if (err != cudaSuccess && err != cudaErrorPeerAccessAlreadyEnabled) {
+        check_cuda_error(err, "cudaDeviceEnablePeerAccess");
         p2p_log("cudaDeviceEnablePeerAccess", true);
         return false;
     }
 
     if (async) {
         if (funcs.cudaMemcpyPeerAsync == nullptr) {
-            std::fprintf(stderr, "P2P copy_from_peer failed: cudaMemcpyPeerAsync not available\n");
+            const std::string message =
+                "P2P copy_from_peer failed: cudaMemcpyPeerAsync not available";
+            set_last_error(message);
+            std::fprintf(stderr, "%s\n", message.c_str());
             return false;
         }
         if (stream_id == 0) {
@@ -774,6 +925,7 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
         } else {
             auto stream_wrapper = get_stream(stream_id);
             if (!stream_wrapper) {
+                set_last_error(invalid_stream_message(stream_id));
                 std::fprintf(stderr, "P2P copy_from_peer failed: invalid stream_id %d\n", stream_id);
                 return false;
             }
@@ -782,6 +934,7 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
                     return funcs.cudaMemcpyPeerAsync(dst_ptr, dst_device, src_ptr, src_device, size, stream);
                 });
             if (!submitted) {
+                set_last_error(invalid_stream_message(stream_id));
                 std::fprintf(stderr, "P2P copy_from_peer failed: stream_id %d is invalid or destroyed\n", stream_id);
                 return false;
             }
@@ -791,12 +944,16 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
         if (stream_id != 0) {
             auto stream_wrapper = get_stream(stream_id);
             if (!stream_wrapper || !validate_stream(stream_wrapper)) {
+                set_last_error(invalid_stream_message(stream_id));
                 std::fprintf(stderr, "P2P copy_from_peer failed: invalid stream_id %d\n", stream_id);
                 return false;
             }
         }
         if (funcs.cudaMemcpyPeer == nullptr) {
-            std::fprintf(stderr, "P2P copy_from_peer failed: cudaMemcpyPeer not available\n");
+            const std::string message =
+                "P2P copy_from_peer failed: cudaMemcpyPeer not available";
+            set_last_error(message);
+            std::fprintf(stderr, "%s\n", message.c_str());
             return false;
         }
         err = funcs.cudaMemcpyPeer(dst_ptr, dst_device, src_ptr, src_device, size);
@@ -825,6 +982,7 @@ bool CudaExecutor::add_stream_callback(int stream_id, std::function<void()> call
     }
     auto funcs = loader_->get_functions();
     if (funcs.cudaLaunchHostFunc == nullptr) {
+        set_last_error("CUDA cudaLaunchHostFunc symbol is unavailable");
         return false;
     }
     StreamCallbackContext* ctx = new (std::nothrow) StreamCallbackContext{std::move(callback)};
@@ -848,6 +1006,7 @@ bool CudaExecutor::add_stream_callback(int stream_id, std::function<void()> call
         }
     }
     if (!submitted) {
+        set_last_error(invalid_stream_message(stream_id));
         delete ctx;
         return false;
     }
@@ -891,6 +1050,7 @@ void CudaExecutor::synchronize_stream(int stream_id) {
     }
     auto funcs = loader_->get_functions();
     if (funcs.cudaStreamSynchronize == nullptr) {
+        set_last_error("CUDA cudaStreamSynchronize symbol is unavailable");
         return;
     }
 
@@ -906,6 +1066,8 @@ void CudaExecutor::synchronize_stream(int stream_id) {
             [&](cudaStream_t stream) {
                 return funcs.cudaStreamSynchronize(stream);
             });
+    } else {
+        set_last_error(invalid_stream_message(stream_id));
     }
 #else
     (void)stream_id;
@@ -920,6 +1082,9 @@ int CudaExecutor::create_stream() {
 #ifdef EXECUTOR_ENABLE_CUDA
     cudaStream_t stream = create_one_stream();
     if (stream == nullptr) {
+        if (get_last_error().empty()) {
+            set_last_error("CUDA stream creation failed");
+        }
         return -1;
     }
     auto stream_wrapper = std::make_shared<StreamWrapper>();
@@ -1012,9 +1177,11 @@ GpuExecutorStatus CudaExecutor::get_status() const {
     status.is_running = is_running_.load();
     status.backend = GpuBackend::CUDA;
     status.device_id = device_id_;
+    status.last_error_message = get_last_error();
     status.active_kernels = active_kernels_.load();
     status.completed_kernels = completed_kernels_.load();
     status.failed_kernels = failed_kernels_.load();
+    status.last_error_message = get_last_error();
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         status.queue_size = task_queue_.size();
@@ -1108,6 +1275,7 @@ void CudaExecutor::run_one_task(GpuQueuedTask& task) {
     void* stream_ptr = nullptr;
     try {
         if (!ensure_device_context()) {
+            set_last_error("CudaExecutor: ensure_device_context failed");
             auto eptr = std::make_exception_ptr(
                 std::runtime_error("CudaExecutor: ensure_device_context failed"));
             exception_handler_.handle_task_exception(name_, eptr);
@@ -1123,6 +1291,7 @@ void CudaExecutor::run_one_task(GpuQueuedTask& task) {
             if (funcs.cudaGetLastError != nullptr) {
                 cudaError_t err = funcs.cudaGetLastError();
                 if (err != cudaSuccess) {
+                    check_cuda_error(err, "cudaGetLastError (after kernel)");
                     std::exception_ptr eptr = make_cuda_exception_ptr(err, "cudaGetLastError (after kernel)");
                     exception_handler_.handle_task_exception(name_, eptr);
                     if (task.promise) task.promise->set_exception(eptr);
@@ -1183,6 +1352,7 @@ void CudaExecutor::run_one_task(GpuQueuedTask& task) {
         total_kernel_time_ns_ += duration;
         completed_kernels_++;
     } catch (...) {
+        set_last_error("CudaExecutor: kernel execution threw an exception");
         exception_handler_.handle_task_exception(name_, std::current_exception());
         if (task.promise) task.promise->set_exception(std::current_exception());
         failed_kernels_++;
@@ -1199,7 +1369,16 @@ std::future<void> CudaExecutor::submit_kernel_impl(
     auto promise = std::make_shared<std::promise<void>>();
     auto future = promise->get_future();
 
+    if (!validate_gpu_config(config_)) {
+        const auto message = gpu_config_validation_error(config_);
+        set_last_error(message);
+        promise->set_exception(std::make_exception_ptr(
+            std::runtime_error("CudaExecutor invalid configuration: " + message)));
+        return future;
+    }
+
     if (!is_available_ || !is_running_.load()) {
+        set_last_error("CudaExecutor is not available or not running");
         promise->set_exception(std::make_exception_ptr(
             std::runtime_error("CudaExecutor is not available or not running")));
         return future;
@@ -1232,6 +1411,7 @@ std::future<void> CudaExecutor::submit_kernel_impl(
         if (!is_running_.load(std::memory_order_acquire)) {
             // Shutdown happened while we were waiting for room. Return a
             // failed future without enqueuing.
+            set_last_error("CudaExecutor: submit aborted because executor is stopping");
             promise->set_exception(std::make_exception_ptr(
                 std::runtime_error("CudaExecutor: submit aborted because executor is stopping")));
             return future;
@@ -1251,7 +1431,21 @@ std::vector<std::future<void>> CudaExecutor::submit_kernels_batch(
     const std::vector<std::pair<std::function<void(void*)>, GpuTaskConfig>>& tasks) {
     std::vector<std::future<void>> result;
     result.reserve(tasks.size());
+    if (!validate_gpu_config(config_)) {
+        const auto message = gpu_config_validation_error(config_);
+        set_last_error(message);
+        auto eptr = std::make_exception_ptr(
+            std::runtime_error("CudaExecutor invalid configuration: " + message));
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            (void)i;
+            auto p = std::make_shared<std::promise<void>>();
+            p->set_exception(eptr);
+            result.push_back(p->get_future());
+        }
+        return result;
+    }
     if (!is_available_ || !is_running_.load()) {
+        set_last_error("CudaExecutor is not available or not running");
         auto eptr = std::make_exception_ptr(
             std::runtime_error("CudaExecutor is not available or not running"));
         for (size_t i = 0; i < tasks.size(); ++i) {
@@ -1278,6 +1472,7 @@ std::vector<std::future<void>> CudaExecutor::submit_kernels_batch(
                         || task_queue_.size() < config_.max_queue_size;
                 });
                 if (!is_running_.load(std::memory_order_acquire)) {
+                    set_last_error("CudaExecutor: submit aborted because executor is stopping");
                     auto eptr = std::make_exception_ptr(
                         std::runtime_error("CudaExecutor: submit aborted because executor is stopping"));
                     for (size_t j = i; j < tasks.size(); ++j) {
@@ -1406,8 +1601,9 @@ bool CudaExecutor::validate_stream(const std::shared_ptr<StreamWrapper>& stream_
 }
 
 std::exception_ptr CudaExecutor::make_invalid_stream_exception_ptr(int stream_id) const {
-    return std::make_exception_ptr(InvalidStreamException(
-        "CudaExecutor: stream_id " + std::to_string(stream_id) + " is invalid or destroyed"));
+    const std::string message = invalid_stream_message(stream_id);
+    set_last_error(message);
+    return std::make_exception_ptr(InvalidStreamException(message));
 }
 #endif
 
