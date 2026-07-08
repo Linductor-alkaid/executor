@@ -46,6 +46,9 @@
 - **可诊断的 facade 配置 API**
   `initialize_ex()`、`register_realtime_task_ex()`、`start_realtime_task_ex()`、`register_gpu_executor_ex()` 返回 `ExecutorResult`，可通过 `InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed` 等稳定错误码判断原因；旧 `bool` API 委托到这些路径。
 
+- **失败与生命周期可观察**
+  `Executor::set_failure_callback()` 让 facade 用户订阅任务异常、提交拒绝、实时丢任务、任务超时、GPU 失败和等待超时；未设置回调时，失败仍保留在 `get_failure_status()` / `get_recent_failures()` 中。`wait_for_completion_ex()` 返回带 `CompletionStatus` 快照的 `WaitResult`，超时调用方仍能看到 active、queued、pending 任务数。
+
 - **可选 GPU（CUDA/OpenCL）**
   GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端
 
@@ -127,22 +130,35 @@ ctest --test-dir build
 
 ```cpp
 #include <executor/executor.hpp>
+#include <iostream>
 
 int main() {
-    // 配置执行器
     executor::ExecutorConfig config;
     config.min_threads = 4;
     config.max_threads = 16;
 
-    // 初始化并提交任务
     auto& ex = executor::Executor::instance();
-    ex.initialize(config);
+    auto init = ex.initialize_ex(config);
+    if (!init) {
+        std::cerr << "init failed: " << init.message << "\n";
+        return 1;
+    }
 
-    auto future = ex.submit([]() {
-        return 42;
+    ex.set_failure_callback([](const executor::ExecutorFailureEvent& event) {
+        std::cerr << "executor failure: " << event.message << "\n";
     });
 
-    int result = future.get();
+    auto future = ex.submit([]() { return 42; });
+    int result = future.get();  // 如任务抛异常，也会在这里重新抛出
+
+    auto wait = ex.wait_for_completion_ex(std::chrono::seconds(1));
+    if (!wait.completed) {
+        std::cerr << "pending tasks: " << wait.status.pending_tasks << "\n";
+    }
+
+    auto failures = ex.get_failure_status();
+    std::cout << "result=" << result
+              << ", task failures=" << failures.task_exception_count << "\n";
     ex.shutdown();
     return 0;
 }

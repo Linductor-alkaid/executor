@@ -6,8 +6,8 @@
  * 1. 实现简单的 ICycleManager（SimpleCycleManager，基于 sleep_until）
  * 2. 将周期管理器注入 RealtimeThreadConfig
  * 3. 注册并运行实时任务（模拟 CAN 通道周期读写）
- * 4. 使用 push_task 向实时线程提交任务
- * 5. 查询周期统计并停止任务
+ * 4. 使用 Executor::push_realtime_task 向实时线程提交任务
+ * 5. 查询周期统计、背压计数并停止任务
  */
 
 #include <atomic>
@@ -109,10 +109,15 @@ int main() {
     exec_config.queue_capacity = 100;
 
     auto& exec = Executor::instance();
-    if (!exec.initialize(exec_config)) {
-        std::cerr << "Failed to initialize executor" << std::endl;
+    auto init = exec.initialize_ex(exec_config);
+    if (!init) {
+        std::cerr << "Failed to initialize executor: " << init.message << std::endl;
         return 1;
     }
+
+    exec.set_failure_callback([](const ExecutorFailureEvent& event) {
+        std::cerr << "[failure] " << event.message << std::endl;
+    });
 
     std::cout << "Executor initialized" << std::endl;
 
@@ -151,12 +156,11 @@ int main() {
     // 运行一段时间
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-    // 示例：向实时线程推送任务（在周期回调中执行）
-    auto* rt_exec = exec.get_realtime_executor("can_channel_0");
-    if (rt_exec) {
-        rt_exec->push_task([]() {
-            std::cout << "  [push_task] Task executed in realtime cycle" << std::endl;
-        });
+    // 示例：通过 facade 向实时线程推送任务（在周期回调中执行）
+    if (!exec.push_realtime_task("can_channel_0", []() {
+            std::cout << "  [push_realtime_task] Task executed in realtime cycle" << std::endl;
+        })) {
+        std::cerr << "Failed to push realtime task" << std::endl;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -168,6 +172,9 @@ int main() {
     std::cout << "  Cycle period: " << status.cycle_period_ns << " ns" << std::endl;
     std::cout << "  Cycle count: " << status.cycle_count << std::endl;
     std::cout << "  Avg cycle time: " << status.avg_cycle_time_ns << " ns" << std::endl;
+    std::cout << "  Dropped tasks: " << status.dropped_task_count << std::endl;
+    std::cout << "  Queue full drops: " << status.queue_full_count << std::endl;
+    std::cout << "  Pool exhausted drops: " << status.pool_exhausted_count << std::endl;
     std::cout << "  Callback invocations (can_cycle_count): " << can_cycle_count.load() << std::endl;
 
     // 停止实时任务（内部会调用 cycle_manager->stop_cycle）

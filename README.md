@@ -46,6 +46,9 @@
 - **Diagnosable Facade Setup APIs**
   `initialize_ex()`, `register_realtime_task_ex()`, `start_realtime_task_ex()`, and `register_gpu_executor_ex()` return `ExecutorResult` with stable error codes such as `InvalidConfig`, `DuplicateName`, `NotFound`, `BackendUnavailable`, and `StartFailed`; legacy `bool` APIs delegate to these paths.
 
+- **Failure and Lifecycle Observability**
+  `Executor::set_failure_callback()` lets facade users subscribe to task exceptions, rejected submissions, real-time drops, task timeouts, GPU failures, and wait timeouts. Failures are also retained in `get_failure_status()` / `get_recent_failures()` when no callback is installed. `wait_for_completion_ex()` returns `WaitResult` with a `CompletionStatus` snapshot so timeout callers can still see active, queued, and pending task counts.
+
 - **Optional GPU (CUDA/OpenCL)**
   GPU executor interface with CUDA/OpenCL implementations: kernel submission, device memory and stream management, multi-device, memory pool, monitoring. Runtime dynamic loading with safe graceful degradation when no GPU is available. Device query API automatically recommends the best backend.
 
@@ -127,22 +130,35 @@ Explicit calls to `initialize`/`shutdown` are optional — the library provides 
 
 ```cpp
 #include <executor/executor.hpp>
+#include <iostream>
 
 int main() {
-    // Configure the executor
     executor::ExecutorConfig config;
     config.min_threads = 4;
     config.max_threads = 16;
 
-    // Initialize and submit tasks
     auto& ex = executor::Executor::instance();
-    ex.initialize(config);
+    auto init = ex.initialize_ex(config);
+    if (!init) {
+        std::cerr << "init failed: " << init.message << "\n";
+        return 1;
+    }
 
-    auto future = ex.submit([]() {
-        return 42;
+    ex.set_failure_callback([](const executor::ExecutorFailureEvent& event) {
+        std::cerr << "executor failure: " << event.message << "\n";
     });
 
-    int result = future.get();
+    auto future = ex.submit([]() { return 42; });
+    int result = future.get();  // also rethrows the task exception, if any
+
+    auto wait = ex.wait_for_completion_ex(std::chrono::seconds(1));
+    if (!wait.completed) {
+        std::cerr << "pending tasks: " << wait.status.pending_tasks << "\n";
+    }
+
+    auto failures = ex.get_failure_status();
+    std::cout << "result=" << result
+              << ", task failures=" << failures.task_exception_count << "\n";
     ex.shutdown();
     return 0;
 }

@@ -61,7 +61,7 @@
 
 ### 验收
 
-- [ ] 用户只通过 `Executor` 就能订阅任务失败与提交拒绝。
+- [x] 用户只通过 `Executor` 就能订阅任务失败与提交拒绝。
 - [x] 未设置 callback 时，失败仍会累计到状态/最近事件，而不是消失。
 - [x] callback 自身抛异常不会杀死 worker 或后台线程。
 
@@ -272,27 +272,27 @@
   - [x] shutdown 后初始化。
   - [x] RT 无效配置。
   - [x] GPU 后端不可用。
-- [ ] `test_wait_completion_result.cpp`
-  - [ ] wait 完成返回成功。
-  - [ ] wait 超时返回 timeout，并保留 pending 状态。
+- [x] `test_wait_completion_result.cpp`
+  - [x] wait 完成返回成功。
+  - [x] wait 超时返回 timeout，并保留 pending 状态。
 
 ---
 
 ## 阶段 9：文档与示例同步
 
-- [ ] README / README_zh
-  - [ ] 示例优先使用 `Executor` facade 完成普通任务、实时任务、状态观察。
-  - [ ] 明确 `future.get()` 是获取返回值/异常的方式，但状态计数也能监控失败趋势。
-- [ ] docs/API.md
-  - [ ] 新增 failure event / result / wait result API 文档。（failure event / result 已完成；wait result 留阶段 6）
+- [x] README / README_zh
+  - [x] 示例优先使用 `Executor` facade 完成普通任务、实时任务、状态观察。
+  - [x] 明确 `future.get()` 是获取返回值/异常的方式，但状态计数也能监控失败趋势。
+- [x] docs/API.md
+  - [x] 新增 failure event / result / wait result API 文档。（failure event / result 已完成；wait result 留阶段 6）
   - [x] 标注旧 bool API 与新 `_ex` API 的关系。
-  - [ ] 修正 `AsyncExecutorStatus::failed_tasks` 语义。
-- [ ] docs/MIGRATION.md
-  - [ ] 增加从旧接口迁移到 facade push、`*_ex` result、failure callback 的建议。
-- [ ] examples
-  - [ ] 新增 `examples/failure_observability.cpp`。
-  - [ ] 新增或更新 `examples/realtime_can.cpp`，优先展示 facade push 和 drop 监控。
-  - [ ] 新增 `examples/periodic_monitoring.cpp`。
+  - [x] 修正 `AsyncExecutorStatus::failed_tasks` 语义。
+- [x] docs/MIGRATION.md
+  - [x] 增加从旧接口迁移到 facade push、`*_ex` result、failure callback 的建议。
+- [x] examples
+  - [x] 新增 `examples/failure_observability.cpp`。
+  - [x] 新增或更新 `examples/realtime_can.cpp`，优先展示 facade push 和 drop 监控。
+  - [x] 新增 `examples/periodic_monitoring.cpp`。
 
 ---
 

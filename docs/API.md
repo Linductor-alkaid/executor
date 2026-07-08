@@ -824,7 +824,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 
 ### 7.3 状态与统计类型
 
-- **AsyncExecutorStatus**：`name`、`is_running`、`active_tasks`、`completed_tasks`、`failed_tasks`、`queue_size`、`avg_task_time_ms`。`Executor::get_status()` 与 `ThreadPoolExecutor::get_status()` 均返回此类型。
+- **AsyncExecutorStatus**：`name`、`is_running`、`active_tasks`、`completed_tasks`、`failed_tasks`、`queue_size`、`avg_task_time_ms`。`failed_tasks` 表示底层异步执行器已执行并以失败结束的任务数；通过 `Executor` facade 提交的用户任务异常也会让 wrapper 重新抛出，因此会计入该字段，同时计入 facade 的 `ExecutorFailureStatus::task_exception_count`。执行前软超时使用独立 timeout 计数，不计入 `failed_tasks`。
 - **ThreadPoolStatus**：`include/executor/config.hpp:67` 仍定义此结构（与 `AsyncExecutorStatus` 字段几乎重合），但全仓库**当前无任何代码使用**它。视为已弃用的 alias，新代码请直接使用 `AsyncExecutorStatus`。未来版本会移除 `ThreadPoolStatus` 声明。
 - **RealtimeExecutorStatus**：
   - `name` (std::string)：执行器名称。
@@ -841,6 +841,8 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 - **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。执行前软超时增加 `timeout_count`，不增加 `fail_count`。
 - **ExecutorFailureStatus**：`task_exception_count`、`submit_rejected_count`、`timeout_count`、`realtime_drop_count`、`gpu_failure_count`、`wait_timeout_count`、`tuning_fallback_count`、`total_count`。`wait_for_completion()` 或 `try_wait_for_completion(timeout)` 等待超时时记录 `FailureKind::WaitTimeout` 并增加 `wait_timeout_count`；这只表示等待动作超时，不表示任务被取消、panic 或抛异常。
 - **ExecutorResult**：`ok`、`error_code`、`message`，用于 `initialize_ex`、`register_realtime_task_ex`、`start_realtime_task_ex`、`register_gpu_executor_ex`。常见 `ExecutorErrorCode`：`AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed`、`PermissionDenied`。`_ex` 失败会写入 failure/diagnostic event，但配置错误不会计入 `task_exception_count`。
+- **CompletionStatus**：`executor_name`、`is_initialized`、`is_running`、`is_idle`、`active_tasks`、`queued_tasks`、`pending_tasks`、`completed_tasks`、`failed_tasks`。由 `get_completion_status()` 和 `WaitResult::status` 返回；状态查询不会触发默认异步执行器懒初始化。
+- **WaitResult**：`completed`、`timed_out`、`timeout`、`status`、`message`。由 `wait_for_completion_ex(timeout)` 返回；超时会记录 `FailureKind::WaitTimeout` 并保留当时的 pending 状态快照。
 - **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
 ### 7.4 TaskPriority

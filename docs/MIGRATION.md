@@ -4,6 +4,24 @@
 
 ---
 
+## 从 0.2.2 升级到 0.2.3
+
+0.2.3 是向后兼容版本，重点补齐 `Executor` facade 的失败可观察性、可诊断结果和等待生命周期状态。已有代码可以继续使用旧 `bool` API；新代码建议迁移到下列可诊断入口。
+
+### 推荐迁移到可观察 facade
+
+- 初始化、实时注册/启动、GPU 注册建议从旧 `bool` API 迁移到 `initialize_ex()`、`register_realtime_task_ex()`、`start_realtime_task_ex()`、`register_gpu_executor_ex()`，失败时读取 `ExecutorResult::error_code` 和 `message`。
+- 普通任务仍通过 `future.get()` 获取返回值和重新抛出的任务异常；同时可通过 `Executor::set_failure_callback()`、`get_failure_status()`、`get_recent_failures()` 监控未被调用方立即消费的失败趋势。
+- 实时任务推送建议从 `auto* rt = get_realtime_executor(...); rt->push_task(...)` 迁移到 `Executor::push_realtime_task()` / `try_push_realtime_task()`，以便不存在、未启动、队列满、对象池耗尽等失败同时通过返回值、failure event 和 `RealtimeExecutorStatus` 计数可见。
+- 等待任务完成时，新代码优先使用 `wait_for_completion_for(timeout)` 或 `wait_for_completion_ex(timeout)`；后者在超时时返回 `WaitResult::status.pending_tasks`、`active_tasks`、`queued_tasks`，并累计 `wait_timeout_count`。
+- 旧 API 均保持兼容；迁移的目的不是改变执行模型，而是让已有失败路径带上可诊断结果和统一监控入口。
+
+### 破坏性变更
+
+**无。** 0.2.3 保持 0.2.2 公开 API 兼容；新增 result、failure callback、facade push 和 wait result API 均为向后兼容扩展。
+
+---
+
 ## 从 0.2.1 升级到 0.2.2
 
 0.2.2 是向后兼容版本，**没有破坏性变更**。已有 0.2.1 代码可以直接重新编译使用；需要注意的是，部分 facade 默认值改为"默认即最优"，零配置用户会自动获得更积极的线程池与实时线程配置。
