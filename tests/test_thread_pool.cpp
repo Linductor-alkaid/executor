@@ -7,6 +7,7 @@
 #include <future>
 #include <algorithm>
 #include <unordered_set>
+#include <cstdint>
 #include <cstdlib>
 #include <new>
 
@@ -317,7 +318,11 @@ bool test_thread_pool_init_oom_safety() {
 
     g_large_allocation_count.store(0, std::memory_order_relaxed);
     g_fail_large_allocation_number.store(3, std::memory_order_relaxed);
+#ifdef USE_LOCKFREE_WORKER_QUEUE
+    g_large_allocation_threshold.store(config.queue_capacity * sizeof(std::uintptr_t), std::memory_order_relaxed);
+#else
     g_large_allocation_threshold.store(config.queue_capacity * sizeof(Task), std::memory_order_relaxed);
+#endif
     g_fail_large_allocations.store(true, std::memory_order_release);
 
     bool initialized = true;
