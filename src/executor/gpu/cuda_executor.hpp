@@ -149,6 +149,12 @@ private:
     bool check_cuda_available();
 
     /**
+     * @brief 校验 CUDA 配置并记录错误状态
+     * @return 配置是否有效
+     */
+    bool validate_config() const;
+
+    /**
      * @brief 初始化 CUDA 设备
      * @return 是否初始化成功
      */
@@ -226,6 +232,10 @@ private:
     std::exception_ptr make_cuda_exception_ptr(cudaError_t error_code, const char* operation) const;
 #endif
 
+    void clear_last_error() const;
+    void set_last_error(const std::string& message) const;
+    std::string get_last_error() const;
+
 private:
     std::string name_;                          // 执行器名称
     GpuExecutorConfig config_;                  // 配置
@@ -253,6 +263,8 @@ private:
     std::atomic<size_t> completed_kernels_{0}; // 已完成kernel数
     std::atomic<size_t> failed_kernels_{0};    // 失败kernel数
     std::atomic<int64_t> total_kernel_time_ns_{0}; // 总kernel执行时间（纳秒）
+    mutable std::mutex error_mutex_;           // 最近一次错误状态互斥锁
+    mutable std::string last_error_message_;   // 最近一次启动/运行失败原因
 
     // 任务队列与 worker
     std::priority_queue<GpuQueuedTask, std::vector<GpuQueuedTask>, GpuQueuedTaskCompare> task_queue_;
