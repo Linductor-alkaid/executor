@@ -838,6 +838,10 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `failed_pushes` (uint64_t)：LockFreeQueue 失败入队数（仅 `enable_stats=true` 时由底层队列统计；与 `dropped_task_count` 的子集：仅含"队列满"那一部分）。
   - `peak_queue_size` (uint64_t)：队列峰值长度（仅 `enable_stats=true`）。
   - `queue_capacity` (uint64_t)：RT 无锁队列固定容量（用于 `dropped/queue_capacity` 比率分析）。
+  - `rejected_not_running_count` (uint64_t)：未运行/已停止时拒绝的累计数。
+  - `rejected_empty_task_count` (uint64_t)：空任务拒绝累计数。
+  - `pool_exhausted_count` (uint64_t)：对象池耗尽拒绝累计数。
+  - `queue_full_count` (uint64_t)：队列满拒绝累计数。
 - **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。执行前软超时增加 `timeout_count`，不增加 `fail_count`。
 - **ExecutorFailureStatus**：`task_exception_count`、`submit_rejected_count`、`timeout_count`、`realtime_drop_count`、`gpu_failure_count`、`wait_timeout_count`、`tuning_fallback_count`、`total_count`。`wait_for_completion()` 或 `try_wait_for_completion(timeout)` 等待超时时记录 `FailureKind::WaitTimeout` 并增加 `wait_timeout_count`；这只表示等待动作超时，不表示任务被取消、panic 或抛异常。
 - **ExecutorResult**：`ok`、`error_code`、`message`，用于 `initialize_ex`、`register_realtime_task_ex`、`start_realtime_task_ex`、`register_gpu_executor_ex`。常见 `ExecutorErrorCode`：`AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed`、`PermissionDenied`。`_ex` 失败会写入 failure/diagnostic event，但配置错误不会计入 `task_exception_count`。

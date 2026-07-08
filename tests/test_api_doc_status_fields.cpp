@@ -5,8 +5,10 @@
 //
 // Prevents the recurrence of the bug fixed by P-260618-008: a struct gets
 // new fields (dropped_task_count, failed_pushes, peak_queue_size,
-// queue_capacity) but docs/API.md §7.3 is not updated, leaving users with
-// stale documentation. Also covers P-008 batch performance claim sources.
+// queue_capacity, rejected_not_running_count, rejected_empty_task_count,
+// pool_exhausted_count, queue_full_count) but docs/API.md §7.3 is not updated,
+// leaving users with stale documentation. Also covers P-008 batch performance
+// claim sources.
 
 #include <executor/types.hpp>
 #include "executor/thread_pool/thread_pool.hpp"
@@ -72,21 +74,7 @@ std::set<std::string> extract_field_names(const std::string& entry) {
     return fields;
 }
 
-std::set<std::string> expected_struct_fields() {
-    return {
-        "name",
-        "is_running",
-        "cycle_period_ns",
-        "cycle_count",
-        "cycle_timeout_count",
-        "avg_cycle_time_ns",
-        "max_cycle_time_ns",
-        "dropped_task_count",
-        "failed_pushes",
-        "peak_queue_size",
-        "queue_capacity",
-    };
-}
+
 
 std::string read_doc_from_candidates(const std::vector<std::string>& candidates,
                                      std::string& path_used) {
@@ -106,6 +94,34 @@ std::string read_doc_from_candidates(const std::vector<std::string>& candidates,
     std::stringstream ss;
     ss << in.rdbuf();
     return ss.str();
+}
+
+std::set<std::string> extract_struct_fields(const std::string& header,
+                                            const std::string& struct_name) {
+    std::set<std::string> fields;
+    const std::string marker = "struct " + struct_name + " {";
+    auto pos = header.find(marker);
+    if (pos == std::string::npos) {
+        return fields;
+    }
+
+    auto end = header.find("\n};", pos + marker.size());
+    if (end == std::string::npos) {
+        return fields;
+    }
+
+    const auto body = header.substr(pos + marker.size(), end - pos - marker.size());
+    std::regex member_re(R"(^\s*(?:[A-Za-z_][A-Za-z0-9_:<>]*\s+)+([A-Za-z_][A-Za-z0-9_]*)\s*(?:=\s*[^;]+)?;)");
+    std::stringstream lines(body);
+    std::string line;
+    while (std::getline(lines, line)) {
+        std::smatch match;
+        if (std::regex_search(line, match, member_re)) {
+            fields.insert(match[1].str());
+        }
+    }
+
+    return fields;
 }
 
 bool contains_regex(const std::string& text, const std::string& pattern) {
@@ -128,7 +144,23 @@ TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
         << "RealtimeExecutorStatus entry not found in docs/API.md §7.3";
 
     const auto doc_fields = extract_field_names(entry);
-    const auto struct_fields = expected_struct_fields();
+
+    std::string header_path;
+    const std::string types_hpp = read_doc_from_candidates(
+        {"include/executor/types.hpp", "../include/executor/types.hpp",
+         "../../include/executor/types.hpp"},
+        header_path);
+    ASSERT_FALSE(types_hpp.empty())
+        << "Could not open include/executor/types.hpp from any candidate path";
+
+    const auto struct_fields = extract_struct_fields(types_hpp, "RealtimeExecutorStatus");
+    ASSERT_FALSE(struct_fields.empty())
+        << "RealtimeExecutorStatus fields not found in " << header_path;
+
+    EXPECT_NE(entry.find("rejected_not_running_count"), std::string::npos);
+    EXPECT_NE(entry.find("rejected_empty_task_count"), std::string::npos);
+    EXPECT_NE(entry.find("pool_exhausted_count"), std::string::npos);
+    EXPECT_NE(entry.find("queue_full_count"), std::string::npos);
 
     std::set<std::string> doc_struct_fields;
     for (const auto& f : doc_fields) {
