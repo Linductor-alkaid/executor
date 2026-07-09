@@ -800,7 +800,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 - `ThreadPoolConfig.cpu_affinity` 空 → auto-allocate [0..hw-1]
 - `RealtimeThreadConfig.enable_memory_lock` = `true`（尽力调用 mlockall；不可用或权限不足时安全回退）
 - `RealtimeThreadConfig.timer_slack_ns` = 1（尽力设置 1 ns；不可用或权限不足时安全回退）
-- `RealtimeThreadConfig.cpu_affinity` 空 → bind core 0（hw >= 2）
+- `RealtimeThreadConfig.cpu_affinity` 空 → 通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；若可用 CPU 数量 <= 1，则不设置亲和性
 - `RealtimeThreadConfig.thread_priority` = 0 → 自适应按 `cycle_period_ns` 建议
 - `task_timeout_ms > 0`: 软超时 (执行前 skip + 记录 timeout_count; future 抛 `TimedOutException`; 不计入 fail_count; C++ 无安全 kill 机制, 执行中不强制中断)
 
@@ -830,7 +830,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `thread_name` | `std::string` | 线程名称（Linux 下通过 `pthread_setname_np` 设置，便于 top/perf 识别） |
 | `cycle_period_ns` | `int64_t` | 周期（纳秒），如 2 000 000 表示 2 ms |
 | `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99）；== 0 时按 `cycle_period_ns` 自适应建议（≤1 ms → 80，≤10 ms → 50，>10 ms → 0）；显式设值保留 |
-| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时绑核 0（hw >= 2）；显式设值保留 |
+| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；若可用 CPU 数量 <= 1，则不设置亲和性；显式设值保留 |
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
 | `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |

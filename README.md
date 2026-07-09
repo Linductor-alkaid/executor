@@ -18,7 +18,7 @@
   - **Adaptive thread count** (`min/max_threads` = 0 sentinel, `ExecutorManager` probes `hardware_concurrency()` at init, falls back to (2, 4) on failure)
   - **Work-stealing by default** (lock-free implementation, auto-disabled when `max_threads == 1`)
   - **Auto CPU affinity for thread pool** (empty affinity → auto-allocate [0..hw-1], preserves user override)
-  - **Auto CPU affinity for real-time threads** (empty → bind core 0 if hw >= 2, else OS-free; preserves override)
+  - **Auto CPU affinity for real-time threads** (empty → round-robin auto-select via `g_next_rt_cpu_hint` across the currently allowed CPU set; no affinity is set when one or fewer CPUs are available; preserves override)
   - **Adaptive real-time thread priority** (`thread_priority` = 0 → auto-recommend 80 if cycle ≤ 1 ms, 50 if ≤ 10 ms, 0 if > 10 ms)
   Auto-decisions fall back to safe defaults when platform probing or tuning is unavailable, and user-supplied values are **always preserved**. Task failures, rejected submissions, drops, and timeouts are not considered tuning failures: they must remain observable through futures, return values, status counters, or monitoring statistics.
 

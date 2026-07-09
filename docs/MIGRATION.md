@@ -32,7 +32,7 @@
 - `RealtimeThreadConfig.timer_slack_ns` 默认 `1`：Linux 下将 timer slack 调到 1 ns；设置为 `0` 表示显式 opt-out。
 - `ThreadPoolConfig.min_threads` / `max_threads` 默认 `0`：作为 sentinel，初始化时自动探测 `hardware_concurrency()`；探测失败退到安全默认。
 - `ThreadPoolConfig.enable_work_stealing` 默认 `true`：`max_threads == 1` 时自动关闭。
-- `cpu_affinity` 为空时自动分配：线程池使用 [0..hw-1]；实时线程空 affinity 时自动分配核心，显式配置始终保留。
+- `cpu_affinity` 为空时自动分配：线程池使用 [0..hw-1]；实时线程空 affinity 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择，可用 CPU 数量 <= 1 时不设置亲和性；显式配置始终保留。
 
 ### 新增 API
 
