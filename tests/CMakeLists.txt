@@ -158,7 +158,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "integration;concurrency;thread_pool"
             TIMEOUT 120
         )
-    elseif(TEST_NAME MATCHES "^test_(util|task|thread_pool|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager|push_task_ex_default)$")
+    elseif(TEST_NAME MATCHES "^test_(util|task|thread_pool|thread_pool_empty_task_rejection|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager|push_task_ex_default)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "unit"
             TIMEOUT 30

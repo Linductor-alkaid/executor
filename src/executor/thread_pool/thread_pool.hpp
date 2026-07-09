@@ -30,6 +30,7 @@
 #include <functional>
 #include <type_traits>
 #include <random>
+#include <stdexcept>
 
 namespace executor {
 
@@ -475,11 +476,22 @@ auto ThreadPool::submit(F&& f, Args&&... args)
     
     auto promise = std::make_shared<std::promise<return_type>>();
     auto promise_ready = std::make_shared<std::atomic_bool>(false);
+    std::future<return_type> result = promise->get_future();
+
+    if constexpr (std::is_same_v<
+                      std::remove_cv_t<std::remove_reference_t<F>>,
+                      std::function<return_type(Args...)>>) {
+        if (!f) {
+            promise_ready->store(true, std::memory_order_release);
+            promise->set_exception(
+                std::make_exception_ptr(std::invalid_argument("empty task")));
+            return result;
+        }
+    }
+
     auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
-    
-    std::future<return_type> result = promise->get_future();
 
     auto task = [promise, promise_ready, bound_task]() mutable {
         try {
@@ -527,11 +539,22 @@ auto ThreadPool::submit_priority(int priority, F&& f, Args&&... args)
     
     auto promise = std::make_shared<std::promise<return_type>>();
     auto promise_ready = std::make_shared<std::atomic_bool>(false);
+    std::future<return_type> result = promise->get_future();
+
+    if constexpr (std::is_same_v<
+                      std::remove_cv_t<std::remove_reference_t<F>>,
+                      std::function<return_type(Args...)>>) {
+        if (!f) {
+            promise_ready->store(true, std::memory_order_release);
+            promise->set_exception(
+                std::make_exception_ptr(std::invalid_argument("empty task")));
+            return result;
+        }
+    }
+
     auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
-    
-    std::future<return_type> result = promise->get_future();
 
     auto task = [promise, promise_ready, bound_task]() mutable {
         try {

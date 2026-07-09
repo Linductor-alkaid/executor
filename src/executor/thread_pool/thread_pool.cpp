@@ -704,6 +704,13 @@ bool ThreadPool::try_submit(std::function<void()> task) {
 
 bool ThreadPool::try_submit(std::function<void()> task,
                             std::function<void(std::exception_ptr)> on_timeout) {
+    if (!task) {
+        if (on_timeout) {
+            on_timeout(std::make_exception_ptr(std::invalid_argument("empty task")));
+        }
+        return false;
+    }
+
     Task executor_task;
     executor_task.task_id = generate_task_id();
     executor_task.priority = TaskPriority::NORMAL;
@@ -749,6 +756,13 @@ bool ThreadPool::try_submit_priority(
         task_priority = TaskPriority::CRITICAL;
     }
 
+    if (!task) {
+        if (on_timeout) {
+            on_timeout(std::make_exception_ptr(std::invalid_argument("empty task")));
+        }
+        return false;
+    }
+
     Task executor_task;
     executor_task.task_id = generate_task_id();
     executor_task.priority = task_priority;
@@ -787,6 +801,18 @@ bool ThreadPool::try_submit_batch(
     std::vector<std::function<void(std::exception_ptr)>> on_timeout_handlers) {
     if (tasks.empty()) {
         return false;
+    }
+
+    for (const auto& task : tasks) {
+        if (!task) {
+            auto exception = std::make_exception_ptr(std::invalid_argument("empty task"));
+            for (auto& on_timeout : on_timeout_handlers) {
+                if (on_timeout) {
+                    on_timeout(exception);
+                }
+            }
+            return false;
+        }
     }
 
     std::vector<std::string> task_ids;

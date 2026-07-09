@@ -16,6 +16,29 @@
 
 namespace executor {
 
+namespace detail {
+
+template<typename T>
+struct is_std_function : std::false_type {};
+
+template<typename Signature>
+struct is_std_function<std::function<Signature>> : std::true_type {};
+
+template<typename T>
+inline constexpr bool is_std_function_v =
+    is_std_function<std::remove_cv_t<std::remove_reference_t<T>>>::value;
+
+template<typename F>
+bool is_empty_std_function(const F& f) {
+    if constexpr (is_std_function_v<F>) {
+        return !f;
+    } else {
+        return false;
+    }
+}
+
+} // namespace detail
+
 /**
  * @brief 异步执行器接口（用于线程池）
  * 
@@ -41,11 +64,21 @@ public:
 
         auto promise = std::make_shared<std::promise<return_type>>();
         auto promise_ready = std::make_shared<std::atomic_bool>(false);
+        std::future<return_type> result = promise->get_future();
+
+        if constexpr (sizeof...(Args) == 0) {
+            if (detail::is_empty_std_function(f)) {
+                promise_ready->store(true, std::memory_order_release);
+                promise->set_exception(std::make_exception_ptr(
+                    std::invalid_argument("empty task")));
+                return result;
+            }
+        }
+
         auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
         );
 
-        std::future<return_type> result = promise->get_future();
         auto task = [promise, promise_ready, bound_task]() mutable {
             try {
                 if constexpr (std::is_void_v<return_type>) {
@@ -167,11 +200,21 @@ public:
 
         auto promise = std::make_shared<std::promise<return_type>>();
         auto promise_ready = std::make_shared<std::atomic_bool>(false);
+        std::future<return_type> result = promise->get_future();
+
+        if constexpr (sizeof...(Args) == 0) {
+            if (detail::is_empty_std_function(f)) {
+                promise_ready->store(true, std::memory_order_release);
+                promise->set_exception(std::make_exception_ptr(
+                    std::invalid_argument("empty task")));
+                return result;
+            }
+        }
+
         auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...)
         );
 
-        std::future<return_type> result = promise->get_future();
         auto task = [promise, promise_ready, bound_task]() mutable {
             try {
                 if constexpr (std::is_void_v<return_type>) {
@@ -254,12 +297,16 @@ public:
         promise_ready_flags.reserve(tasks.size());
 
         // 准备所有任务和 future
+        bool has_empty_task = false;
         for (const auto& task : tasks) {
             auto promise = std::make_shared<std::promise<void>>();
             auto promise_ready = std::make_shared<std::atomic_bool>(false);
             futures.push_back(promise->get_future());
             promises.push_back(promise);
             promise_ready_flags.push_back(promise_ready);
+            if (detail::is_empty_std_function(task)) {
+                has_empty_task = true;
+            }
             task_wrappers.push_back([promise, promise_ready, task]() {
                 try {
                     task();
@@ -277,6 +324,15 @@ public:
                     promise->set_exception(exception);
                 }
             });
+        }
+
+        if (has_empty_task) {
+            auto exception = std::make_exception_ptr(std::invalid_argument("empty task"));
+            for (size_t i = 0; i < promises.size(); ++i) {
+                promise_ready_flags[i]->store(true, std::memory_order_release);
+                promises[i]->set_exception(exception);
+            }
+            return futures;
         }
 
         // 批量提交（减少锁竞争）

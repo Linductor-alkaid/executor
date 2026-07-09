@@ -199,6 +199,12 @@ for (int t = 0; t < 4; ++t) {
 
 **结论**：批量提交是可选的提交路径优化，不是固定倍率性能承诺。单线程大批量、无需 future 的场景可优先 benchmark `submit_batch_no_future()`；多线程并发提交和轻量任务场景应以实测选择循环 `submit()` 或批量提交。
 
+#### 空任务拒绝
+
+底层 `ThreadPool::try_submit(std::function<void()>)`、`ThreadPool::try_submit_priority(...)` 和 `ThreadPool::try_submit_batch(...)` 会拒绝空的 `std::function<void()>`。单任务路径返回 `false`，带回调的 overload 会向回调传入 `std::invalid_argument("empty task")`；批量路径只要发现任意空任务就返回 `false`，并且不会部分提交同一批次中的其他任务。
+
+`ThreadPoolExecutor` / `IAsyncExecutor` / `Executor` facade 的 future API 不会同步抛出该拒绝；`submit(empty_function)` 和包含空任务的 `submit_batch(...)` 会返回已经 ready 的 future，`future.get()` 抛 `std::invalid_argument("empty task")`。`Executor` facade 同时将该情况记录为 `SubmitRejected`。
+
 ### 3.4 软超时
 
 `task_timeout_ms` 是线程池任务的**执行前软超时**。worker 准备执行任务时会检查 `now - submit_time`；若 elapsed >= timeout，则跳过该任务并将线程池内部 timeout 计数与 `TaskStatistics::timeout_count` 加 1。通过 `ThreadPool::submit()`、`Executor::submit()`、priority submit 或 batch submit 暴露的 `std::future` 会被显式置为异常状态，`future.get()` 抛 `executor::TimedOutException`（例如 `Task timed out after 100ms`），不会变成 `std::future_error(broken_promise)`。
