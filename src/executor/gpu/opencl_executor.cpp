@@ -571,24 +571,41 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
 
     std::packaged_task<void()> task([this, kernel_func, config]() {
         auto start = std::chrono::high_resolution_clock::now();
+        bool kernel_func_started = false;
 
         try {
             auto queue_wrapper = get_queue(config.stream_id);
             if (!queue_wrapper) {
-                throw std::runtime_error("OpenCLExecutor: invalid stream_id");
+                std::ostringstream oss;
+                oss << "submit_kernel: invalid stream_id " << config.stream_id;
+                throw std::runtime_error(oss.str());
             }
 
             std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
             if (!queue_wrapper->queue) {
-                throw std::runtime_error("OpenCLExecutor: invalid stream_id");
+                std::ostringstream oss;
+                oss << "submit_kernel: invalid stream_id " << config.stream_id;
+                throw std::runtime_error(oss.str());
             }
+            kernel_func_started = true;
             kernel_func(queue_wrapper->queue);
 
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
             total_kernel_time_ns_ += duration;
             completed_kernels_++;
+        } catch (const std::exception& ex) {
+            if (kernel_func_started) {
+                set_last_error(std::string("submit_kernel: kernel_func exception: ") + ex.what());
+            } else {
+                set_last_error(ex.what());
+            }
+            failed_kernels_++;
+            throw;
         } catch (...) {
+            set_last_error(kernel_func_started
+                ? "submit_kernel: kernel_func exception: unknown"
+                : "submit_kernel: unknown exception");
             failed_kernels_++;
             throw;
         }
