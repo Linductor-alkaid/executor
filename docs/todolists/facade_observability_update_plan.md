@@ -227,19 +227,31 @@
 
 `tests/harness/test_comm_facade_usage.cpp` 已有 disabled 用例，说明项目已经识别到常见通信模式仍缺 facade。
 
+更完整的设计与执行拆分见：
+
+- [通信与并发辅助 Facade 设计](../design/comm_facade.md)
+- [通信与并发辅助 Facade 更新计划](comm_facade_update_plan.md)
+
 ### 任务
 
 - [ ] 设计 `executor::comm` facade API：
   - `MpscChannel<T>`
+  - `SpscChannel<T>`
   - `LatestMailbox<T>`
   - `PhaseGate`
+  - `Sequencer`
   - `DoubleBuffer<T>`
   - `RealtimeChannel<T>`
+- [ ] 暴露任务时序 API：
+  - `TaskHandle`
+  - `submit_after(...)`
+  - `when_all(...)`
 - [ ] 每个通信组件必须定义失败可见性：
   - push 失败返回值
   - drop/overwrite 计数
   - close/shutdown 状态
   - 高水位或容量状态
+  - stale / missed phase / producer-consumer lag
 - [ ] 启用并补全 `test_comm_facade_usage.cpp` 中 disabled 用例。
 - [ ] 在 README/API 加入最小示例，避免用户直接拼底层队列、锁和生命周期。
 
@@ -247,6 +259,7 @@
 
 - [ ] 典型 producer/consumer、latest-state、phase handoff、realtime drain 场景无需用户直接操作底层无锁队列。
 - [ ] 所有丢弃、覆盖、关闭后的提交均可观察。
+- [ ] 用户能通过统计回答 drop、latency、stale、missed phase 和 producer/consumer lag。
 
 ---
 

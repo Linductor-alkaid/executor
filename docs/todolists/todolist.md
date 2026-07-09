@@ -149,3 +149,10 @@
 
 - [x] 修正文档宣称：自动调优可安全回退，任务失败/提交拒绝/丢任务/超时必须可观察
 - [ ] 执行 [Facade 完整度与失败可观察性更新计划](facade_observability_update_plan.md)
+
+---
+
+## 阶段 15：通信与并发辅助 Facade
+
+- [ ] 执行 [通信与并发辅助 Facade 更新计划](comm_facade_update_plan.md)
+- [ ] 落地 [通信与并发辅助 Facade 设计](../design/comm_facade.md)
