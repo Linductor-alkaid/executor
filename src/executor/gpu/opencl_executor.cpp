@@ -2,6 +2,7 @@
 #include <chrono>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace executor {
 namespace gpu {
@@ -78,32 +79,62 @@ bool OpenCLExecutor::start() {
         return false;
     }
 
-    if (running_) {
+    bool expected = false;
+    if (!running_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return true;
     }
 
     clear_last_error();
 
     if (!loader_->load()) {
-        set_last_error("OpenCL loader is unavailable");
+        rollback_start_failure("OpenCL loader is unavailable");
         return false;
     }
 
-    if (!initialize_opencl()) {
+    try {
+        if (!initialize_opencl()) {
+            std::string error = get_last_error();
+            if (error.empty()) {
+                error = "OpenCL initialization failed";
+            }
+            cleanup();
+            rollback_start_failure(error);
+            return false;
+        }
+    } catch (const std::exception& ex) {
+        cleanup();
+        rollback_start_failure(std::string("OpenCL initialization failed: ") + ex.what());
+        return false;
+    } catch (...) {
+        cleanup();
+        rollback_start_failure("OpenCL initialization failed: unknown exception");
         return false;
     }
 
-    running_ = true;
-    worker_ = std::thread(&OpenCLExecutor::worker_thread, this);
+    try {
+        if (worker_thread_factory_for_test_) {
+            worker_ = worker_thread_factory_for_test_(this);
+        } else {
+            worker_ = std::thread(&OpenCLExecutor::worker_thread, this);
+        }
+    } catch (const std::exception& ex) {
+        cleanup();
+        rollback_start_failure(std::string("OpenCL worker thread creation failed: ") + ex.what());
+        return false;
+    } catch (...) {
+        cleanup();
+        rollback_start_failure("OpenCL worker thread creation failed: unknown exception");
+        return false;
+    }
+
     return true;
 }
 
 void OpenCLExecutor::stop() {
-    if (!running_) {
+    if (!running_.exchange(false, std::memory_order_acq_rel)) {
         return;
     }
 
-    running_ = false;
     queue_cv_.notify_all();
     queue_not_full_cv_.notify_all();
 
@@ -226,6 +257,14 @@ void OpenCLExecutor::set_last_error(const std::string& message) {
 std::string OpenCLExecutor::get_last_error() const {
     std::lock_guard<std::mutex> lock(error_mutex_);
     return last_error_message_;
+}
+
+void OpenCLExecutor::rollback_start_failure(const std::string& message) {
+    running_.store(false, std::memory_order_release);
+    set_last_error(message);
+    queue_cv_.notify_all();
+    queue_not_full_cv_.notify_all();
+    queue_drained_cv_.notify_all();
 }
 
 void OpenCLExecutor::cleanup() {
@@ -515,7 +554,7 @@ GpuDeviceInfo OpenCLExecutor::get_device_info() const {
 GpuExecutorStatus OpenCLExecutor::get_status() const {
     GpuExecutorStatus status;
     status.name = name_;
-    status.is_running = running_;
+    status.is_running = running_.load(std::memory_order_acquire);
     status.backend = GpuBackend::OPENCL;
     status.device_id = config_.device_id;
     status.last_error_message = get_last_error();
@@ -602,7 +641,7 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
             return !running_.load(std::memory_order_acquire) ||
                    task_queue_.size() < config_.max_queue_size;
         });
-        if (!running_) {
+        if (!running_.load(std::memory_order_acquire)) {
             std::promise<void> promise;
             promise.set_exception(std::make_exception_ptr(
                 std::runtime_error("OpenCLExecutor is not running")));
@@ -622,9 +661,12 @@ void OpenCLExecutor::worker_thread() {
 
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
-            queue_cv_.wait(lock, [this] { return !task_queue_.empty() || !running_; });
+            queue_cv_.wait(lock, [this] {
+                return !task_queue_.empty() ||
+                       !running_.load(std::memory_order_acquire);
+            });
 
-            if (!running_ && task_queue_.empty()) {
+            if (!running_.load(std::memory_order_acquire) && task_queue_.empty()) {
                 queue_drained_cv_.notify_all();
                 break;
             }

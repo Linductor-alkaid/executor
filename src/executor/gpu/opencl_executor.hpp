@@ -72,6 +72,7 @@ private:
     void clear_last_error();
     void set_last_error(const std::string& message);
     std::string get_last_error() const;
+    void rollback_start_failure(const std::string& message);
 
     std::string name_;
     GpuExecutorConfig config_;
@@ -96,6 +97,7 @@ private:
     mutable std::mutex error_mutex_;
     std::string last_error_message_;
     std::thread worker_;
+    std::function<std::thread(OpenCLExecutor*)> worker_thread_factory_for_test_;
     std::queue<std::packaged_task<void()>> task_queue_;
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
