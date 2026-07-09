@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <cstdlib>
+#include <cstdint>
 #include <new>
 
 // 包含 thread_pool 模块的头文件
@@ -317,7 +318,13 @@ bool test_thread_pool_init_oom_safety() {
 
     g_large_allocation_count.store(0, std::memory_order_relaxed);
     g_fail_large_allocation_number.store(1, std::memory_order_relaxed);
+#ifdef USE_LOCKFREE_WORKER_QUEUE
+    // LockFreeWorkerQueue stores task pointers in a LockFreeQueue<uintptr_t>
+    // during initialization, while WorkerLocalQueue preallocates Task wrappers.
+    g_large_allocation_threshold.store(config.queue_capacity * sizeof(std::uintptr_t), std::memory_order_relaxed);
+#else
     g_large_allocation_threshold.store(config.queue_capacity * sizeof(Task), std::memory_order_relaxed);
+#endif
     g_fail_large_allocations.store(true, std::memory_order_release);
 
     bool initialized = true;
