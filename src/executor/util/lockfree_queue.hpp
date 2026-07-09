@@ -48,6 +48,10 @@ class LockFreeQueue {
                   "LockFreeQueue requires trivially copyable type");
 
 public:
+    // Cap multiplier growth so the largest internal backoff window
+    // (16 * kMaxBackoffMultiplier) remains bounded and cannot wrap size_t.
+    static constexpr size_t kMaxBackoffMultiplier = 1u << 20;
+
     explicit LockFreeQueue(size_t capacity, size_t backoff_multiplier = 1, bool enable_stats = false)
         : capacity_(round_to_power_of_two(capacity))
         , mask_(capacity_ - 1)
@@ -55,7 +59,7 @@ public:
         , sequences_(capacity_)
         , enqueue_pos_(0)
         , dequeue_pos_(0)
-        , backoff_multiplier_(backoff_multiplier)
+        , backoff_multiplier_(normalize_backoff_multiplier(backoff_multiplier))
         , stats_enabled_(enable_stats) {
         // 初始化序列号
         for (size_t i = 0; i < capacity_; ++i) {
@@ -442,12 +446,21 @@ private:
         return power;
     }
 
+    static size_t normalize_backoff_multiplier(size_t multiplier) {
+        if (multiplier == 0) {
+            throw std::invalid_argument("LockFreeQueue: backoff_multiplier must be > 0");
+        }
+        return multiplier > kMaxBackoffMultiplier ? kMaxBackoffMultiplier : multiplier;
+    }
+
     const size_t capacity_;
     const size_t mask_;
     std::vector<T> buffer_;
     std::vector<std::atomic<size_t>> sequences_;
     alignas(64) std::atomic<size_t> enqueue_pos_;
     alignas(64) std::atomic<size_t> dequeue_pos_;
+    // Valid range: [1, kMaxBackoffMultiplier]. Constructor rejects 0 and
+    // clamps larger values to keep scaled pause-loop arithmetic bounded.
     const size_t backoff_multiplier_;
     // 260610P013: std::atomic<bool> 替换裸 bool 字段
     // enable_stats() 可从任意线程写入,热路径 (push/pop) 频繁读取 — C++ data race (UB)
