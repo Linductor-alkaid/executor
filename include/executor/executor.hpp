@@ -1077,6 +1077,9 @@ auto Executor::submit_gpu(const std::string& executor_name,
     -> std::future<void> {
     auto* executor = manager_->get_gpu_executor(executor_name);
     if (!executor) {
+        const std::string message =
+            "submit_gpu: no GPU executor registered with name " + executor_name;
+        record_submit_rejected(executor_name, "facade_submit_gpu", message);
         throw std::runtime_error("GPU executor '" + executor_name + "' not found. Call register_gpu_executor() first.");
     }
     return executor->submit_kernel(std::forward<KernelFunc>(kernel), config);
