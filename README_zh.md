@@ -38,7 +38,7 @@
   `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic`、`submit_batch`、`submit_batch_no_future` 及实时任务注册
 
 - **批量任务提交**
-  `submit_batch()` 和 `submit_batch_no_future()` 高效提交大量任务，单线程场景性能提升 **3-5x**（500-2000 个任务）
+  `submit_batch()` 和 `submit_batch_no_future()` 可一次性提交大量任务，减少重复提交路径开销。当前版本不承诺固定加速比；收益会随任务数量、任务体、线程数、硬件和构建配置变化，请以本地 benchmark 结果为准。当前记录见 [docs/performance/batch_submit_baseline_2026-07-09.json](docs/performance/batch_submit_baseline_2026-07-09.json)。
 
 - **实时 facade 推送与背压计数器**
   新代码优先使用 `Executor::push_realtime_task()` / `try_push_realtime_task()` 推送实时任务，无需接触 `IRealtimeExecutor*`。失败会返回 `false`，并进入 failure event 及 `dropped_task_count`、`queue_full_count`、`pool_exhausted_count` 等状态计数；既有 `push_task()` API 继续兼容。

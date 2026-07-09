@@ -202,11 +202,11 @@ int main() {
         std::cout << "  有 future:  " << batch_future.speedup << "x\n";
         std::cout << "  无 future:  " << batch_no_future.speedup << "x\n";
 
-        if (batch_no_future.speedup >= 3.0) {
-            std::cout << "  ✅ 无 future 版本达到 3x 目标\n";
-        } else if (batch_no_future.speedup > batch_future.speedup) {
+        if (batch_no_future.speedup > batch_future.speedup) {
             double improvement = (batch_no_future.speedup / batch_future.speedup - 1.0) * 100;
             std::cout << "  ✓ 无 future 版本提升 " << improvement << "%\n";
+        } else {
+            std::cout << "  无 future 版本未快于有 future 版本\n";
         }
     }
 

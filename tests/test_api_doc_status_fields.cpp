@@ -256,29 +256,32 @@ TEST(ApiDocStatusFields, ApiDocPerformanceClaimsHaveSources) {
     };
 
     for (const auto& [path, text] : docs) {
-        EXPECT_TRUE(text.find("docs/performance/lockfree_task_executor_baseline.md") !=
+        EXPECT_TRUE(text.find("docs/performance/batch_submit_baseline_2026-07-09.json") !=
                         std::string::npos ||
-                    text.find("performance/lockfree_task_executor_baseline.md") !=
-                        std::string::npos)
-            << path << " batch performance claim must link the Markdown source";
-        EXPECT_TRUE(text.find("docs/performance/batch_submit_baseline_2026-03-13.json") !=
-                        std::string::npos ||
-                    text.find("performance/batch_submit_baseline_2026-03-13.json") !=
+                    text.find("performance/batch_submit_baseline_2026-07-09.json") !=
                         std::string::npos)
             << path << " batch performance claim must link the JSON source";
-        EXPECT_NE(text.find("benchmark_batch_submit_real"), std::string::npos)
+        EXPECT_NE(text.find("benchmark_batch_scales"), std::string::npos)
             << path << " batch performance claim must include the benchmark command";
-        EXPECT_TRUE(contains_regex(text, "date[^0-9]{0,20}2026-03-13") ||
-                    contains_regex(text, "日期[^0-9]{0,20}2026-03-13"))
+        EXPECT_NE(text.find("benchmark_batch_submit_real"), std::string::npos)
+            << path << " batch performance claim must include the real benchmark command";
+        EXPECT_NE(text.find("benchmark_batch_submit_concurrent"), std::string::npos)
+            << path << " batch performance claim must include the concurrent benchmark command";
+        EXPECT_TRUE(contains_regex(text, "date[^0-9]{0,20}2026-07-09") ||
+                    contains_regex(text, "日期[^0-9]{0,20}2026-07-09"))
             << path << " batch performance claim must include the benchmark date";
     }
 
-    EXPECT_NE(readme_md.find("3–5x"), std::string::npos)
-        << "README.md public batch performance claim should stay conservative at 3-5x";
-    EXPECT_NE(api_md.find("实测加速比 | 公开推荐范围"), std::string::npos)
-        << "docs/API.md should keep measured ratios separate from public guidance";
-    EXPECT_NE(api_md.find("16.47x"), std::string::npos)
-        << "docs/API.md should preserve the measured 2000-task ratio";
+    EXPECT_NE(readme_md.find("does not promise a fixed speedup"), std::string::npos)
+        << "README.md batch performance text must avoid fixed speedup promises";
+    EXPECT_NE(api_md.find("不承诺固定加速比"), std::string::npos)
+        << "docs/API.md batch performance text must avoid fixed speedup promises";
+    EXPECT_NE(api_md.find("10.26x"), std::string::npos)
+        << "docs/API.md should preserve the current 1000-task no-future ratio";
+    EXPECT_NE(api_md.find("2.56x"), std::string::npos)
+        << "docs/API.md should preserve the current 5000-task real workload ratio";
+    EXPECT_NE(api_md.find("0.86x"), std::string::npos)
+        << "docs/API.md should preserve the current concurrent slowdown ratio";
 }
 
 TEST(ApiDocThreadPoolSnippetCompiles, FixedThreadPoolExampleInitializes) {

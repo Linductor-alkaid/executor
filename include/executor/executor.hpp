@@ -175,14 +175,14 @@ public:
     /**
      * @brief 批量提交任务
      *
-     * 批量提交多个任务，相比循环调用 submit() 有更好的性能。
-     * 内部优化减少了锁竞争和内存分配开销。
+     * 批量提交多个任务，可减少重复提交路径开销。
+     * 实际性能收益取决于任务数量、任务体、线程数、硬件和构建配置。
      *
      * @tparam F 可调用对象类型
      * @param tasks 任务列表
      * @return std::vector<std::future<void>> 任务执行结果的 future 列表
      *
-     * @note 性能提升：相比循环 submit() 可提升 3-5x 性能
+     * @note 不承诺固定加速比；需要性能结论时请运行本地 benchmark。
      *
      * 示例：
      * @code
@@ -199,7 +199,7 @@ public:
     /**
      * @brief 批量提交任务（无返回值版本）
      *
-     * 批量提交多个任务，不返回 future，性能更高。
+     * 批量提交多个任务，不返回 future，省去逐个 future 的管理开销。
      * 适用于不需要等待任务完成的场景（fire-and-forget）。
      *
      * @tparam F 可调用对象类型

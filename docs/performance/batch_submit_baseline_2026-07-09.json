@@ -1,0 +1,133 @@
+{
+  "benchmark": "batch_submit_baseline",
+  "description": "Current-version batch task submission benchmark results. These measurements are recorded from one local run and are not a fixed speedup promise.",
+  "date": "2026-07-09",
+  "captured_at": "2026-07-09T11:41:55+08:00",
+  "commit": "2ea0c37",
+  "environment": {
+    "os": "Linux 6.8.0-124-generic x86_64 GNU/Linux",
+    "cpu": "13th Gen Intel(R) Core(TM) i9-13900KF, 32 logical CPUs",
+    "compiler": "GCC 11.4.0",
+    "build_type": "Release"
+  },
+  "benchmark_commands": [
+    "cmake --build build --target benchmark_batch_scales benchmark_batch_submit_real benchmark_batch_submit_concurrent -j2",
+    "./build/tests/benchmark_batch_scales",
+    "./build/tests/benchmark_batch_submit_real",
+    "./build/tests/benchmark_batch_submit_concurrent"
+  ],
+  "single_thread_submit_path_no_future": {
+    "benchmark": "benchmark_batch_scales",
+    "timing_scope": "submit-call duration only; completion is waited after timing",
+    "results": [
+      {
+        "tasks": 500,
+        "loop_submit_us": 5528,
+        "submit_batch_no_future_us": 1152,
+        "measured_ratio": 4.80
+      },
+      {
+        "tasks": 1000,
+        "loop_submit_us": 7901,
+        "submit_batch_no_future_us": 770,
+        "measured_ratio": 10.26
+      },
+      {
+        "tasks": 2000,
+        "loop_submit_us": 17487,
+        "submit_batch_no_future_us": 1291,
+        "measured_ratio": 13.55
+      },
+      {
+        "tasks": 5000,
+        "loop_submit_us": 45182,
+        "submit_batch_no_future_us": 3272,
+        "measured_ratio": 13.81
+      }
+    ]
+  },
+  "single_thread_real_workload_with_future": {
+    "benchmark": "benchmark_batch_submit_real",
+    "timing_scope": "submit plus wait for all futures",
+    "results": [
+      {
+        "tasks": 1000,
+        "loop_submit_ms": 9,
+        "submit_batch_ms": 3,
+        "measured_ratio": 3.00
+      },
+      {
+        "tasks": 5000,
+        "loop_submit_ms": 41,
+        "submit_batch_ms": 16,
+        "measured_ratio": 2.56
+      },
+      {
+        "tasks": 10000,
+        "loop_submit_ms": 38,
+        "submit_batch_ms": 33,
+        "measured_ratio": 1.15
+      },
+      {
+        "tasks": 50000,
+        "loop_submit_ms": 381,
+        "submit_batch_ms": 290,
+        "measured_ratio": 1.31
+      }
+    ]
+  },
+  "multi_thread_submit_batch_with_future": {
+    "benchmark": "benchmark_batch_submit_concurrent",
+    "timing_scope": "concurrent submit plus wait for all futures",
+    "results": [
+      {
+        "threads": 2,
+        "tasks_per_thread": 5000,
+        "total_tasks": 10000,
+        "loop_submit_ms": 55,
+        "submit_batch_ms": 39,
+        "measured_ratio": 1.41
+      },
+      {
+        "threads": 4,
+        "tasks_per_thread": 2500,
+        "total_tasks": 10000,
+        "loop_submit_ms": 43,
+        "submit_batch_ms": 38,
+        "measured_ratio": 1.13
+      },
+      {
+        "threads": 8,
+        "tasks_per_thread": 1250,
+        "total_tasks": 10000,
+        "loop_submit_ms": 36,
+        "submit_batch_ms": 39,
+        "measured_ratio": 0.92
+      },
+      {
+        "threads": 16,
+        "tasks_per_thread": 625,
+        "total_tasks": 10000,
+        "loop_submit_ms": 33,
+        "submit_batch_ms": 34,
+        "measured_ratio": 0.97
+      },
+      {
+        "threads": 16,
+        "tasks_per_thread": 5000,
+        "total_tasks": 80000,
+        "loop_submit_ms": 423,
+        "submit_batch_ms": 493,
+        "measured_ratio": 0.86
+      },
+      {
+        "threads": 32,
+        "tasks_per_thread": 312,
+        "total_tasks": 9984,
+        "loop_submit_ms": 31,
+        "submit_batch_ms": 36,
+        "measured_ratio": 0.86
+      }
+    ]
+  }
+}

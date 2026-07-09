@@ -1,6 +1,6 @@
 {
   "benchmark": "batch_submit_baseline",
-  "description": "Batch task submission baseline used by README.md and docs/API.md performance claims.",
+  "description": "Historical batch task submission baseline referenced by README.md and docs/API.md. It is not a current-version speedup promise.",
   "benchmark_command": "JOBS=16 cmake --build build -j16 --target benchmark_batch_submit_real benchmark_batch_submit_concurrent && ./build/tests/benchmark_batch_submit_real && ./build/tests/benchmark_batch_submit_concurrent",
   "source_markdown": "docs/performance/lockfree_task_executor_baseline.md",
   "source_json": "docs/performance/batch_submit_baseline_2026-03-13.json",
@@ -27,21 +27,21 @@
       "loop_submit_us": 2757,
       "submit_batch_no_future_us": 549,
       "measured_ratio": 5.02,
-      "public_recommended_range": "3-5x"
+      "measurement_scope": "historical_baseline"
     },
     {
       "tasks": 1000,
       "loop_submit_us": 5307,
       "submit_batch_no_future_us": 1246,
       "measured_ratio": 4.26,
-      "public_recommended_range": "3-5x"
+      "measurement_scope": "historical_baseline"
     },
     {
       "tasks": 2000,
       "loop_submit_us": 11003,
       "submit_batch_no_future_us": 668,
       "measured_ratio": 16.47,
-      "public_recommended_range": "3-5x"
+      "measurement_scope": "historical_baseline"
     }
   ],
   "multi_thread_submit_batch": [

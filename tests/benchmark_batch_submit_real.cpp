@@ -127,13 +127,11 @@ int main() {
         auto batch = benchmark_batch_submit(num_tasks, baseline.throughput);
         print_result(batch);
 
-        std::cout << "\n性能提升: ";
-        if (batch.speedup >= 3.0) {
-            std::cout << "✅ 达到目标 (" << batch.speedup << "x >= 3x)\n";
-        } else if (batch.speedup >= 1.5) {
-            std::cout << "✓ 有提升 (" << batch.speedup << "x)\n";
+        std::cout << "\n性能对比: ";
+        if (batch.speedup >= 1.0) {
+            std::cout << "批量提交更快 (" << batch.speedup << "x)\n";
         } else {
-            std::cout << "⚠️  提升不明显 (" << batch.speedup << "x)\n";
+            std::cout << "循环 submit 更快 (" << batch.speedup << "x)\n";
         }
     }
 

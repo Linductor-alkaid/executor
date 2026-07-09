@@ -134,9 +134,8 @@ int main() {
     std::cout << "单线程吞吐量: " << result1.throughput << " tasks/sec\n";
     std::cout << "多线程吞吐量 (4线程): " << result3.throughput << " tasks/sec\n";
     std::cout << "平均延迟: " << result1.avg_latency_us << " μs\n";
-    std::cout << "\n目标：批量提交 API 应达到 3-5x 性能提升\n";
-    std::cout << "预期吞吐量: " << (result1.throughput * 3) << " - "
-              << (result1.throughput * 5) << " tasks/sec\n";
+    std::cout << "\n说明：批量提交 API 不承诺固定加速比，请以当前 benchmark 结果为准\n";
+    std::cout << "参考吞吐量: " << result1.throughput << " tasks/sec\n";
     print_separator();
 
     return 0;

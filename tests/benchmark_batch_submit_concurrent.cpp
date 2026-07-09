@@ -196,15 +196,11 @@ int main() {
                                                        baseline.throughput);
         print_result(batch);
 
-        std::cout << "\n性能提升: ";
-        if (batch.speedup >= 3.0) {
-            std::cout << "✅ 达到目标 (" << batch.speedup << "x >= 3x)\n";
-        } else if (batch.speedup >= 1.5) {
-            std::cout << "✓ 有明显提升 (" << batch.speedup << "x)\n";
-        } else if (batch.speedup >= 1.1) {
-            std::cout << "△ 有提升 (" << batch.speedup << "x)\n";
+        std::cout << "\n性能对比: ";
+        if (batch.speedup >= 1.0) {
+            std::cout << "批量提交更快 (" << batch.speedup << "x)\n";
         } else {
-            std::cout << "⚠️  提升不明显 (" << batch.speedup << "x)\n";
+            std::cout << "循环 submit 更快 (" << batch.speedup << "x)\n";
         }
     }
 
@@ -212,9 +208,9 @@ int main() {
     print_separator();
     std::cout << "测试完成\n";
     std::cout << "\n说明：\n";
-    std::cout << "- 高并发场景下，批量提交减少了锁竞争次数\n";
-    std::cout << "- 每个线程只获取一次锁，而不是每个任务都获取锁\n";
-    std::cout << "- 线程数越多，批量提交的优势越明显\n";
+    std::cout << "- 高并发场景下，批量提交可能减少提交路径开销\n";
+    std::cout << "- 任务准备成本、future 管理和调度竞争也可能抵消收益\n";
+    std::cout << "- 请以当前机器和目标 workload 的 benchmark 结果为准\n";
     print_separator();
 
     return 0;

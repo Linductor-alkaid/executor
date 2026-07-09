@@ -67,6 +67,7 @@ int main() {
     test_scale(500);
     test_scale(1000);
     test_scale(2000);
+    test_scale(5000);
 
     std::cout << "\n" << std::string(50, '=') << "\n";
     std::cout << "测试完成\n\n";

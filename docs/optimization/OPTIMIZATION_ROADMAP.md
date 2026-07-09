@@ -258,7 +258,7 @@ std::vector<std::future<void>> submit_batch(
 );
 ```
 
-**预期收益**: 批量提交性能提升 3-5x
+**预期收益**: 历史目标曾按 3-5x 估算；当前版本需以 benchmark 复测结果为准
 
 ---
 
@@ -370,7 +370,7 @@ executor.set_monitoring_sampling_rate(0.01);  // 1% 采样
 3. 监控统计采样化（P1-6）
 
 **预期成果**:
-- 批量提交性能提升 3-5x
+- 批量提交性能以 benchmark 复测结果为准
 - 高吞吐场景性能提升 5-10%
 - 内存占用降低
 

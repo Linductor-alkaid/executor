@@ -88,20 +88,22 @@ void submit_batch_no_future(const std::vector<F>& tasks);
 ```
 
 - **`submit_batch`**：批量提交任务，返回 `std::future<void>` 列表，适合需要等待任务完成的场景。
-- **`submit_batch_no_future`**：批量提交任务，不返回 future（fire-and-forget），性能更高。
+- **`submit_batch_no_future`**：批量提交任务，不返回 future（fire-and-forget），省去逐个 future 的管理开销，实际性能以 benchmark 为准。
 
 #### 性能特性
 
-| 场景 | 公开推荐范围 | 推荐使用 |
-|------|-------------|---------|
-| 单线程提交 500+ 任务 | **3-5x** | ✅ `submit_batch_no_future` |
-| 单线程提交 < 500 任务 | 2-5x | ✅ `submit_batch_no_future` |
-| 多线程并发提交 | 0.6-1.2x | ⚠️ 使用循环 `submit()` |
+`submit_batch()` / `submit_batch_no_future()` 的目标是减少重复提交路径开销，但当前版本不承诺固定加速比。实际结果会随任务数量、任务体、线程数、硬件、系统负载和构建配置变化；某些轻量任务或小批量场景可能低于循环 `submit()`。需要性能结论时，请优先运行本地 benchmark。
+
+| 场景 | 经验建议 | 推荐使用 |
+|------|---------|---------|
+| 单线程提交大量任务 | 先 benchmark；若无需逐个 future，可优先尝试批量提交 | `submit_batch_no_future` |
+| 单线程提交少量任务 | 收益不稳定，通常无需专门批量化 | 循环 `submit()` 或按实测选择 |
+| 多线程并发提交 | 批量准备成本和锁竞争收益会互相抵消 | 按本地实测选择，默认可用循环 `submit()` |
 
 #### 适用场景
 
 **✅ 推荐使用批量提交**：
-- 单线程需要提交大量任务（500+ 个）
+- 单线程需要提交大量任务，并且本地 benchmark 显示批量路径更快
 - 任务准备开销小（如简单的 lambda）
 - 不需要立即获取每个任务的 future（使用 `submit_batch_no_future`）
 
@@ -125,7 +127,7 @@ for (int i = 0; i < 1000; ++i) {
     });
 }
 
-// 使用无 future 版本，公开推荐范围为 3-5x 加速
+// 使用无 future 版本；实际收益请以本地 benchmark 为准
 executor.submit_batch_no_future(tasks);
 
 // 或使用有 future 版本（如需等待完成）
@@ -162,27 +164,40 @@ for (int t = 0; t < 4; ++t) {
 
 #### 性能测试数据
 
-> 复现元数据：数据日期 2026-03-13，结果来源 [docs/performance/lockfree_task_executor_baseline.md](performance/lockfree_task_executor_baseline.md) 与 [docs/performance/batch_submit_baseline_2026-03-13.json](performance/batch_submit_baseline_2026-03-13.json)。benchmark command: `JOBS=16 cmake --build build -j16 --target benchmark_batch_submit_real benchmark_batch_submit_concurrent && ./build/tests/benchmark_batch_submit_real && ./build/tests/benchmark_batch_submit_concurrent`。commit: `9b69e52`。CPU: 多核处理器（当前补充记录：13th Gen Intel(R) Core(TM) i9-13900KF，32 logical CPUs）。OS: Linux 6.8.0-101-generic（当前补充记录：Linux 6.8.0-124-generic x86_64）。compiler: GCC 11（当前补充记录：GCC 11.4.0）。build type: Release。thread count: 16。
+> 复现元数据：数据日期 2026-07-09，结果来源 [docs/performance/batch_submit_baseline_2026-07-09.json](performance/batch_submit_baseline_2026-07-09.json)。benchmark commands: `cmake --build build --target benchmark_batch_scales benchmark_batch_submit_real benchmark_batch_submit_concurrent -j2`，`./build/tests/benchmark_batch_scales`，`./build/tests/benchmark_batch_submit_real`，`./build/tests/benchmark_batch_submit_concurrent`。commit: `2ea0c37`。CPU: 13th Gen Intel(R) Core(TM) i9-13900KF，32 logical CPUs。OS: Linux 6.8.0-124-generic x86_64。compiler: GCC 11.4.0。build type: Release。
 >
-> 说明：表格保留实测加速比；“公开推荐范围”用于 README/API 对外承诺，保持保守的 **3-5x** 口径。单线程场景下 `submit_batch_no_future` 提升显著，多线程场景下建议使用循环 `submit()`。
+> 说明：以下数据来自当前版本的一次本地 benchmark 运行，不构成固定性能承诺。不同 benchmark 的计时范围不同，不能混合成同一个加速比口径。
 
-单线程批量提交性能（使用 `submit_batch_no_future`）：
+单线程提交路径耗时（`benchmark_batch_scales`，使用 `submit_batch_no_future`；只计提交调用耗时，完成等待在计时后）：
 
-| 任务数 | 循环 submit | submit_batch_no_future | 实测加速比 | 公开推荐范围 |
-|--------|-------------|------------------------|------------|-------------|
-| 500    | ~2757 μs    | ~549 μs                | 5.02x      | 3-5x        |
-| 1000   | ~5307 μs    | ~1246 μs               | 4.26x      | 3-5x        |
-| 2000   | ~11003 μs   | ~668 μs                | 16.47x     | 3-5x        |
+| 任务数 | 循环 submit | submit_batch_no_future | 实测加速比 |
+|--------|-------------|------------------------|------------|
+| 500    | 5528 μs     | 1152 μs                | 4.80x      |
+| 1000   | 7901 μs     | 770 μs                 | 10.26x     |
+| 2000   | 17487 μs    | 1291 μs                | 13.55x     |
+| 5000   | 45182 μs    | 3272 μs                | 13.81x     |
 
-多线程并发提交性能（使用 `submit_batch`）：
+单线程真实负载端到端耗时（`benchmark_batch_submit_real`，使用 `submit_batch`；计提交并等待所有 future）：
 
-| 线程数 | 每线程任务数 | 循环 submit | submit_batch | 实测加速比 | 公开建议 |
-|--------|-------------|-------------|--------------|------------|----------|
-| 2      | 5000        | 37 ms       | 37 ms        | 1.00x      | 使用循环 `submit()` |
-| 4      | 2500        | 23 ms       | 38 ms        | 0.61x      | 使用循环 `submit()` |
-| 8      | 1250        | 45 ms       | 38 ms        | 1.18x      | 使用循环 `submit()` |
+| 任务数 | 循环 submit | submit_batch | 实测加速比 |
+|--------|-------------|--------------|------------|
+| 1000   | 9 ms        | 3 ms         | 3.00x      |
+| 5000   | 41 ms       | 16 ms        | 2.56x      |
+| 10000  | 38 ms       | 33 ms        | 1.15x      |
+| 50000  | 381 ms      | 290 ms       | 1.31x      |
 
-**结论**：批量提交在单线程场景下性能提升显著；公开推荐范围保持 3-5x，多线程场景下建议使用循环 `submit()`。
+多线程并发端到端耗时（`benchmark_batch_submit_concurrent`，使用 `submit_batch`；计并发提交并等待所有 future）：
+
+| 线程数 | 每线程任务数 | 总任务数 | 循环 submit | submit_batch | 实测加速比 | 建议 |
+|--------|-------------|----------|-------------|--------------|------------|------|
+| 2      | 5000        | 10000    | 55 ms       | 39 ms        | 1.41x      | 按本地实测选择 |
+| 4      | 2500        | 10000    | 43 ms       | 38 ms        | 1.13x      | 按本地实测选择 |
+| 8      | 1250        | 10000    | 36 ms       | 39 ms        | 0.92x      | 默认可用循环 `submit()` |
+| 16     | 625         | 10000    | 33 ms       | 34 ms        | 0.97x      | 默认可用循环 `submit()` |
+| 16     | 5000        | 80000    | 423 ms      | 493 ms       | 0.86x      | 默认可用循环 `submit()` |
+| 32     | 312         | 9984     | 31 ms       | 36 ms        | 0.86x      | 默认可用循环 `submit()` |
+
+**结论**：批量提交是可选的提交路径优化，不是固定倍率性能承诺。单线程大批量、无需 future 的场景可优先 benchmark `submit_batch_no_future()`；多线程并发提交和轻量任务场景应以实测选择循环 `submit()` 或批量提交。
 
 ### 3.4 软超时
 
