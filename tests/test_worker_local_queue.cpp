@@ -150,40 +150,32 @@ TEST(WorkerLocalQueue, ConcurrentEmptyNeverLiesWhenNonEmpty) {
     //
     // 此测试不要求 reader 看到完整的状态序列，只要求"在 size > 0 时不撒谎"。
     std::atomic<bool> producer_done{false};
-    std::atomic<int> violations{0};  // size()>0 && empty()==true 的次数（必须 =0）
-    std::atomic<int> checks_while_nonempty{0};
-    std::atomic<int> total_size_readings{0};
+    std::atomic<bool> observer_ready{false};
+    std::atomic<bool> producer_start{false};
+    std::atomic<uint64_t> nonempty_epoch{0};  // odd = a specific non-empty window is open
+    std::atomic<uint64_t> violations{0};  // 非空窗口内 empty()==true 的次数（必须 =0）
+    std::atomic<uint64_t> checks_while_nonempty{0};
+    std::atomic<uint64_t> total_empty_checks{0};
 
     // observer 线程
     std::thread observer([&]() {
+        observer_ready.store(true, std::memory_order_release);
         while (!producer_done.load(std::memory_order_acquire)) {
-            // 在锁内读 size_，保证 size_ 的快照与 empty() 的无锁快路径来自同一时刻
-            size_t s;
-            {
-                // 通过 empty() 内部的锁路径复用 mutex_——但 std::mutex 是 private。
-                // 改用更轻量的"自旋+重读"模式：
-                //   1) 无锁读 size_
-                //   2) 紧跟一次无锁 empty() 快路径
-                //   3) 若 size_ > 0 且 empty()==true，记录 1 次"可疑"——但因为二者不
-                //      在同一临界区，可能确实被并发 pop 走了。补救：再读一次 size_，
-                //      若仍 > 0 才计为 violation。
-                s = q.size();
-                bool e = q.empty();
-                if (e) {
-                    // 重读 size 一次，验证 size_ 是否真的仍然 > 0
-                    size_t s2 = q.size();
-                    if (s2 > 0) {
-                        checks_while_nonempty.fetch_add(1, std::memory_order_relaxed);
-                        violations.fetch_add(1, std::memory_order_relaxed);
-                    }
-                } else {
-                    if (s > 0) {
-                        checks_while_nonempty.fetch_add(1, std::memory_order_relaxed);
-                    }
+            const uint64_t epoch_before =
+                nonempty_epoch.load(std::memory_order_seq_cst);
+            if ((epoch_before & 1u) != 0) {
+                const bool e = q.empty();
+                const uint64_t epoch_after =
+                    nonempty_epoch.load(std::memory_order_seq_cst);
+                if (e && epoch_after == epoch_before) {
+                    violations.fetch_add(1, std::memory_order_relaxed);
                 }
-                total_size_readings.fetch_add(1, std::memory_order_relaxed);
+                checks_while_nonempty.fetch_add(1, std::memory_order_relaxed);
             }
-            std::this_thread::yield();
+            total_empty_checks.fetch_add(1, std::memory_order_relaxed);
+            if ((total_empty_checks.load(std::memory_order_relaxed) & 0x3f) == 0) {
+                std::this_thread::yield();
+            }
         }
         // 收尾：producer 完成后，size 必为 0，empty 必为 true
         size_t s = q.size();
@@ -197,6 +189,9 @@ TEST(WorkerLocalQueue, ConcurrentEmptyNeverLiesWhenNonEmpty) {
     // producer 线程：每轮先 push 2 个再 pop 1 个，循环 kProducerIterations 次。
     // 中间故意先 push 多个再一次性 pop，制造 size() > 0 的观察窗口。
     std::thread producer([&]() {
+        while (!producer_start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
         // 预分配 2 个 Task 复用（Task 因含 std::atomic<bool> 不能拷贝/移动）
         auto t1_ptr = make_test_task(0);
         auto t2_ptr = make_test_task(0);
@@ -206,14 +201,33 @@ TEST(WorkerLocalQueue, ConcurrentEmptyNeverLiesWhenNonEmpty) {
             t2_ptr->task_id = "wlq_test_" + std::to_string(i + 100000);
             if (!q.push(*t1_ptr)) break;
             if (!q.push(*t2_ptr)) break;
+
+            const uint64_t target_checks =
+                checks_while_nonempty.load(std::memory_order_relaxed) + 1;
+            nonempty_epoch.fetch_add(1, std::memory_order_seq_cst);
+            while (checks_while_nonempty.load(std::memory_order_acquire) < target_checks &&
+                   violations.load(std::memory_order_relaxed) == 0) {
+                std::this_thread::yield();
+            }
+            nonempty_epoch.fetch_add(1, std::memory_order_seq_cst);
+
             Task out;
             (void)q.pop(out);
+            (void)q.pop(out);
+            if ((i & 0x1f) == 0) {
+                std::this_thread::yield();
+            }
         }
         // 收尾：把所有任务 pop 完，让 size 归零
         Task out;
         while (q.pop(out)) {}
         producer_done.store(true, std::memory_order_release);
     });
+
+    while (!observer_ready.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    producer_start.store(true, std::memory_order_release);
 
     producer.join();
     observer.join();
@@ -223,7 +237,7 @@ TEST(WorkerLocalQueue, ConcurrentEmptyNeverLiesWhenNonEmpty) {
         << "checks_while_nonempty=" << checks_while_nonempty.load();
     // 至少要观察到一些非空窗口，否则测试本身无意义
     EXPECT_GT(checks_while_nonempty.load(), 0);
-    EXPECT_GT(total_size_readings.load(), 50);
+    EXPECT_GT(total_empty_checks.load(), 50);
 
     // 收尾：现在 size 必须 0，empty 必须 true
     EXPECT_EQ(q.size(), 0u);

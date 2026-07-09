@@ -82,12 +82,15 @@ bool RealtimeThreadExecutor::start() {
 
         // CPU 亲和性: 空 = 自适应 sentinel, 用 round-robin 跨核分布; 显式设值尊重覆盖
         if (config_.cpu_affinity.empty()) {
-            unsigned hw = std::thread::hardware_concurrency();
-            if (hw >= 2) {
-                // P-005 round-robin: 每个新 RT 线程取下一个 CPU 核号, 避免全部挤在核 0.
-                // hw == 1 或探测失败(0) 时不绑, 避免争抢唯一核心. 多 rt 线程场景用户可显式覆盖 cpu_affinity.
-                unsigned cpu = g_next_rt_cpu_hint.fetch_add(1, std::memory_order_relaxed) % hw;
-                util::set_cpu_affinity(self_handle, {static_cast<int>(cpu)});
+            auto allowed_cpus = util::get_current_thread_affinity();
+            if (allowed_cpus.size() >= 2) {
+                // P-005 round-robin: 在当前 cpuset 允许的 CPU 集合内轮询。
+                // 容器/CI runner 可能只允许非 0 CPU；按 hardware_concurrency()
+                // 生成 0..N-1 会被 pthread_setaffinity_np(EINVAL) 静默拒绝。
+                const unsigned hint =
+                    g_next_rt_cpu_hint.fetch_add(1, std::memory_order_relaxed);
+                const int cpu = allowed_cpus[hint % allowed_cpus.size()];
+                util::set_cpu_affinity(self_handle, {cpu});
             }
         } else {
             util::set_cpu_affinity(self_handle, config_.cpu_affinity);

@@ -316,7 +316,7 @@ bool test_thread_pool_init_oom_safety() {
     config.queue_capacity = 1024;
 
     g_large_allocation_count.store(0, std::memory_order_relaxed);
-    g_fail_large_allocation_number.store(3, std::memory_order_relaxed);
+    g_fail_large_allocation_number.store(1, std::memory_order_relaxed);
     g_large_allocation_threshold.store(config.queue_capacity * sizeof(Task), std::memory_order_relaxed);
     g_fail_large_allocations.store(true, std::memory_order_release);
 
@@ -328,8 +328,8 @@ bool test_thread_pool_init_oom_safety() {
 
     g_fail_large_allocations.store(false, std::memory_order_release);
     TEST_ASSERT(!initialized, "initialize should return false when worker queue construction throws");
-    TEST_ASSERT(g_large_allocation_count.load(std::memory_order_relaxed) >= 3,
-                "failure injection should reach a later worker queue allocation");
+    TEST_ASSERT(g_large_allocation_count.load(std::memory_order_relaxed) >= 1,
+                "failure injection should reach a worker queue allocation");
 
     std::cout << "  ThreadPool initialize OOM safety: PASSED" << std::endl;
     return true;

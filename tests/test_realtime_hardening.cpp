@@ -211,9 +211,9 @@ bool test_explicit_realtime_cpu_affinity_is_respected() {
 bool test_realtime_round_robin_auto_affinity() {
     std::cout << "Testing RT threads round-robin across cores (P-005)..." << std::endl;
 
-    unsigned hw = std::thread::hardware_concurrency();
-    if (hw < 2) {
-        std::cout << "  skipped (hw_concurrency < 2)" << std::endl;
+    auto allowed_cpus = executor::util::get_current_thread_affinity();
+    if (allowed_cpus.size() < 2) {
+        std::cout << "  skipped (allowed CPU affinity < 2)" << std::endl;
         return true;
     }
 
@@ -232,7 +232,9 @@ bool test_realtime_round_robin_auto_affinity() {
 
     for (int i = 0; i < kThreads; ++i) {
         executor::RealtimeThreadConfig cfg;
-        cfg.cycle_period_ns = 1'000'000;  // 1ms
+        cfg.cycle_period_ns = 20'000'000;  // avoid auto SCHED_FIFO in unprivileged CI
+        cfg.enable_memory_lock = false;    // test affinity only; mlockall is environment-dependent
+        cfg.timer_slack_ns = 50000;        // keep CI timer behavior conservative
         // lambda runs on the RT worker thread; capture this thread's affinity
         cfg.thread_name = "p005_rt_" + std::to_string(i);
         cfg.cycle_callback = [&, i]() {
@@ -266,8 +268,8 @@ bool test_realtime_round_robin_auto_affinity() {
                 std::to_string(distinct.size()));
 
     std::cout << "  round-robin auto-affinity: " << kThreads
-              << " RT threads, " << distinct.size() << " distinct cores (hw="
-              << hw << ")" << std::endl;
+              << " RT threads, " << distinct.size() << " distinct cores (allowed="
+              << allowed_cpus.size() << ")" << std::endl;
     return true;
 }
 
