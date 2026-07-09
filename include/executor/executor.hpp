@@ -661,6 +661,21 @@ auto Executor::submit(F&& f, Args&&... args)
     auto promise = std::make_shared<std::promise<return_type>>();
     auto promise_ready = std::make_shared<std::atomic_bool>(false);
     auto future = promise->get_future();
+
+    if constexpr (sizeof...(Args) == 0) {
+        if (detail::is_empty_std_function(f)) {
+            auto exception = std::make_exception_ptr(std::invalid_argument("empty task"));
+            promise_ready->store(true, std::memory_order_release);
+            promise->set_exception(exception);
+            record_submit_rejected(
+                executor_name,
+                task_id,
+                "Async executor rejected empty task submission",
+                exception);
+            return future;
+        }
+    }
+
     auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
@@ -736,6 +751,21 @@ auto Executor::submit_priority(int priority, F&& f, Args&&... args)
     auto promise = std::make_shared<std::promise<return_type>>();
     auto promise_ready = std::make_shared<std::atomic_bool>(false);
     auto future = promise->get_future();
+
+    if constexpr (sizeof...(Args) == 0) {
+        if (detail::is_empty_std_function(f)) {
+            auto exception = std::make_exception_ptr(std::invalid_argument("empty task"));
+            promise_ready->store(true, std::memory_order_release);
+            promise->set_exception(exception);
+            record_submit_rejected(
+                executor_name,
+                task_id,
+                "Async executor rejected empty priority task submission",
+                exception);
+            return future;
+        }
+    }
+
     auto bound_task = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
@@ -927,6 +957,7 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
     promises.reserve(tasks.size());
     promise_ready_flags.reserve(tasks.size());
 
+    bool has_empty_task = false;
     for (size_t i = 0; i < tasks.size(); ++i) {
         auto promise = std::make_shared<std::promise<void>>();
         auto promise_ready = std::make_shared<std::atomic_bool>(false);
@@ -936,6 +967,9 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
 
         std::string task_id = "facade_submit_batch[" + std::to_string(i) + "]";
 
+        if (detail::is_empty_std_function(tasks[i])) {
+            has_empty_task = true;
+        }
         task_wrappers.push_back([this, executor_name, task_id, promise, promise_ready, task = tasks[i]]() mutable {
             try {
                 task();
@@ -966,6 +1000,20 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
                         exception);
                 }
             });
+    }
+
+    if (has_empty_task) {
+        auto exception = std::make_exception_ptr(std::invalid_argument("empty task"));
+        for (size_t i = 0; i < promises.size(); ++i) {
+            promise_ready_flags[i]->store(true, std::memory_order_release);
+            promises[i]->set_exception(exception);
+        }
+        record_submit_rejected(
+            executor_name,
+            "facade_submit_batch",
+            "Async executor rejected batch task submission with empty task",
+            exception);
+        return futures;
     }
 
     if (!executor->try_submit_batch_tasks(
