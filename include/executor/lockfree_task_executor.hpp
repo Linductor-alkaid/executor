@@ -33,7 +33,8 @@ public:
     /**
      * @brief 构造函数
      * @param queue_capacity 队列容量（必须是2的幂，如果不是会自动调整）
-     * @param backoff_multiplier CAS 退避倍数（默认2，适合中等竞争场景）
+     * @param backoff_multiplier CAS 退避倍数（默认2，适合中等竞争场景）；必须大于0，
+     *                           超过 LockFreeQueue::kMaxBackoffMultiplier 时会被钳制
      * @param enable_stats 是否启用性能统计（默认false）
      */
     explicit LockFreeTaskExecutor(size_t queue_capacity = 1024, size_t backoff_multiplier = 2, bool enable_stats = false);

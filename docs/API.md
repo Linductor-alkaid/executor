@@ -439,6 +439,14 @@ public:
 | 批量统计 | 每次成功的 `push_tasks_batch` 调用会令 `get_queue_stats().batch_pushes` 递增 1，`total_pushes` 递增 `count`（P-260623-004：与队列 batch 统计语义一致） |
 | 空任务统计 | 空任务属于提交拒绝，不进入队列，不增加 `processed_count()` 或 `exception_count()`；可通过 `rejected_empty_count()` 或 `get_queue_stats().rejected_empty_count` 观察 |
 
+#### Backoff multiplier
+
+`LockFreeTaskExecutor` 将 `backoff_multiplier` 传递给底层 `LockFreeQueue`，用于放大 CAS 失败后的 pause 退避次数。
+
+- `backoff_multiplier` 必须 `> 0`；传入 `0` 会在构造时抛出 `std::invalid_argument`。
+- 最大值为 `LockFreeQueue::kMaxBackoffMultiplier`，当前为 `1u << 20`（`1048576`）。
+- 大于最大值的输入会被钳制到 `LockFreeQueue::kMaxBackoffMultiplier`，避免内部 `backoff * backoff_multiplier` 算术溢出并保持退避窗口有界。
+
 #### 停止后的提交语义
 
 `LockFreeTaskExecutor` 区分“从未启动”和“已停止”状态：从未调用 `start()` 前仍允许 `push_task()` / `push_tasks_batch()` 预填充队列；一旦 `stop()` 开始，新的提交会被拒绝并返回 `false`。`stop()` 会等待已经进入提交路径的生产者完成，再让消费者线程处理所有已接受任务并退出，因此 `stop()` 返回后不会有静默接受但无人消费的任务残留在队列中。
