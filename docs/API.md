@@ -6,13 +6,21 @@
 
 ## 1. 包含头文件
 
-对外仅需包含 Facade 头文件：
+使用 Executor facade 时包含：
 
 ```cpp
 #include <executor/executor.hpp>
 ```
 
 该头文件已包含 `config.hpp`、`types.hpp`、`interfaces.hpp`、`executor_manager.hpp`。使用 GPU API 时需启用 `EXECUTOR_ENABLE_GPU` 并包含 GPU 相关头文件（见 [BUILD.md](BUILD.md) 构建选项）。
+
+通信与并发辅助 facade 使用独立聚合头：
+
+```cpp
+#include <executor/comm.hpp>
+```
+
+当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型和后续组件的前置声明。`MpscChannel`、`LatestMailbox`、`PhaseGate`、`DoubleBuffer`、`RealtimeChannel` 等行为组件将在通信 facade 后续阶段逐步开放。
 
 ---
 
@@ -878,7 +886,35 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 - **WaitResult**：`completed`、`timed_out`、`timeout`、`status`、`message`。由 `wait_for_completion_ex(timeout)` 返回；超时会记录 `FailureKind::WaitTimeout` 并保留当时的 pending 状态快照。
 - **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
-### 7.4 TaskPriority
+### 7.4 通信 facade 通用类型
+
+通信 facade 的阶段 7.0 入口在 `include/executor/comm.hpp`：
+
+```cpp
+#include <executor/comm.hpp>
+
+executor::comm::CommResult result =
+    executor::comm::CommResult::failure(
+        executor::comm::CommErrorCode::Timeout,
+        "receive timed out");
+
+if (!result) {
+    const char* code =
+        executor::comm::comm_error_code_to_string(result.error_code);
+}
+```
+
+当前已公开的通用类型：
+
+- **CommErrorCode**：`Ok`、`Closed`、`Full`、`Empty`、`Timeout`、`Stale`、`MissedPhase`、`InvalidArgument`、`NotReady`、`Unknown`。
+- **CommResult**：`ok`、`error_code`、`message`，支持 `operator bool()`、`success()`、`failure()`。
+- **DropPolicy**：`RejectNewest`（默认策略）、`DropOldest`、`KeepLatest`。
+- **CommStats**：发送/接收/drop/覆盖/超时/missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
+- **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。
+
+`executor::comm` 目前还只开放类型骨架和 `MpscChannel`、`SpscChannel`、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot`、`DoubleBuffer` 的前置声明；这些组件的可用行为会在通信 facade 后续阶段补齐。
+
+### 7.5 TaskPriority
 
 ```cpp
 enum class TaskPriority { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 };

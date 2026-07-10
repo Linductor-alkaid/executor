@@ -13,7 +13,7 @@
 - [x] `Executor` facade 已有 failure event、recent failures、wait result、周期任务状态等诊断入口。
 - [x] `TaskDependencyManager` 已有依赖图、ready 检查、完成标记和 cycle 检测。
 - [x] `tests/harness/test_comm_facade_usage.cpp` 已有 disabled 用例，占位覆盖 channel、mailbox、phase gate、double buffer、realtime channel。
-- [ ] 还没有公开的 `executor::comm` 命名空间和聚合头。
+- [x] 已新增公开的 `executor::comm` 命名空间和聚合头。
 - [ ] 用户仍需要自行组合锁、原子变量、条件变量或底层队列来表达跨线程通信。
 
 ---
@@ -46,8 +46,8 @@
 
 ### 任务
 
-- [ ] 新增 `include/executor/comm.hpp` 聚合头。
-- [ ] 新增 `include/executor/comm/types.hpp`：
+- [x] 新增 `include/executor/comm.hpp` 聚合头。
+- [x] 新增 `include/executor/comm/types.hpp`：
   - `CommErrorCode`
   - `CommResult`
   - `DropPolicy`
@@ -55,13 +55,13 @@
   - `CommEventKind`
   - `CommEvent`
   - `CommEventCallback`
-- [ ] 新增空实现/最小声明文件，保证后续组件有稳定命名空间。
-- [ ] 在 `docs/API.md` 增加阶段 7 API 索引和最小使用提示。
+- [x] 新增空实现/最小声明文件，保证后续组件有稳定命名空间。
+- [x] 在 `docs/API.md` 增加阶段 7 API 索引和最小使用提示。
 
 ### 验收
 
-- [ ] `#include <executor/comm.hpp>` 可编译。
-- [ ] `executor::comm` 通用类型有单元测试覆盖默认值、bool 转换和错误码字符串化。
+- [x] `#include <executor/comm.hpp>` 可编译。
+- [x] `executor::comm` 通用类型有单元测试覆盖默认值、bool 转换和错误码字符串化。
 
 ---
 
