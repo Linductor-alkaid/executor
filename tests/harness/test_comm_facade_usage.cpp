@@ -70,8 +70,29 @@ TEST(FacadeCommUsage, ConfigThreadRealtimeControlThread) {
     EXPECT_EQ(config_box.stats().overwritten_count, 1U);
 }
 
-TEST(FacadeCommUsage, DISABLED_InitThreadWorkerThread) {
-    GTEST_SKIP() << "TODO: enable when executor::comm::PhaseGate is introduced.";
+TEST(FacadeCommUsage, InitThreadWorkerThread) {
+    executor::comm::PhaseGate startup_gate("startup");
+    std::atomic<bool> worker_started{false};
+    std::atomic<bool> worker_completed{false};
+
+    std::thread worker([&] {
+        worker_started.store(true, std::memory_order_release);
+        const auto result = startup_gate.wait_for(1, std::chrono::milliseconds(500));
+        ASSERT_TRUE(result);
+        worker_completed.store(true, std::memory_order_release);
+    });
+
+    while (!worker_started.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+
+    EXPECT_FALSE(worker_completed.load(std::memory_order_acquire));
+    EXPECT_TRUE(startup_gate.advance());
+
+    worker.join();
+    EXPECT_TRUE(worker_completed.load(std::memory_order_acquire));
+    EXPECT_EQ(startup_gate.current_phase(), 1U);
+    EXPECT_EQ(startup_gate.stats().received_count, 1U);
 }
 
 TEST(FacadeCommUsage, DISABLED_StateWriterMonitorReader) {

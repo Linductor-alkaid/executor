@@ -146,7 +146,7 @@
 
 ### 任务
 
-- [ ] 实现 `PhaseGate`：
+- [x] 实现 `PhaseGate`：
   - `current_phase()`
   - `advance()`
   - `advance_to(phase)`
@@ -154,27 +154,27 @@
   - `wait_for(phase, timeout)`
   - `close()`
   - `stats()`
-- [ ] 实现 `Sequencer`：
+- [x] 实现 `Sequencer`：
   - `next_ticket()`
   - `publish(ticket)`
   - `is_published(ticket)`
   - `wait_until_published(ticket, timeout)`
-- [ ] 定义 phase 倒退、重复 advance、close 后 wait 的返回语义。
-- [ ] missed phase 计数进入 `CommStats::missed_phase_count`。
+- [x] 定义 phase 倒退、重复 advance、close 后 wait 的返回语义。
+- [x] missed phase 计数进入 `CommStats::missed_phase_count`。
 
 ### 测试
 
-- [ ] 启用/替换 `FacadeCommUsage.InitThreadWorkerThread`。
-- [ ] wait-before-advance 正常唤醒。
-- [ ] wait-after-advance 立即成功。
-- [ ] close 唤醒所有 waiter。
-- [ ] missed phase 场景返回 `MissedPhase` 并计数。
-- [ ] 并发 waiter 压力测试。
+- [x] 启用/替换 `FacadeCommUsage.InitThreadWorkerThread`。
+- [x] wait-before-advance 正常唤醒。
+- [x] wait-after-advance 立即成功。
+- [x] close 唤醒所有 waiter。
+- [x] missed phase 场景返回 `MissedPhase` 并计数。
+- [x] 并发 waiter 压力测试。
 
 ### 验收
 
-- [ ] 用户无需手写 condition variable 即可表达启动、采集、规划、通信等阶段顺序。
-- [ ] 时序错过或等待超时可观察。
+- [x] 用户无需手写 condition variable 即可表达启动、采集、规划、通信等阶段顺序。
+- [x] 时序错过或等待超时可观察。
 
 ---
 

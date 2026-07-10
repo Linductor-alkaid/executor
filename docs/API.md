@@ -914,7 +914,7 @@ if (!result) {
 - **CommStats**：发送/接收/drop/覆盖/超时、handler 异常、missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
 - **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。
 
-Typed Channel、`LatestMailbox` 和 `RealtimeChannel` 已开放；`PhaseGate`、`Sequencer`、`Snapshot`、`DoubleBuffer` 仍是后续阶段组件。
+Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate` 和 `Sequencer` 已开放；`Snapshot`、`DoubleBuffer` 仍是后续阶段组件。
 
 ### 7.5 Typed Channel
 
@@ -1000,7 +1000,61 @@ commands.drain_for_cycle([&](ControlCommand& command) {
 
 handler 抛异常时，`drain_for_cycle()` 停止本轮 drain，增加 `handler_exception_count`，触发 `HandlerException` 诊断事件，并将异常继续外抛；是否桥接到 `Executor` failure event 由调用方或后续集成层决定。
 
-### 7.7 TaskPriority
+### 7.7 PhaseGate / Sequencer
+
+`PhaseGate` 适合表达“初始化完成后 worker 才继续”“采集阶段到达后规划阶段再开始”等阶段顺序。它封装 `condition_variable` predicate 和唤醒逻辑，phase 单调递增，不允许倒退或重复 advance 到同一 phase。
+
+```cpp
+executor::comm::PhaseGate startup("startup");
+
+std::thread worker([&] {
+    auto ready = startup.wait_for(1, std::chrono::seconds(1));
+    if (ready) {
+        run_worker();
+    }
+});
+
+startup.advance(); // phase: 0 -> 1
+worker.join();
+```
+
+主要 API：
+
+- `current_phase()`：读取当前 phase。
+- `advance()` / `advance_to(phase)`：推进 phase；倒退或重复 `advance_to()` 返回 `CommErrorCode::MissedPhase`。
+- `has_reached(phase)`：当前 phase 是否已经达到或超过目标。
+- `wait_for(phase, timeout)`：等待达到或超过目标 phase；超时返回 `Timeout`，关闭返回 `Closed`。
+- `wait_for_exact(phase, timeout)`：需要精确观察某个 phase 时使用；如果当前 phase 已超过目标，返回 `MissedPhase`。
+- `close()` / `is_closed()`：关闭并唤醒所有 waiter。
+- `stats()`：观察 advance、wait 成功、timeout、missed phase 和 waiter 数。
+
+`Sequencer` 适合需要精确顺序的 ticket 发布场景。`next_ticket()` 分配递增 ticket，`publish(ticket)` 发布当前进度，`wait_until_published(ticket, timeout)` 只在该 ticket 被精确发布时成功；如果已经发布到更大的 ticket，则返回 `MissedPhase`。
+
+```cpp
+executor::comm::Sequencer sequencer("pipeline");
+
+uint64_t step = sequencer.next_ticket();
+
+std::thread waiter([&] {
+    auto result = sequencer.wait_until_published(step, std::chrono::seconds(1));
+    if (result) {
+        consume_step(step);
+    }
+});
+
+sequencer.publish(step);
+waiter.join();
+```
+
+主要 API：
+
+- `next_ticket()`：返回新的递增 ticket。
+- `publish(ticket)`：发布 ticket；重复、倒退或无效 ticket 返回 `MissedPhase`。
+- `is_published(ticket)`：当前发布进度是否已经达到 ticket。
+- `wait_until_published(ticket, timeout)`：等待精确 ticket；超时、关闭和错过 ticket 均可通过 `CommResult` 区分。
+- `close()` / `is_closed()` / `published_ticket()` / `stats()` / `set_event_callback(...)`：生命周期、观察和诊断入口。
+
+### 7.8 TaskPriority
 
 ```cpp
 enum class TaskPriority { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 };
