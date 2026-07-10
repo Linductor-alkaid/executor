@@ -520,9 +520,39 @@ void ThreadPool::wait_for_completion() {
 
 bool ThreadPool::try_wait_for_completion(std::chrono::milliseconds timeout) {
     std::unique_lock<std::mutex> lock(completion_mutex_);
-    return completion_cv_.wait_for(lock, timeout, [this]() {
-        return is_completion_ready();
-    });
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+
+    while (!is_completion_ready()) {
+        lock.unlock();
+
+        // shutdown(true) stops accepting new tasks before waiting, but accepted
+        // tasks can still be in the global scheduler if a previous dispatch
+        // raced with a full/contended worker queue. Keep dispatching while
+        // waiting so completion cannot depend on a worker-side dispatch path
+        // that has already observed stop_.
+        size_t dispatched = dispatch_pending_tasks(64);
+        if (dispatched > 0) {
+            condition_.notify_all();
+        }
+
+        lock.lock();
+
+        if (is_completion_ready()) {
+            return true;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            return false;
+        }
+
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        const auto wait_slice = std::min(remaining, std::chrono::milliseconds(10));
+        completion_cv_.wait_for(lock, wait_slice);
+    }
+
+    return true;
 }
 
 bool ThreadPool::is_completion_ready() const {
