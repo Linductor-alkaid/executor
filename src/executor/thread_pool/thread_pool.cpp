@@ -92,10 +92,7 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
 void ThreadPool::rollback_initialization_failure() {
     initialized_.store(false);
     stop_.store(true);
-    {
-        std::lock_guard<std::mutex> lock(resize_monitor_mutex_);
-        resize_monitor_stop_.store(true, std::memory_order_release);
-    }
+    resize_monitor_stop_.store(true, std::memory_order_release);
     resize_monitor_cv_.notify_all();
     condition_.notify_all();
 
@@ -442,11 +439,10 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
         wait_for_completion();
     }
 
-    // 停止监控线程
-    {
-        std::lock_guard<std::mutex> lock(resize_monitor_mutex_);
-        resize_monitor_stop_.store(true, std::memory_order_release);
-    }
+    // 停止监控线程。停止位是 atomic，不需要拿监控条件变量的 mutex；
+    // shutdown 路径不碰这把等待锁，可以避免 TSAN/libstdc++ 在并发停止时
+    // 把条件变量内部锁序报告成 double-lock。
+    resize_monitor_stop_.store(true, std::memory_order_release);
     resize_monitor_cv_.notify_all();
     if (resize_monitor_thread_.joinable()) {
         resize_monitor_thread_.join();
