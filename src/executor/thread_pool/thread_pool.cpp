@@ -417,58 +417,71 @@ ThreadPoolStatus ThreadPool::get_status() const {
 }
 
 void ThreadPool::shutdown(bool wait_for_tasks) {
-    // P-008 修复: 用 std::call_once 保证 shutdown 逻辑只执行一次,
-    // 避免两个线程同时通过 stop_.load() 检查后 double-join resize_monitor_thread_
-    // 或 workers_ 中已 joinable 的线程(触发 std::system_error, UB)。
-    // call_once 的好处是: 持锁窗口极短(只覆盖 stop_ 标志翻转),
-    // join() 在锁外执行,不会与工作线程持 mutex_ 死锁。
-    std::call_once(shutdown_once_flag_, [this, wait_for_tasks]() {
-        // 如果需要等待任务完成，先等待（此时 stop_ 仍为 false，工作线程继续运行）
-        if (wait_for_tasks) {
-            wait_for_completion();
+    {
+        std::unique_lock<std::mutex> shutdown_lock(shutdown_mutex_);
+        if (shutdown_started_) {
+            shutdown_cv_.wait(shutdown_lock, [this]() {
+                return shutdown_complete_;
+            });
+            return;
         }
+        shutdown_started_ = true;
+    }
 
-        // 设置停止标志
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            stop_.store(true);
-        }
+    // 先停止接收新任务，再按需等待已被接受的任务完成。
+    // 如果先 wait_for_completion()，并发 submit 可以持续推进 total_tasks_，
+    // 让等待目标移动，甚至在 submit-vs-shutdown 压测中表现为长时间等待。
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stop_.store(true);
+    }
+    condition_.notify_all();
+    notify_completion_waiters();
 
-        // 停止监控线程
-        {
-            std::lock_guard<std::mutex> lock(resize_monitor_mutex_);
-            resize_monitor_stop_.store(true, std::memory_order_release);
-        }
-        resize_monitor_cv_.notify_all();
-        if (resize_monitor_thread_.joinable()) {
-            resize_monitor_thread_.join();
-        }
+    if (wait_for_tasks) {
+        wait_for_completion();
+    }
 
-        // 唤醒所有等待的线程
-        condition_.notify_all();
+    // 停止监控线程
+    {
+        std::lock_guard<std::mutex> lock(resize_monitor_mutex_);
+        resize_monitor_stop_.store(true, std::memory_order_release);
+    }
+    resize_monitor_cv_.notify_all();
+    if (resize_monitor_thread_.joinable()) {
+        resize_monitor_thread_.join();
+    }
 
-        // 等待所有工作线程退出
-        for (auto& worker : workers_) {
-            if (worker.joinable()) {
-                worker.join();
-            }
-        }
+    // 唤醒所有等待的线程
+    condition_.notify_all();
 
-        workers_.clear();
-        worker_ids_.clear();
-        {
-            std::lock_guard<std::mutex> dispatcher_lock(dispatcher_mutex_);
-            dispatcher_.reset();
+    // 等待所有工作线程退出
+    for (auto& worker : workers_) {
+        if (worker.joinable()) {
+            worker.join();
         }
-        // P-260617-002: shutdown 时所有 worker 已 join 完毕，无并发 reader，
-        // 仍持 unique_lock 清空 local_queues_ 以与 worker 路径的 shared_lock
-        // 保持配对语义（reader 一律持 shared_lock，写者一律持 unique_lock）。
-        {
-            std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-            auto empty_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
-            std::atomic_store_explicit(&local_queues_, empty_queues, std::memory_order_release);
-        }
-    });
+    }
+
+    workers_.clear();
+    worker_ids_.clear();
+    {
+        std::lock_guard<std::mutex> dispatcher_lock(dispatcher_mutex_);
+        dispatcher_.reset();
+    }
+    // P-260617-002: shutdown 时所有 worker 已 join 完毕，无并发 reader，
+    // 仍持 unique_lock 清空 local_queues_ 以与 worker 路径的 shared_lock
+    // 保持配对语义（reader 一律持 shared_lock，写者一律持 unique_lock）。
+    {
+        std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+        auto empty_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+        std::atomic_store_explicit(&local_queues_, empty_queues, std::memory_order_release);
+    }
+
+    {
+        std::lock_guard<std::mutex> shutdown_lock(shutdown_mutex_);
+        shutdown_complete_ = true;
+    }
+    shutdown_cv_.notify_all();
 }
 
 bool ThreadPool::resize_local_queues(size_t new_num_queues) {

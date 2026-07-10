@@ -447,10 +447,14 @@ private:
     // 互斥锁：保护共享状态
     mutable std::mutex mutex_;
 
-    // P-008: shutdown() 并发调用的幂等性保护
-    // std::call_once 用 flag,保证 shutdown 逻辑全生命周期只执行一次,
-    // 避免两个线程同时通过 stop_.load() 早返回检查后 double-join 触发 UB。
-    mutable std::once_flag shutdown_once_flag_;
+    // P-008: shutdown() 并发调用的幂等性保护。
+    // 第一个调用者执行实际 shutdown; 后续并发调用者等待 shutdown 完成后返回,
+    // 避免 double-join。显式状态机也避开 std::call_once 在 TSAN 下的内部
+    // mutex double-lock 报告。
+    std::mutex shutdown_mutex_;
+    std::condition_variable shutdown_cv_;
+    bool shutdown_started_{false};
+    bool shutdown_complete_{false};
 
     // 异常处理器
     util::ExceptionHandler exception_handler_;
