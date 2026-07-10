@@ -247,7 +247,7 @@
 
 ### 任务
 
-- [ ] 每个组件补齐 `stats()` 字段：
+- [x] 每个组件补齐 `stats()` 字段：
   - drop
   - latency
   - stale
@@ -255,22 +255,23 @@
   - producer lag
   - consumer lag
   - peak depth
-- [ ] 增加 `set_event_callback()`，用于低频诊断事件。
-- [ ] 评估 `Executor` 级聚合：
+- [x] 增加 `set_event_callback()`，用于低频诊断事件。
+- [x] 评估 `Executor` 级聚合：
   - `set_comm_event_callback(...)`
   - `get_comm_status()`
-- [ ] 文档明确：通信事件默认不计入任务失败计数。
-- [ ] 增加 README / README_zh / docs/API.md 最小示例。
+- [x] 第一版暂不接入 Executor 聚合；通信事件保持组件本地诊断，调用方可自行桥接。
+- [x] 文档明确：通信事件默认不计入任务失败计数。
+- [x] 增加 README / README_zh / docs/API.md 最小示例。
 
 ### 测试
 
-- [ ] drop/overwrite/stale/missed phase/timeout 各有明确计数测试。
-- [ ] callback 抛异常不会破坏通信组件状态。
-- [ ] 高频路径未注册 callback 时不产生额外日志。
+- [x] drop/overwrite/stale/missed phase/timeout 各有明确计数测试。
+- [x] callback 抛异常不会破坏通信组件状态。
+- [x] 高频路径未注册 callback 时不产生额外日志。
 
 ### 验收
 
-- [ ] 用户能回答“丢了多少、延迟多大、是否读旧、是否错过 phase、生产/消费谁落后”。
+- [x] 用户能回答“丢了多少、延迟多大、是否读旧、是否错过 phase、生产/消费谁落后”。
 
 ---
 

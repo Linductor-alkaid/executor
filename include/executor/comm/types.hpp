@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -185,5 +186,30 @@ struct CommEvent {
 };
 
 using CommEventCallback = std::function<void(const CommEvent&)>;
+
+inline void emit_comm_event_noexcept(const CommEventCallback& callback,
+                                     const std::optional<CommEvent>& event) noexcept {
+    if (!callback || !event) {
+        return;
+    }
+
+    try {
+        callback(*event);
+    } catch (...) {
+        // Communication diagnostics must not change the data path outcome.
+    }
+}
+
+inline void update_latency_stats(CommStats& stats,
+                                 std::chrono::nanoseconds& total_latency,
+                                 std::chrono::nanoseconds latency) noexcept {
+    if (latency > stats.max_latency) {
+        stats.max_latency = latency;
+    }
+    total_latency += latency;
+    if (stats.received_count > 0) {
+        stats.avg_latency = total_latency / static_cast<int64_t>(stats.received_count);
+    }
+}
 
 } // namespace executor::comm

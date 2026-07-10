@@ -82,9 +82,7 @@ public:
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         return loaded;
     }
 
@@ -132,6 +130,11 @@ private:
     void record_load_locked() const {
         ++stats_.received_count;
         stats_.consumer_lag = sequence_;
+        update_latency_stats(
+            stats_,
+            total_latency_,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - timestamps_[active_index_]));
     }
 
     void record_stale_read_locked(std::optional<CommEvent>& event) const {
@@ -159,6 +162,7 @@ private:
     size_t active_index_ = 0;
     uint64_t sequence_ = 0;
     mutable CommStats stats_;
+    mutable std::chrono::nanoseconds total_latency_{0};
     CommEventCallback event_callback_;
 };
 

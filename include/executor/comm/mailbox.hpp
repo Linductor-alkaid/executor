@@ -4,6 +4,7 @@
 #include <executor/comm/types.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <deque>
 #include <exception>
@@ -38,6 +39,11 @@ public:
         if (enable_stats_) {
             ++stats_.received_count;
             stats_.consumer_lag = sequence_;
+            update_latency_stats(
+                stats_,
+                total_latency_,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - timestamp_));
         }
         return true;
     }
@@ -60,14 +66,17 @@ public:
                 if (enable_stats_) {
                     ++stats_.received_count;
                     stats_.consumer_lag = sequence_ - last_seen_sequence;
+                    update_latency_stats(
+                        stats_,
+                        total_latency_,
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::steady_clock::now() - timestamp_));
                 }
                 loaded = true;
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         return loaded;
     }
 
@@ -106,6 +115,7 @@ private:
                 record_overwrite_locked(event);
             }
             value_.emplace(std::forward<U>(value));
+            timestamp_ = std::chrono::steady_clock::now();
             ++sequence_;
             if (enable_stats_) {
                 ++stats_.sent_count;
@@ -116,9 +126,7 @@ private:
             callback = event_callback_;
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
     }
 
     void record_overwrite_locked(std::optional<CommEvent>& event) {
@@ -151,9 +159,11 @@ private:
     std::string name_;
     mutable std::mutex mutex_;
     std::optional<T> value_;
+    std::chrono::steady_clock::time_point timestamp_{};
     uint64_t sequence_ = 0;
     bool enable_stats_ = true;
     mutable CommStats stats_;
+    mutable std::chrono::nanoseconds total_latency_{0};
     CommEventCallback event_callback_;
 };
 
@@ -185,9 +195,10 @@ public:
                     break;
                 }
 
-                item.emplace(std::move(queue_.front()));
+                item.emplace(std::move(queue_.front().value));
+                const auto enqueued_at = queue_.front().enqueued_at;
                 queue_.pop_front();
-                record_receive_locked();
+                record_receive_locked(enqueued_at);
             }
 
             try {
@@ -270,9 +281,7 @@ private:
             callback = event_callback_;
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         return sent;
     }
 
@@ -305,7 +314,7 @@ private:
             }
         }
 
-        queue_.push_back(std::forward<U>(value));
+        queue_.push_back(QueuedItem{std::forward<U>(value), std::chrono::steady_clock::now()});
         record_send_locked();
         return true;
     }
@@ -321,12 +330,17 @@ private:
         }
     }
 
-    void record_receive_locked() {
+    void record_receive_locked(std::chrono::steady_clock::time_point enqueued_at) {
         if (!options_.enable_stats) {
             return;
         }
         ++stats_.received_count;
         stats_.current_depth = queue_.size();
+        update_latency_stats(
+            stats_,
+            total_latency_,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - enqueued_at));
     }
 
     void record_drop_locked(std::optional<CommEvent>& event) {
@@ -367,9 +381,7 @@ private:
             callback = event_callback_;
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
     }
 
     std::optional<CommEvent> make_event_locked(CommEventKind kind, std::string message) const {
@@ -386,10 +398,15 @@ private:
     }
 
     RealtimeChannelOptions options_;
+    struct QueuedItem {
+        T value;
+        std::chrono::steady_clock::time_point enqueued_at;
+    };
     mutable std::mutex mutex_;
-    std::deque<T> queue_;
+    std::deque<QueuedItem> queue_;
     bool closed_ = false;
     CommStats stats_;
+    std::chrono::nanoseconds total_latency_{0};
     CommEventCallback event_callback_;
 };
 

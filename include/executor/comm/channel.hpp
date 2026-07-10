@@ -73,9 +73,7 @@ public:
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         if (notify_not_empty) {
             not_empty_cv_.notify_one();
         }
@@ -88,9 +86,10 @@ public:
             return false;
         }
 
-        out = std::move(queue_.front());
+        out = std::move(queue_.front().value);
+        const auto enqueued_at = queue_.front().enqueued_at;
         queue_.pop_front();
-        record_receive_locked();
+        record_receive_locked(enqueued_at);
         lock.unlock();
         not_full_cv_.notify_one();
         return true;
@@ -122,18 +121,17 @@ public:
             } else if (queue_.empty()) {
                 return CommResult::failure(CommErrorCode::Closed, "channel is closed");
             } else {
-                out = std::move(queue_.front());
+                out = std::move(queue_.front().value);
+                const auto enqueued_at = queue_.front().enqueued_at;
                 queue_.pop_front();
-                record_receive_locked();
+                record_receive_locked(enqueued_at);
                 lock.unlock();
                 not_full_cv_.notify_one();
                 return CommResult::success();
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         return result;
     }
 
@@ -205,9 +203,7 @@ private:
             callback = event_callback_;
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         if (sent) {
             not_empty_cv_.notify_one();
         }
@@ -234,7 +230,7 @@ private:
             }
         }
 
-        queue_.push_back(std::forward<U>(value));
+        queue_.push_back(QueuedItem{std::forward<U>(value), std::chrono::steady_clock::now()});
         record_send_locked();
         return true;
     }
@@ -250,12 +246,17 @@ private:
         }
     }
 
-    void record_receive_locked() {
+    void record_receive_locked(std::chrono::steady_clock::time_point enqueued_at) {
         if (!options_.enable_stats) {
             return;
         }
         ++stats_.received_count;
         stats_.current_depth = queue_.size();
+        update_latency_stats(
+            stats_,
+            total_latency_,
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - enqueued_at));
     }
 
     void record_drop_locked(std::optional<CommEvent>& event) {
@@ -302,12 +303,17 @@ private:
     }
 
     ChannelOptions options_;
+    struct QueuedItem {
+        T value;
+        std::chrono::steady_clock::time_point enqueued_at;
+    };
     mutable std::mutex mutex_;
     std::condition_variable not_empty_cv_;
     std::condition_variable not_full_cv_;
-    std::deque<T> queue_;
+    std::deque<QueuedItem> queue_;
     bool closed_ = false;
     CommStats stats_;
+    std::chrono::nanoseconds total_latency_{0};
     CommEventCallback event_callback_;
 };
 

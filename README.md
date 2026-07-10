@@ -49,6 +49,9 @@
 - **Failure and Lifecycle Observability**
   `Executor::set_failure_callback()` lets facade users subscribe to task exceptions, rejected submissions, real-time drops, task timeouts, GPU failures, and wait timeouts. Failures are also retained in `get_failure_status()` / `get_recent_failures()` when no callback is installed. `wait_for_completion_ex()` returns `WaitResult` with a `CompletionStatus` snapshot so timeout callers can still see active, queued, and pending task counts.
 
+- **Communication Facade Observability**
+  `executor::comm` components expose local `CommStats` counters for drops, overwrites, stale reads, missed phases, timeouts, depth, lag, and latency. Optional `set_event_callback()` hooks are isolated from the data path: callback exceptions are swallowed and communication events are not counted as `ExecutorFailureStatus` task failures by default.
+
 - **Optional GPU (CUDA/OpenCL)**
   GPU executor interface with CUDA/OpenCL implementations: kernel submission, device memory and stream management, multi-device, memory pool, monitoring. Runtime dynamic loading with safe graceful degradation when no GPU is available. Device query API automatically recommends the best backend.
 

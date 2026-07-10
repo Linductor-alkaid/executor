@@ -49,6 +49,9 @@
 - **失败与生命周期可观察**
   `Executor::set_failure_callback()` 让 facade 用户订阅任务异常、提交拒绝、实时丢任务、任务超时、GPU 失败和等待超时；未设置回调时，失败仍保留在 `get_failure_status()` / `get_recent_failures()` 中。`wait_for_completion_ex()` 返回带 `CompletionStatus` 快照的 `WaitResult`，超时调用方仍能看到 active、queued、pending 任务数。
 
+- **通信 Facade 可观察性**
+  `executor::comm` 组件提供本地 `CommStats`，可观察 drop、overwrite、stale read、missed phase、timeout、深度、lag 和 latency。可选 `set_event_callback()` 用于低频诊断；callback 抛异常会被隔离，通信事件默认不计入 `ExecutorFailureStatus` 的任务失败。
+
 - **可选 GPU（CUDA/OpenCL）**
   GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端
 

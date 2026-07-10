@@ -947,10 +947,12 @@ if (!result) {
 - **ChannelOptions**：`capacity`、`drop_policy`、`enable_stats`、`name`，用于配置 typed channel。
 - **RealtimeChannelOptions**：`capacity`、`max_items_per_cycle`、`drop_policy`、`enable_stats`、`name`，用于配置实时周期内有限 drain 的消息通道。
 - **DropPolicy**：`RejectNewest`（默认策略）、`DropOldest`、`KeepLatest`。
-- **CommStats**：发送/接收/drop/覆盖/超时、handler 异常、missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
-- **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。
+- **CommStats**：发送/接收/drop/覆盖/stale/关闭后发送/超时、handler 异常、missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
+- **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。各组件通过 `set_event_callback(...)` 注册 callback；callback 抛出的异常会被隔离，不改变通信 API 的返回值或组件状态。
 
 Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot` 和 `DoubleBuffer` 已开放。
+
+通信事件默认只属于 `executor::comm` 组件本地诊断，不计入 `ExecutorFailureStatus`，也不会触发 `Executor::set_failure_callback(...)`。阶段 7.6 暂不增加 Executor 级聚合入口；调用方如需统一上报，可在各组件 callback 中桥接到自己的监控系统。
 
 ### 7.5 Typed Channel
 

@@ -52,9 +52,7 @@ public:
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         if (advanced) {
             cv_.notify_all();
         }
@@ -85,9 +83,7 @@ public:
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         if (advanced) {
             cv_.notify_all();
         }
@@ -148,6 +144,7 @@ private:
                                std::chrono::duration<Rep, Period> timeout,
                                bool exact) {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto wait_started_at = std::chrono::steady_clock::now();
         std::optional<CommEvent> event;
         CommEventCallback callback;
         CommResult result;
@@ -160,7 +157,7 @@ private:
                 result = CommResult::failure(CommErrorCode::MissedPhase,
                                              "requested phase was already missed");
             } else if (current_phase_ >= phase) {
-                record_receive_locked();
+                record_receive_locked(wait_started_at);
                 result = CommResult::success();
             } else if (closed_) {
                 result = CommResult::failure(CommErrorCode::Closed,
@@ -195,22 +192,25 @@ private:
                         result = CommResult::failure(CommErrorCode::MissedPhase,
                                                      "requested phase was skipped");
                     } else {
-                        record_receive_locked();
+                        record_receive_locked(wait_started_at);
                         result = CommResult::success();
                     }
                 }
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         return result;
     }
 
-    void record_receive_locked() {
+    void record_receive_locked(std::chrono::steady_clock::time_point wait_started_at) {
         if (enable_stats_) {
             ++stats_.received_count;
+            update_latency_stats(
+                stats_,
+                total_latency_,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - wait_started_at));
         }
     }
 
@@ -257,6 +257,7 @@ private:
     bool enable_stats_ = true;
     uint64_t waiter_count_ = 0;
     CommStats stats_;
+    std::chrono::nanoseconds total_latency_{0};
     CommEventCallback event_callback_;
 };
 
@@ -302,9 +303,7 @@ public:
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         if (published) {
             cv_.notify_all();
         }
@@ -325,6 +324,7 @@ public:
         }
 
         const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto wait_started_at = std::chrono::steady_clock::now();
         std::optional<CommEvent> event;
         CommEventCallback callback;
         CommResult result;
@@ -332,7 +332,7 @@ public:
         {
             std::unique_lock<std::mutex> lock(mutex_);
             if (published_ticket_ == ticket) {
-                record_receive_locked();
+                record_receive_locked(wait_started_at);
                 result = CommResult::success();
             } else if (published_ticket_ > ticket) {
                 record_missed_phase_locked(event);
@@ -360,7 +360,7 @@ public:
                         result = CommResult::failure(CommErrorCode::Closed,
                                                      "sequencer is closed");
                     } else if (published_ticket_ == ticket) {
-                        record_receive_locked();
+                        record_receive_locked(wait_started_at);
                         result = CommResult::success();
                     } else {
                         record_missed_phase_locked(event);
@@ -372,9 +372,7 @@ public:
             }
         }
 
-        if (event && callback) {
-            callback(*event);
-        }
+        emit_comm_event_noexcept(callback, event);
         return result;
     }
 
@@ -415,9 +413,14 @@ public:
     }
 
 private:
-    void record_receive_locked() {
+    void record_receive_locked(std::chrono::steady_clock::time_point wait_started_at) {
         if (enable_stats_) {
             ++stats_.received_count;
+            update_latency_stats(
+                stats_,
+                total_latency_,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - wait_started_at));
         }
     }
 
@@ -465,6 +468,7 @@ private:
     bool enable_stats_ = true;
     uint64_t waiter_count_ = 0;
     CommStats stats_;
+    std::chrono::nanoseconds total_latency_{0};
     CommEventCallback event_callback_;
 };
 
