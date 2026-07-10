@@ -66,7 +66,10 @@ bool run_test() {
     ThreadPool pool;
     ThreadPoolConfig cfg;
     cfg.min_threads = 2;
-    cfg.max_threads = 4;
+    // This regression test is about task monitor callback exception safety,
+    // not dynamic resizing. Keep max == min so the resize monitor thread does
+    // not add a CI-sensitive sleep/join to the test runtime.
+    cfg.max_threads = cfg.min_threads;
     cfg.queue_capacity = 64;
     if (!pool.initialize(cfg)) {
         std::cerr << "FAILED: pool.initialize returned false" << std::endl;
