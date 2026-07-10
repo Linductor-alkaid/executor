@@ -346,6 +346,11 @@ private:
     void notify_completion_waiters();
 
     /**
+     * @brief Dispatch pending scheduler tasks if the dispatcher is still alive.
+     */
+    size_t dispatch_pending_tasks(size_t max_tasks);
+
+    /**
      * @brief 尝试工作窃取
      *
      * 当本地队列为空时，从其他线程的本地队列窃取任务。
@@ -409,6 +414,7 @@ private:
 
     // 任务分发器（模板化以匹配 WorkerQueueImpl）
     std::unique_ptr<TaskDispatcher<WorkerQueueImpl>> dispatcher_;
+    mutable std::mutex dispatcher_mutex_;
 
     // 动态扩缩容控制器
     std::unique_ptr<ThreadPoolResizer> resizer_;

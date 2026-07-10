@@ -57,9 +57,12 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
         // 初始化任务分发器（TaskDispatcher 是模板类，需要显式指定实例化类型）
         // P-260617-002: 传入 local_queues_mutex_ 指针,dispatcher 内部 dispatch
         // 路径会持 shared_lock，与 resize 路径的 unique_lock 配对防 UAF。
-        dispatcher_ = std::make_unique<TaskDispatcher<WorkerQueueImpl>>(
-            *load_balancer_, scheduler_, &local_queues_, &local_queues_mutex_
-        );
+        {
+            std::lock_guard<std::mutex> dispatcher_lock(dispatcher_mutex_);
+            dispatcher_ = std::make_unique<TaskDispatcher<WorkerQueueImpl>>(
+                *load_balancer_, scheduler_, &local_queues_, &local_queues_mutex_
+            );
+        }
 
         // 初始化动态扩缩容控制器
         resizer_ = std::make_unique<ThreadPoolResizer>(*this, config_);
@@ -105,7 +108,10 @@ void ThreadPool::rollback_initialization_failure() {
 
     workers_.clear();
     worker_ids_.clear();
-    dispatcher_.reset();
+    {
+        std::lock_guard<std::mutex> dispatcher_lock(dispatcher_mutex_);
+        dispatcher_.reset();
+    }
     resizer_.reset();
     load_balancer_.reset();
     scheduler_.clear();
@@ -234,8 +240,8 @@ void ThreadPool::worker_thread(size_t worker_id) {
         // 触发任务分发（从全局调度器分发到本地队列）
         // P-260617-002: dispatcher 内部 dispatch_batch 自身已持 shared_lock，
         // 此处不能再加 shared_lock（std::shared_mutex 不可重入 -> UB）。
-        if (dispatcher_ && !stop_.load()) {
-            size_t dispatched = dispatcher_->dispatch_batch(5);  // 批量分发，减少锁竞争
+        if (!stop_.load()) {
+            size_t dispatched = dispatch_pending_tasks(5);  // 批量分发，减少锁竞争
             // 如果成功分发了任务，唤醒等待的线程
             if (dispatched > 0) {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -442,6 +448,10 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
 
         workers_.clear();
         worker_ids_.clear();
+        {
+            std::lock_guard<std::mutex> dispatcher_lock(dispatcher_mutex_);
+            dispatcher_.reset();
+        }
         // P-260617-002: shutdown 时所有 worker 已 join 完毕，无并发 reader，
         // 仍持 unique_lock 清空 local_queues_ 以与 worker 路径的 shared_lock
         // 保持配对语义（reader 一律持 shared_lock，写者一律持 unique_lock）。
@@ -528,10 +538,15 @@ bool ThreadPool::is_completion_ready() const {
 }
 
 void ThreadPool::notify_completion_waiters() {
-    std::lock_guard<std::mutex> lock(completion_mutex_);
-    if (is_completion_ready()) {
-        completion_cv_.notify_all();
+    completion_cv_.notify_all();
+}
+
+size_t ThreadPool::dispatch_pending_tasks(size_t max_tasks) {
+    std::lock_guard<std::mutex> lock(dispatcher_mutex_);
+    if (!dispatcher_) {
+        return 0;
     }
+    return dispatcher_->dispatch_batch(max_tasks);
 }
 
 bool ThreadPool::is_stopped() const {
@@ -721,17 +736,20 @@ bool ThreadPool::try_submit(std::function<void()> task,
     ).count();
     executor_task.timeout_ms = config_.task_timeout_ms;
 
-    // 提交到调度器；持锁期间分发并 notify，避免错过唤醒
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (stop_.load()) {
-        return false;
+    // Keep mutex_ scoped to the ThreadPool state change. Dispatching may take
+    // local queue / load-balancer / scheduler locks, so doing it after releasing
+    // mutex_ avoids lock-order inversions with workers and shutdown.
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stop_.load()) {
+            return false;
+        }
+
+        scheduler_.enqueue(executor_task);
+        total_tasks_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    scheduler_.enqueue(executor_task);
-    total_tasks_.fetch_add(1, std::memory_order_relaxed);
-    if (dispatcher_) {
-        dispatcher_->dispatch_batch(1);
-    }
+    dispatch_pending_tasks(1);
     condition_.notify_all();
 
     return true;
@@ -773,16 +791,17 @@ bool ThreadPool::try_submit_priority(
     ).count();
     executor_task.timeout_ms = config_.task_timeout_ms;
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (stop_.load()) {
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stop_.load()) {
+            return false;
+        }
+
+        scheduler_.enqueue(executor_task);
+        total_tasks_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    scheduler_.enqueue(executor_task);
-    total_tasks_.fetch_add(1, std::memory_order_relaxed);
-    if (dispatcher_) {
-        dispatcher_->dispatch_batch(1);
-    }
+    dispatch_pending_tasks(1);
     condition_.notify_all();
 
     return true;
@@ -821,38 +840,37 @@ bool ThreadPool::try_submit_batch(
         task_ids.push_back(generate_task_id());
     }
 
-    // 一次获取锁，批量提交所有任务
-    std::lock_guard<std::mutex> lock(mutex_);
-
-    if (stop_.load()) {
-        return false;  // 线程池已停止，拒绝任务
-    }
-
     size_t batch_size = tasks.size();
 
-    // 批量创建并入队任务
-    for (size_t i = 0; i < tasks.size(); ++i) {
-        Task executor_task;
-        executor_task.task_id = std::move(task_ids[i]);
-        executor_task.priority = TaskPriority::NORMAL;
-        executor_task.function = std::move(tasks[i]);
-        if (i < on_timeout_handlers.size()) {
-            executor_task.on_timeout = std::move(on_timeout_handlers[i]);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+
+        if (stop_.load()) {
+            return false;  // 线程池已停止，拒绝任务
         }
-        executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()
-        ).count();
-        executor_task.timeout_ms = config_.task_timeout_ms;
 
-        scheduler_.enqueue(executor_task);
+        // 批量创建并入队任务
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            Task executor_task;
+            executor_task.task_id = std::move(task_ids[i]);
+            executor_task.priority = TaskPriority::NORMAL;
+            executor_task.function = std::move(tasks[i]);
+            if (i < on_timeout_handlers.size()) {
+                executor_task.on_timeout = std::move(on_timeout_handlers[i]);
+            }
+            executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()
+            ).count();
+            executor_task.timeout_ms = config_.task_timeout_ms;
+
+            scheduler_.enqueue(executor_task);
+        }
+
+        total_tasks_.fetch_add(batch_size, std::memory_order_relaxed);
     }
-
-    total_tasks_.fetch_add(batch_size, std::memory_order_relaxed);
 
     // 批量分发
-    if (dispatcher_) {
-        dispatcher_->dispatch_batch(batch_size);
-    }
+    dispatch_pending_tasks(batch_size);
 
     // 唤醒所有等待的工作线程
     condition_.notify_all();
