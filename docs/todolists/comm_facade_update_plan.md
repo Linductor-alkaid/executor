@@ -14,7 +14,7 @@
 - [x] `TaskDependencyManager` 已有依赖图、ready 检查、完成标记和 cycle 检测。
 - [x] `tests/harness/test_comm_facade_usage.cpp` 已有 disabled 用例，占位覆盖 channel、mailbox、phase gate、double buffer、realtime channel。
 - [x] 已新增公开的 `executor::comm` 命名空间和聚合头。
-- [ ] 用户仍需要自行组合锁、原子变量、条件变量或底层队列来表达跨线程通信。
+- [x] Typed Channel 场景下用户无需自行组合锁、原子变量、条件变量或底层队列来表达跨线程通信。
 
 ---
 
@@ -69,7 +69,7 @@
 
 ### 任务
 
-- [ ] 实现 `MpscChannel<T>`：
+- [x] 实现 `MpscChannel<T>`：
   - `try_send(const T&)`
   - `try_send(T&&)`
   - `try_receive(T&)`
@@ -77,28 +77,28 @@
   - `receive_for(...)`
   - `close()`
   - `stats()`
-- [ ] 实现 `SpscChannel<T>` 类型别名或轻量封装，后续可替换为 SPSC 优化实现。
-- [ ] 支持 `ChannelOptions`：
+- [x] 实现 `SpscChannel<T>` 类型别名或轻量封装，后续可替换为 SPSC 优化实现。
+- [x] 支持 `ChannelOptions`：
   - `capacity`
   - `drop_policy`
   - `enable_stats`
   - `name`
-- [ ] 满队列默认拒绝新消息；`DropOldest` 必须增加 `dropped_count`。
-- [ ] 关闭后发送返回失败，消费者可 drain 剩余数据。
+- [x] 满队列默认拒绝新消息；`DropOldest` 必须增加 `dropped_count`。
+- [x] 关闭后发送返回失败，消费者可 drain 剩余数据。
 
 ### 测试
 
-- [ ] 启用/替换 `FacadeCommUsage.SensorProducerPlannerConsumer`。
-- [ ] 单生产者单消费者 FIFO 顺序测试。
-- [ ] 多生产者单消费者并发压力测试。
-- [ ] 队列满返回 false 且 `dropped_count` 或 `closed_send_count` 增加。
-- [ ] `close()` 唤醒阻塞 `receive_for()`。
-- [ ] 非平凡类型传递测试，如 `std::string` 或 move-only 类型视实现范围决定。
+- [x] 启用/替换 `FacadeCommUsage.SensorProducerPlannerConsumer`。
+- [x] 单生产者单消费者 FIFO 顺序测试。
+- [x] 多生产者单消费者并发压力测试。
+- [x] 队列满返回 false 且 `dropped_count` 或 `closed_send_count` 增加。
+- [x] `close()` 唤醒阻塞 `receive_for()`。
+- [x] 非平凡类型传递测试，如 `std::string` 或 move-only 类型视实现范围决定。
 
 ### 验收
 
-- [ ] 用户无需手写 mutex 即可完成 producer/consumer 数据传递。
-- [ ] 队列满、关闭后提交、超时等待均可通过返回值和统计观察。
+- [x] 用户无需手写 mutex 即可完成 producer/consumer 数据传递。
+- [x] 队列满、关闭后提交、超时等待均可通过返回值和统计观察。
 
 ---
 

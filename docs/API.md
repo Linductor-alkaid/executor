@@ -908,13 +908,49 @@ if (!result) {
 
 - **CommErrorCode**：`Ok`、`Closed`、`Full`、`Empty`、`Timeout`、`Stale`、`MissedPhase`、`InvalidArgument`、`NotReady`、`Unknown`。
 - **CommResult**：`ok`、`error_code`、`message`，支持 `operator bool()`、`success()`、`failure()`。
+- **ChannelOptions**：`capacity`、`drop_policy`、`enable_stats`、`name`，用于配置 typed channel。
 - **DropPolicy**：`RejectNewest`（默认策略）、`DropOldest`、`KeepLatest`。
 - **CommStats**：发送/接收/drop/覆盖/超时/missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
 - **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。
 
-`executor::comm` 目前还只开放类型骨架和 `MpscChannel`、`SpscChannel`、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot`、`DoubleBuffer` 的前置声明；这些组件的可用行为会在通信 facade 后续阶段补齐。
+Typed Channel 已开放；`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot`、`DoubleBuffer` 仍是后续阶段组件。
 
-### 7.5 TaskPriority
+### 7.5 Typed Channel
+
+`MpscChannel<T>` 提供类型安全的有界多生产者/单消费者通道，适合采集线程到规划线程、控制线程到通信线程等普通跨线程数据传递。第一版内部使用受控锁保护非实时路径，支持非平凡类型和 move-only 类型；实时周期内消费消息应等待后续 `RealtimeChannel<T>`。
+
+```cpp
+executor::comm::ChannelOptions options;
+options.capacity = 256;
+options.drop_policy = executor::comm::DropPolicy::RejectNewest;
+options.name = "sensor_frames";
+
+executor::comm::MpscChannel<SensorFrame> frames(options);
+
+frames.try_send(SensorFrame{});
+
+SensorFrame frame;
+if (frames.receive_for(frame, std::chrono::milliseconds(10))) {
+    plan(frame);
+}
+
+frames.close();
+auto stats = frames.stats();
+```
+
+主要 API：
+
+- `try_send(const T&)` / `try_send(T&&)`：非阻塞发送；满队列或关闭后返回 `false`。
+- `send_for(T, timeout)`：普通线程阻塞等待容量；超时返回 `CommErrorCode::Timeout`。
+- `try_receive(T&)`：非阻塞接收；空队列返回 `false`。
+- `receive_for(T&, timeout)`：普通线程阻塞等待数据；关闭且已 drain 完时返回 `CommErrorCode::Closed`。
+- `close()` / `is_closed()`：关闭生产者入口，并唤醒等待中的发送/接收线程；已缓存数据仍可被 drain。
+- `stats()`：返回本地累计 `CommStats`，可观察发送、接收、drop、关闭后发送、超时、当前深度和峰值。
+- `SpscChannel<T>`：当前是 `MpscChannel<T>` 别名，后续可替换为 SPSC 优化实现。
+
+默认 `RejectNewest` 满队列时拒绝新消息并增加 `dropped_count`；`DropOldest` 满队列时丢弃最旧消息再接收新消息；`KeepLatest` 保留最新值，适合后续 mailbox 风格场景。
+
+### 7.6 TaskPriority
 
 ```cpp
 enum class TaskPriority { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 };

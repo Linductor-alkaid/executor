@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -96,6 +97,13 @@ inline const char* drop_policy_to_string(DropPolicy policy) noexcept {
         return "Unknown";
     }
 }
+
+struct ChannelOptions {
+    size_t capacity = 1024;
+    DropPolicy drop_policy = DropPolicy::RejectNewest;
+    bool enable_stats = true;
+    std::string name;
+};
 
 /**
  * @brief Local cumulative communication statistics.
