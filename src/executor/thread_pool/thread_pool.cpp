@@ -245,8 +245,7 @@ void ThreadPool::worker_thread(size_t worker_id) {
             size_t dispatched = dispatch_pending_tasks(5);  // 批量分发，减少锁竞争
             // 如果成功分发了任务，唤醒等待的线程
             if (dispatched > 0) {
-                std::lock_guard<std::mutex> lock(mutex_);
-                condition_.notify_all();
+                notify_workers_after_queue_change();
             }
         }
     }
@@ -509,7 +508,7 @@ bool ThreadPool::resize_local_queues(size_t new_num_queues) {
     }
 
     lq_lock.unlock();
-    condition_.notify_all();
+    notify_workers_after_queue_change();
     notify_completion_waiters();
     return true;
 }
@@ -532,7 +531,7 @@ bool ThreadPool::try_wait_for_completion(std::chrono::milliseconds timeout) {
         // that has already observed stop_.
         size_t dispatched = dispatch_pending_tasks(64);
         if (dispatched > 0) {
-            condition_.notify_all();
+            notify_workers_after_queue_change();
         }
 
         lock.lock();
@@ -586,6 +585,11 @@ bool ThreadPool::is_completion_ready() const {
 
 void ThreadPool::notify_completion_waiters() {
     completion_cv_.notify_all();
+}
+
+void ThreadPool::notify_workers_after_queue_change() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    condition_.notify_all();
 }
 
 size_t ThreadPool::dispatch_pending_tasks(size_t max_tasks) {
@@ -799,7 +803,7 @@ bool ThreadPool::try_submit(std::function<void()> task,
     }
 
     dispatch_pending_tasks(1);
-    condition_.notify_all();
+    notify_workers_after_queue_change();
 
     return true;
 }
@@ -851,7 +855,7 @@ bool ThreadPool::try_submit_priority(
     }
 
     dispatch_pending_tasks(1);
-    condition_.notify_all();
+    notify_workers_after_queue_change();
 
     return true;
 }
@@ -922,7 +926,7 @@ bool ThreadPool::try_submit_batch(
     dispatch_pending_tasks(batch_size);
 
     // 唤醒所有等待的工作线程
-    condition_.notify_all();
+    notify_workers_after_queue_change();
 
     return true;
 }

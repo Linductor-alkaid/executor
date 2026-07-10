@@ -346,6 +346,15 @@ private:
     void notify_completion_waiters();
 
     /**
+     * @brief Wake workers after tasks have moved to an executable queue.
+     *
+     * Synchronizes with the mutex used by the worker condition-variable
+     * predicate so a notification cannot land between the predicate check
+     * and the worker actually blocking.
+     */
+    void notify_workers_after_queue_change();
+
+    /**
      * @brief Dispatch pending scheduler tasks if the dispatcher is still alive.
      */
     size_t dispatch_pending_tasks(size_t max_tasks);

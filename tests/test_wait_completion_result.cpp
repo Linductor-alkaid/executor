@@ -75,12 +75,34 @@ bool test_wait_completion_result_timeout_keeps_pending_status() {
     return true;
 }
 
+bool test_first_submission_does_not_miss_worker_wakeup() {
+    constexpr int iterations = 1000;
+
+    for (int i = 0; i < iterations; ++i) {
+        Executor executor;
+        TEST_ASSERT(executor.initialize(single_thread_config()),
+                    "executor should initialize");
+
+        auto future = executor.submit([]() { return 7; });
+        auto result =
+            executor.wait_for_completion_ex(std::chrono::milliseconds(100));
+
+        TEST_ASSERT(result.completed,
+                    "first submission should not miss the worker wakeup");
+        TEST_ASSERT(future.get() == 7, "first submitted task should run");
+        executor.shutdown();
+    }
+
+    return true;
+}
+
 }  // namespace
 
 int main() {
     bool all_passed = true;
     all_passed &= test_wait_completion_result_success();
     all_passed &= test_wait_completion_result_timeout_keeps_pending_status();
+    all_passed &= test_first_submission_does_not_miss_worker_wakeup();
 
     if (all_passed) {
         std::cout << "All wait completion result tests passed." << std::endl;
