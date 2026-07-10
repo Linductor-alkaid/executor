@@ -167,7 +167,7 @@ int main() {
 }
 ```
 
-> 更多示例见 [examples/](examples/)（需 `-DEXECUTOR_BUILD_EXAMPLES=ON` 构建）；GPU 示例 `gpu_basic`、`gpu_multi_device` 需同时启用 GPU）。
+> 用户场景式通信示例见 [examples/comm_robot_pipeline.cpp](examples/comm_robot_pipeline.cpp)：在一条传感器采集、规划、实时控制、状态监控流水线中展示 sensor frames、realtime commands、latest config、startup gate、state snapshot、task dependencies 和 comm observability。更多示例见 [examples/](examples/)（需 `-DEXECUTOR_BUILD_EXAMPLES=ON` 构建）；GPU 示例 `gpu_basic`、`gpu_multi_device` 需同时启用 GPU）。
 
 ## 文档
 

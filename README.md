@@ -167,7 +167,7 @@ int main() {
 }
 ```
 
-> For more examples see [examples/](examples/) (build with `-DEXECUTOR_BUILD_EXAMPLES=ON`). GPU examples `gpu_basic` and `gpu_multi_device` also require GPU support to be enabled.
+> For a user-scenario communication example, see [examples/comm_robot_pipeline.cpp](examples/comm_robot_pipeline.cpp): sensor frames, realtime commands, latest config, startup gating, state snapshots, task dependencies, and comm observability in one pipeline. Build examples with `-DEXECUTOR_BUILD_EXAMPLES=ON`. GPU examples `gpu_basic` and `gpu_multi_device` also require GPU support to be enabled.
 
 ## Documentation
 

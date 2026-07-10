@@ -279,16 +279,21 @@
 
 ### 任务
 
-- [ ] 新增 `examples/comm_channel.cpp`：采集线程到规划线程。
-- [ ] 新增 `examples/realtime_mailbox.cpp`：配置线程到实时控制线程。
-- [ ] 新增 `examples/phase_gate_startup.cpp`：初始化顺序控制。
-- [ ] 新增 `examples/double_buffer_state.cpp`：监控线程读取状态快照。
-- [ ] 更新 `docs/MIGRATION.md`：从共享变量、手写锁、底层队列迁移到 comm facade。
+- [x] 新增综合用户场景示例 `examples/comm_robot_pipeline.cpp`：
+  - 采集线程到规划线程：`MpscChannel<T>`
+  - 配置线程到实时控制线程：`LatestMailbox<T>`
+  - 实时周期命令 drain：`RealtimeChannel<T>`
+  - 初始化顺序控制：`PhaseGate`
+  - 监控线程读取状态快照：`DoubleBuffer<T>`
+  - 启动前 CPU 依赖任务：`TaskHandle` / `when_all()` / `submit_after()`
+  - 本地通信诊断：`stats()` / `set_event_callback()`
+- [x] 更新 README / README_zh / docs/API.md，指向综合场景示例。
+- [x] 更新 `docs/MIGRATION.md`：从共享变量、手写锁、底层队列迁移到 comm facade。
 
 ### 验收
 
-- [ ] 示例优先展示 `executor::comm`，不要求用户先理解底层 `LockFreeQueue`。
-- [ ] 文档说明何时选择 Channel、Mailbox、DoubleBuffer、PhaseGate、TaskHandle。
+- [x] 示例优先展示 `executor::comm`，不要求用户先理解底层 `LockFreeQueue`。
+- [x] 文档说明何时选择 Channel、Mailbox、DoubleBuffer、PhaseGate、TaskHandle。
 
 ---
 
@@ -309,40 +314,44 @@
 
 ## 测试矩阵
 
-- [ ] `test_comm_channel.cpp`
-  - [ ] FIFO
-  - [ ] MPSC 并发
-  - [ ] full/drop/close/timeout
-- [ ] `test_comm_mailbox.cpp`
-  - [ ] latest wins
-  - [ ] sequence freshness
-  - [ ] overwrite/stale stats
-- [ ] `test_comm_realtime_channel.cpp`
-  - [ ] cycle drain budget
-  - [ ] no blocking wait on realtime drain path
-  - [ ] backpressure counters
-- [ ] `test_comm_phase_gate.cpp`
-  - [ ] wait/advance
-  - [ ] close wakeup
-  - [ ] missed phase
-- [ ] `test_comm_double_buffer.cpp`
-  - [ ] complete snapshot
-  - [ ] concurrent readers
-  - [ ] no repeated stale consume
-- [ ] `test_executor_task_graph_facade.cpp`
-  - [ ] submit_after
-  - [ ] when_all
-  - [ ] failure propagation
-  - [ ] cycle/invalid handle diagnostics
-- [ ] `tests/harness/test_comm_facade_usage.cpp`
-  - [ ] replace disabled placeholders with compiling usage tests.
+- [x] `test_comm_channel.cpp`
+  - [x] FIFO
+  - [x] MPSC 并发
+  - [x] full/drop/close/timeout
+- [x] `test_comm_mailbox.cpp`
+  - [x] latest wins
+  - [x] sequence freshness
+  - [x] overwrite/stale stats
+- [x] `test_comm_realtime_channel.cpp`
+  - [x] cycle drain budget
+  - [x] no blocking wait on realtime drain path
+  - [x] backpressure counters
+- [x] `test_comm_phase_gate.cpp`
+  - [x] wait/advance
+  - [x] close wakeup
+  - [x] missed phase
+- [x] `test_comm_double_buffer.cpp`
+  - [x] complete snapshot
+  - [x] concurrent readers
+  - [x] no repeated stale consume
+- [x] `test_executor_task_graph.cpp`
+  - [x] submit_after
+  - [x] when_all
+  - [x] failure propagation
+  - [x] cycle/invalid handle diagnostics
+- [x] `test_comm_observability.cpp`
+  - [x] drop/overwrite/stale/missed phase/timeout
+  - [x] callback exception isolation
+  - [x] latency/lag stats
+- [x] `tests/harness/test_comm_facade_usage.cpp`
+  - [x] replace disabled placeholders with compiling usage tests.
 
 ---
 
 ## Open Questions
 
-- 第一版 `MpscChannel<T>` 是否支持 move-only 非平凡类型，还是先支持 copy/move constructible 普通对象。
-- `DoubleBuffer<T>::load()` 对大对象复制成本较高，是否同步提供 `SnapshotPtr<T>`。
-- `send_for()` / `receive_for()` 是否需要可中断 stop token，还是先通过 `close()` 唤醒。
-- `submit_after()` 返回 `TaskHandle + future` 的组合形式如何设计，才能同时保留返回值和依赖能力。
-- 通信诊断是否需要进入现有 `FailureKind`，还是保持独立 `CommEvent` 聚合。
+- [x] 第一版 `MpscChannel<T>` 支持非平凡类型和 move-only 类型，测试覆盖 `std::string` 与 `std::unique_ptr<int>`。
+- [x] `DoubleBuffer<T>::load()` 保持按值快照语义；大型对象复制成本已在 API 文档说明，`SnapshotPtr<T>` 留作后续扩展。
+- [x] `send_for()` / `receive_for()` 第一版通过 `close()` 唤醒，不引入 stop token。
+- [x] `submit_after()` 使用 `std::future` 返回结果；需要继续依赖链时使用 `TaskSubmission<T>`、`submit_with_handle()`、`submit_after_with_handle()`。
+- [x] 通信诊断保持独立 `CommEvent` / `CommStats`，默认不进入 `FailureKind`。

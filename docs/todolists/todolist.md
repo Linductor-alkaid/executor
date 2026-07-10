@@ -154,5 +154,5 @@
 
 ## 阶段 15：通信与并发辅助 Facade
 
-- [ ] 执行 [通信与并发辅助 Facade 更新计划](comm_facade_update_plan.md)
-- [ ] 落地 [通信与并发辅助 Facade 设计](../design/comm_facade.md)
+- [x] 执行 [通信与并发辅助 Facade 更新计划](comm_facade_update_plan.md)
+- [x] 落地 [通信与并发辅助 Facade 设计](../design/comm_facade.md)

@@ -4,6 +4,42 @@
 
 ---
 
+## 从 0.2.3 升级到 0.3.0
+
+0.3.0 重点新增通信与并发辅助 facade，把常见跨线程通信、实时周期消费、快照读取和任务时序控制提升到 `Executor` / `executor::comm` 公开层。已有手写同步代码可以继续工作；新代码建议优先迁移到下列组件，以获得统一生命周期、背压和诊断统计。
+
+### 推荐迁移到通信与并发辅助 facade
+
+阶段 7 新增 `executor::comm`，用于替代常见的手写共享变量、mutex、condition_variable、底层无锁队列和 promise/future 链。综合示例见 [examples/comm_robot_pipeline.cpp](../examples/comm_robot_pipeline.cpp)，它模拟传感器采集、规划、实时控制和状态监控流水线。
+
+迁移建议：
+
+- 采集线程到规划线程的有界数据流：从“共享 vector + mutex”或直接使用底层队列，迁移到 `MpscChannel<T>` / `SpscChannel<T>`。满队列、关闭、超时通过返回值和 `CommStats` 可见。
+- 配置线程到实时控制线程的“只要最新值”：从共享配置对象和原子 flag，迁移到 `LatestMailbox<T>`。实时线程用 sequence 避免重复消费旧配置。
+- 实时周期内处理有限条命令：从实时线程里阻塞等待队列，迁移到 `RealtimeChannel<T>::drain_for_cycle()`，并设置每周期预算。
+- 监控线程读取系统状态：从共享 mutable state，迁移到 `DoubleBuffer<T>` / `Snapshot<T>`，读者只看到完整发布后的快照。
+- 启动、初始化、阶段顺序：从手写 condition variable predicate，迁移到 `PhaseGate` / `Sequencer`。
+- 任务级依赖：从手写 promise/future 链或轮询 `TaskDependencyManager`，迁移到 `TaskHandle`、`submit_with_handle()`、`submit_after()` 和 `when_all()`。
+- 诊断：每个通信组件都有 `stats()`；低频事件可通过 `set_event_callback()` 接入日志或监控。通信事件默认不计入 `ExecutorFailureStatus`，需要统一上报时由业务在 callback 中桥接。
+
+### 选择指南
+
+| 旧写法/需求 | 推荐 facade |
+|-------------|-------------|
+| producer/consumer 传递每条数据 | `MpscChannel<T>` / `SpscChannel<T>` |
+| 控制配置只关心最新值 | `LatestMailbox<T>` |
+| 实时周期内 drain 有限命令 | `RealtimeChannel<T>` |
+| 多读者读取完整系统状态 | `DoubleBuffer<T>` / `Snapshot<T>` |
+| 启动顺序、阶段推进 | `PhaseGate` |
+| 精确 ticket 顺序 | `Sequencer` |
+| 任务完成后再执行后续任务 | `TaskHandle` + `submit_after()` / `when_all()` |
+
+### 破坏性变更
+
+**无。** 0.3.0 保持 0.2.3 公开 API 兼容；通信 facade、任务图 facade、统计和场景示例均为向后兼容扩展。旧的共享变量、手写锁、底层队列和 promise/future 链仍可继续使用，但新代码推荐逐步迁移到 `executor::comm` 和 `Executor` facade。
+
+---
+
 ## 从 0.2.2 升级到 0.2.3
 
 0.2.3 是向后兼容版本，重点补齐 `Executor` facade 的失败可观察性、可诊断结果和等待生命周期状态。已有代码可以继续使用旧 `bool` API；新代码建议迁移到下列可诊断入口。
