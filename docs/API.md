@@ -20,7 +20,7 @@
 #include <executor/comm.hpp>
 ```
 
-当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型、`MpscChannel` / `SpscChannel`、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer` 和 `DoubleBuffer`。后续阶段会继续开放任务依赖 facade 等组件。
+当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型、`MpscChannel` / `SpscChannel`、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer` 和 `DoubleBuffer`。任务依赖 facade 通过 `Executor` 的 `TaskHandle`、`submit_after()` 和 `when_all()` 暴露。
 
 ---
 
@@ -213,7 +213,43 @@ for (int t = 0; t < 4; ++t) {
 
 `ThreadPoolExecutor` / `IAsyncExecutor` / `Executor` facade 的 future API 不会同步抛出该拒绝；`submit(empty_function)` 和包含空任务的 `submit_batch(...)` 会返回已经 ready 的 future，`future.get()` 抛 `std::invalid_argument("empty task")`。`Executor` facade 同时将该情况记录为 `SubmitRejected`。
 
-### 3.4 软超时
+### 3.4 任务依赖提交
+
+`Executor` facade 提供轻量任务图 API，用 `TaskHandle` 表达同一个 `Executor` 实例内的完成依赖。需要继续链式依赖时使用 `submit_with_handle()` 或 `submit_after_with_handle()`；只关心结果时使用 `submit_after()` 返回的 `std::future`。
+
+```cpp
+executor::Executor executor;
+executor.initialize(config);
+
+auto load = executor.submit_with_handle([] {
+    return load_sensor_frame();
+});
+
+auto plan = executor.submit_after(load.handle, [&] {
+    return run_planner(load.future.get());
+});
+
+auto first = executor.submit_with_handle([] { return preprocess_a(); });
+auto second = executor.submit_with_handle([] { return preprocess_b(); });
+auto both = executor.when_all({first.handle, second.handle});
+
+auto fused = executor.submit_after(both, [] {
+    return fuse_results();
+});
+```
+
+主要 API：
+
+- `TaskHandle`：任务图中的不透明 handle，提供 `id()`、`valid()` 和 `operator bool()`。
+- `TaskSubmission<T>`：包含 `TaskHandle handle` 和 `std::future<T> future`。
+- `submit_with_handle(f, args...)`：像 `submit()` 一样提交任务，同时返回可作为依赖的 handle。
+- `submit_after(dependency, f, args...)` / `submit_after(dependencies, f, args...)`：等待依赖成功后执行任务，返回 dependent task 的 future。
+- `submit_after_with_handle(...)`：同时返回 dependent task 的 handle 和 future，适合继续构造任务链。
+- `when_all(dependencies)`：返回逻辑 handle；所有依赖成功后该 handle 成功，任一依赖失败后该 handle 失败，可继续传给 `submit_after()`。
+
+依赖失败时，dependent task 默认不执行；dependent future 进入异常状态，`future.get()` 会重新抛出依赖异常或依赖图错误。无效 handle、跨 `Executor` 实例 handle 或 cycle 会记录 `SubmitRejected`，并返回 ready exceptional future 或失败的逻辑 handle。第一版内部复用 `TaskDependencyManager`，并在任务完成/失败后裁剪不再被依赖的依赖管理状态；`submit_after()` 的等待任务当前会占用一个 worker 等待条件变量，超大规模任务图后续可演进为纯调度侧唤醒。
+
+### 3.5 软超时
 
 `task_timeout_ms` 是线程池任务的**执行前软超时**。worker 准备执行任务时会检查 `now - submit_time`；若 elapsed >= timeout，则跳过该任务并将线程池内部 timeout 计数与 `TaskStatistics::timeout_count` 加 1。通过 `ThreadPool::submit()`、`Executor::submit()`、priority submit 或 batch submit 暴露的 `std::future` 会被显式置为异常状态，`future.get()` 抛 `executor::TimedOutException`（例如 `Task timed out after 100ms`），不会变成 `std::future_error(broken_promise)`。
 
@@ -233,7 +269,7 @@ ex.initialize(config);
 
 C++ 没有安全的通用线程强杀机制，因此 soft timeout 不会终止执行中的任务。排队超时是独立观测事件：它增加 timeout 计数，但不增加 `fail_count` / `failed_tasks`。长耗时任务应在任务内部自行检查取消条件或 deadline。
 
-### 3.5 任务背压
+### 3.6 任务背压
 
 实时执行器的 `push_task()` 为兼容旧接口仍返回 `void`。新代码优先使用 `Executor` facade 的 `push_realtime_task()` / `try_push_realtime_task()`；需要底层逃生口时再直接使用 `IRealtimeExecutor::push_task_ex()`。
 

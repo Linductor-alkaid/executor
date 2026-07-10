@@ -2,10 +2,12 @@
 #include "thread_pool_executor.hpp"
 #include "thread_pool/thread_pool.hpp"
 #include "task/task.hpp"
+#include "task/task_dependency_manager.hpp"
 #include <stdexcept>
 #include <algorithm>
 #include <chrono>
 #include <iterator>
+#include <memory>
 
 namespace executor {
 
@@ -128,14 +130,16 @@ Executor& Executor::instance() {
 Executor::Executor(ExecutorManager& manager)
     : manager_(&manager)
     , owned_manager_(nullptr)
-    , timer_running_(false) {
+    , timer_running_(false)
+    , task_dependencies_(std::make_unique<TaskDependencyManager>()) {
 }
 
 // 实例化模式构造函数
 Executor::Executor()
     : manager_(nullptr)
     , owned_manager_(std::make_unique<ExecutorManager>())
-    , timer_running_(false) {
+    , timer_running_(false)
+    , task_dependencies_(std::make_unique<TaskDependencyManager>()) {
     manager_ = owned_manager_.get();
 }
 
@@ -209,6 +213,210 @@ void Executor::shutdown(bool wait_for_tasks) {
 void Executor::set_timer_thread_factory_for_test(
     std::function<std::thread(std::function<void()>)> factory) {
     timer_thread_factory_for_test_ = std::move(factory);
+}
+
+TaskHandle Executor::allocate_task_handle() {
+    TaskHandle handle(generate_task_id());
+    {
+        std::lock_guard<std::mutex> lock(task_graph_mutex_);
+        task_graph_nodes_.emplace(handle.id(), TaskGraphNode{});
+    }
+    return handle;
+}
+
+bool Executor::task_handle_known_locked(const TaskHandle& handle) const {
+    return handle.valid() && task_graph_nodes_.find(handle.id()) != task_graph_nodes_.end();
+}
+
+bool Executor::register_task_graph_dependencies(
+    const TaskHandle& handle,
+    const std::vector<TaskHandle>& dependencies,
+    std::string& error_message) {
+    std::lock_guard<std::mutex> lock(task_graph_mutex_);
+    for (const auto& dependency : dependencies) {
+        if (!task_handle_known_locked(dependency)) {
+            error_message = "submit_after dependency handle is invalid";
+            return false;
+        }
+        if (!task_dependencies_->add_dependency(handle.id(), dependency.id())) {
+            error_message = "submit_after dependency graph contains a cycle or invalid edge";
+            return false;
+        }
+        task_graph_dependents_[dependency.id()].push_back(handle.id());
+    }
+    return true;
+}
+
+std::exception_ptr Executor::dependency_failure_locked(
+    const std::vector<TaskHandle>& dependencies) const {
+    for (const auto& dependency : dependencies) {
+        auto it = task_graph_nodes_.find(dependency.id());
+        if (it == task_graph_nodes_.end()) {
+            return make_dependency_exception("dependency handle is invalid");
+        }
+        if (it->second.state == TaskGraphState::Failed) {
+            if (it->second.exception) {
+                return it->second.exception;
+            }
+            return make_dependency_exception(
+                it->second.error_message.empty()
+                    ? "dependency failed"
+                    : it->second.error_message);
+        }
+    }
+    return nullptr;
+}
+
+bool Executor::dependencies_succeeded_locked(
+    const std::vector<TaskHandle>& dependencies) const {
+    for (const auto& dependency : dependencies) {
+        auto it = task_graph_nodes_.find(dependency.id());
+        if (it == task_graph_nodes_.end() ||
+            it->second.state != TaskGraphState::Succeeded) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void Executor::mark_task_graph_running(const TaskHandle& handle) {
+    std::lock_guard<std::mutex> lock(task_graph_mutex_);
+    auto it = task_graph_nodes_.find(handle.id());
+    if (it != task_graph_nodes_.end() && it->second.state == TaskGraphState::Pending) {
+        it->second.state = TaskGraphState::Running;
+    }
+}
+
+void Executor::mark_task_graph_succeeded(const TaskHandle& handle) {
+    {
+        std::lock_guard<std::mutex> lock(task_graph_mutex_);
+        auto it = task_graph_nodes_.find(handle.id());
+        if (it != task_graph_nodes_.end()) {
+            it->second.state = TaskGraphState::Succeeded;
+            it->second.exception = nullptr;
+            it->second.error_message.clear();
+            task_dependencies_->mark_completed(handle.id());
+            resolve_task_graph_dependents_locked(handle.id());
+            prune_task_graph_locked(handle.id());
+        }
+    }
+    task_graph_cv_.notify_all();
+}
+
+void Executor::mark_task_graph_failed(const TaskHandle& handle,
+                                      std::exception_ptr exception,
+                                      std::string message) {
+    {
+        std::lock_guard<std::mutex> lock(task_graph_mutex_);
+        auto it = task_graph_nodes_.find(handle.id());
+        if (it != task_graph_nodes_.end()) {
+            it->second.state = TaskGraphState::Failed;
+            it->second.exception = exception;
+            it->second.error_message = std::move(message);
+            resolve_task_graph_dependents_locked(handle.id());
+            prune_task_graph_locked(handle.id());
+        }
+    }
+    task_graph_cv_.notify_all();
+}
+
+void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) {
+    std::vector<std::string> ready_ids{task_id};
+
+    while (!ready_ids.empty()) {
+        const std::string current_id = std::move(ready_ids.back());
+        ready_ids.pop_back();
+
+        auto dependents_it = task_graph_dependents_.find(current_id);
+        if (dependents_it == task_graph_dependents_.end()) {
+            continue;
+        }
+
+        for (const auto& dependent_id : dependents_it->second) {
+            auto node_it = task_graph_nodes_.find(dependent_id);
+            if (node_it == task_graph_nodes_.end() ||
+                node_it->second.state != TaskGraphState::WhenAll) {
+                continue;
+            }
+
+            std::vector<TaskHandle> dependencies;
+            for (const auto& dependency_id : task_dependencies_->get_dependencies(dependent_id)) {
+                dependencies.emplace_back(dependency_id);
+            }
+
+            if (auto dependency_exception = dependency_failure_locked(dependencies)) {
+                node_it->second.state = TaskGraphState::Failed;
+                node_it->second.exception = dependency_exception;
+                node_it->second.error_message = "when_all dependency failed";
+                ready_ids.push_back(dependent_id);
+            } else if (dependencies_succeeded_locked(dependencies)) {
+                node_it->second.state = TaskGraphState::Succeeded;
+                node_it->second.exception = nullptr;
+                node_it->second.error_message.clear();
+                task_dependencies_->mark_completed(dependent_id);
+                ready_ids.push_back(dependent_id);
+            }
+        }
+    }
+}
+
+void Executor::prune_task_graph_locked(const std::string& task_id) {
+    auto dependents_it = task_graph_dependents_.find(task_id);
+    if (dependents_it != task_graph_dependents_.end() && !dependents_it->second.empty()) {
+        return;
+    }
+    task_dependencies_->prune(task_id);
+}
+
+std::exception_ptr Executor::make_dependency_exception(const std::string& message) const {
+    return std::make_exception_ptr(std::runtime_error(message));
+}
+
+TaskHandle Executor::when_all(std::vector<TaskHandle> dependencies) {
+    TaskHandle handle = allocate_task_handle();
+
+    bool dependencies_valid = true;
+    std::string validation_error;
+    {
+        std::lock_guard<std::mutex> lock(task_graph_mutex_);
+        for (const auto& dependency : dependencies) {
+            if (!task_handle_known_locked(dependency)) {
+                dependencies_valid = false;
+                validation_error = "when_all dependency handle is invalid";
+                break;
+            }
+            if (!task_dependencies_->add_dependency(handle.id(), dependency.id())) {
+                dependencies_valid = false;
+                validation_error = "when_all dependency graph contains a cycle or invalid edge";
+                break;
+            }
+            task_graph_dependents_[dependency.id()].push_back(handle.id());
+        }
+        if (dependencies_valid) {
+            auto& node = task_graph_nodes_[handle.id()];
+            if (auto dependency_exception = dependency_failure_locked(dependencies)) {
+                node.state = TaskGraphState::Failed;
+                node.exception = dependency_exception;
+                node.error_message = "when_all dependency failed";
+            } else if (dependencies_succeeded_locked(dependencies)) {
+                node.state = TaskGraphState::Succeeded;
+                task_dependencies_->mark_completed(handle.id());
+            } else {
+                node.state = TaskGraphState::WhenAll;
+            }
+        }
+    }
+
+    if (!dependencies_valid) {
+        auto exception = make_dependency_exception(validation_error);
+        mark_task_graph_failed(handle, exception, validation_error);
+        record_submit_rejected("default", handle.id(), validation_error, exception);
+        return handle;
+    }
+
+    task_graph_cv_.notify_all();
+
+    return handle;
 }
 
 // 提交周期性任务

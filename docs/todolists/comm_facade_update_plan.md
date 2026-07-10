@@ -215,29 +215,31 @@
 
 ### 任务
 
-- [ ] 设计并实现 `TaskHandle`。
-- [ ] 在 `Executor` facade 增加：
+- [x] 设计并实现 `TaskHandle`。
+- [x] 在 `Executor` facade 增加：
   - `submit_after(dependency, task)`
   - `submit_after(dependencies, task)`
   - `when_all(dependencies)`
-- [ ] 内部复用或扩展 `TaskDependencyManager`。
-- [ ] 定义依赖失败传播策略：
+- [x] 增加 `submit_with_handle()` / `submit_after_with_handle()`，兼顾 future 返回值和后续依赖链。
+- [x] 内部复用或扩展 `TaskDependencyManager`。
+- [x] 定义依赖失败传播策略：
   - 默认不执行 dependent task。
   - dependent future 返回可诊断异常。
-  - 依赖图 cycle 返回 `ExecutorResult` 或 ready future 异常。
-- [ ] 增加依赖状态裁剪，避免长生命周期服务中任务 ID 无限增长。
+  - 依赖图 cycle 或无效 handle 返回 ready future 异常或失败逻辑 handle，并记录 `SubmitRejected`。
+- [x] 增加依赖状态裁剪，避免长生命周期服务中任务 ID 无限增长。
 
 ### 测试
 
-- [ ] `submit_after(A, B)` 保证 B 在 A 完成后执行。
-- [ ] `when_all(A, B)` 等待全部完成后触发 C。
-- [ ] A 失败时 B 不执行且 future 可观察。
-- [ ] cycle 或无效 handle 返回可诊断失败。
-- [ ] shutdown 期间 pending dependency 不静默丢失。
+- [x] `submit_after(A, B)` 保证 B 在 A 完成后执行。
+- [x] `when_all(A, B)` 等待全部完成后触发 C。
+- [x] 嵌套 `when_all()` 可传播完成状态。
+- [x] A 失败时 B 不执行且 future 可观察。
+- [x] cycle 或无效 handle 返回可诊断失败。
+- [x] shutdown 期间 pending dependency 不静默丢失。
 
 ### 验收
 
-- [ ] 用户可通过 facade 表达任务时序，而不是手写 promise/future 链或轮询 `TaskDependencyManager`。
+- [x] 用户可通过 facade 表达任务时序，而不是手写 promise/future 链或轮询 `TaskDependencyManager`。
 
 ---
 

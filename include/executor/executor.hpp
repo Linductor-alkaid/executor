@@ -10,17 +10,22 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include <thread>
 #include <chrono>
 #include <type_traits>
+#include <tuple>
 #include <map>
 #include <queue>
 #include <deque>
 #include <optional>
 
 namespace executor {
+
+class TaskDependencyManager;
 
 /**
  * @brief Executor Facade
@@ -107,6 +112,28 @@ public:
     template<typename F, typename... Args>
     auto submit(F&& f, Args&&... args)
         -> std::future<typename std::invoke_result<F, Args...>::type>;
+
+    template<typename F, typename... Args>
+    auto submit_with_handle(F&& f, Args&&... args)
+        -> TaskSubmission<typename std::invoke_result<F, Args...>::type>;
+
+    template<typename F, typename... Args>
+    auto submit_after(const TaskHandle& dependency, F&& f, Args&&... args)
+        -> std::future<typename std::invoke_result<F, Args...>::type>;
+
+    template<typename F, typename... Args>
+    auto submit_after(const std::vector<TaskHandle>& dependencies, F&& f, Args&&... args)
+        -> std::future<typename std::invoke_result<F, Args...>::type>;
+
+    template<typename F, typename... Args>
+    auto submit_after_with_handle(const TaskHandle& dependency, F&& f, Args&&... args)
+        -> TaskSubmission<typename std::invoke_result<F, Args...>::type>;
+
+    template<typename F, typename... Args>
+    auto submit_after_with_handle(const std::vector<TaskHandle>& dependencies, F&& f, Args&&... args)
+        -> TaskSubmission<typename std::invoke_result<F, Args...>::type>;
+
+    TaskHandle when_all(std::vector<TaskHandle> dependencies);
 
     /**
      * @brief 提交优先级任务
@@ -575,6 +602,36 @@ private:
                                          const std::string& message,
                                          std::exception_ptr exception = nullptr);
 
+    enum class TaskGraphState {
+        Pending,
+        Running,
+        Succeeded,
+        Failed,
+        WhenAll
+    };
+
+    struct TaskGraphNode {
+        TaskGraphState state = TaskGraphState::Pending;
+        std::exception_ptr exception;
+        std::string error_message;
+    };
+
+    TaskHandle allocate_task_handle();
+    bool task_handle_known_locked(const TaskHandle& handle) const;
+    bool register_task_graph_dependencies(const TaskHandle& handle,
+                                          const std::vector<TaskHandle>& dependencies,
+                                          std::string& error_message);
+    std::exception_ptr dependency_failure_locked(const std::vector<TaskHandle>& dependencies) const;
+    bool dependencies_succeeded_locked(const std::vector<TaskHandle>& dependencies) const;
+    void mark_task_graph_running(const TaskHandle& handle);
+    void mark_task_graph_succeeded(const TaskHandle& handle);
+    void mark_task_graph_failed(const TaskHandle& handle,
+                                std::exception_ptr exception,
+                                std::string message);
+    void resolve_task_graph_dependents_locked(const std::string& task_id);
+    void prune_task_graph_locked(const std::string& task_id);
+    std::exception_ptr make_dependency_exception(const std::string& message) const;
+
     /**
      * @brief 当前 facade 最近失败事件缓冲容量
      */
@@ -629,6 +686,12 @@ private:
     std::deque<ExecutorFailureEvent> recent_failures_;
     size_t recent_failure_capacity_ = kDefaultRecentFailureCapacity;
     ExecutorFailureCallback failure_callback_;
+
+    mutable std::mutex task_graph_mutex_;
+    std::condition_variable task_graph_cv_;
+    std::unique_ptr<TaskDependencyManager> task_dependencies_;
+    std::unordered_map<std::string, TaskGraphNode> task_graph_nodes_;
+    std::unordered_map<std::string, std::vector<std::string>> task_graph_dependents_;
 
     // GPU 调度器
     gpu::GpuScheduler scheduler_;
@@ -730,6 +793,124 @@ auto Executor::submit(F&& f, Args&&... args)
     }
 
     return future;
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_with_handle(F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, Args...>::type> {
+    using return_type = typename std::invoke_result<F, Args...>::type;
+
+    TaskSubmission<return_type> submission;
+    submission.handle = allocate_task_handle();
+    auto handle = submission.handle;
+
+    submission.future = submit([this,
+                                handle,
+                                f = std::forward<F>(f),
+                                args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
+        mark_task_graph_running(handle);
+        try {
+            if constexpr (std::is_void_v<return_type>) {
+                std::apply(f, std::move(args_tuple));
+                mark_task_graph_succeeded(handle);
+            } else {
+                auto result = std::apply(f, std::move(args_tuple));
+                mark_task_graph_succeeded(handle);
+                return result;
+            }
+        } catch (...) {
+            auto exception = std::current_exception();
+            mark_task_graph_failed(handle, exception, "TaskHandle task failed");
+            throw;
+        }
+    });
+
+    return submission;
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_after(const TaskHandle& dependency, F&& f, Args&&... args)
+    -> std::future<typename std::invoke_result<F, Args...>::type> {
+    std::vector<TaskHandle> dependencies{dependency};
+    return submit_after(std::move(dependencies), std::forward<F>(f), std::forward<Args>(args)...);
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_after(const std::vector<TaskHandle>& dependencies, F&& f, Args&&... args)
+    -> std::future<typename std::invoke_result<F, Args...>::type> {
+    return submit_after_with_handle(dependencies, std::forward<F>(f), std::forward<Args>(args)...).future;
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_after_with_handle(const TaskHandle& dependency, F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, Args...>::type> {
+    std::vector<TaskHandle> dependencies{dependency};
+    return submit_after_with_handle(std::move(dependencies), std::forward<F>(f), std::forward<Args>(args)...);
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_after_with_handle(const std::vector<TaskHandle>& dependencies, F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, Args...>::type> {
+    using return_type = typename std::invoke_result<F, Args...>::type;
+
+    TaskSubmission<return_type> submission;
+    submission.handle = allocate_task_handle();
+    auto handle = submission.handle;
+
+    std::string validation_error;
+    const bool dependencies_valid =
+        register_task_graph_dependencies(handle, dependencies, validation_error);
+
+    if (!dependencies_valid) {
+        auto exception = make_dependency_exception(validation_error);
+        mark_task_graph_failed(handle, exception, validation_error);
+        auto promise = std::make_shared<std::promise<return_type>>();
+        submission.future = promise->get_future();
+        promise->set_exception(exception);
+        record_submit_rejected("default", handle.id(), validation_error, exception);
+        return submission;
+    }
+
+    submission.future = submit([this,
+                                handle,
+                                dependencies,
+                                f = std::forward<F>(f),
+                                args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
+        std::exception_ptr dependency_exception;
+        {
+            std::unique_lock<std::mutex> lock(task_graph_mutex_);
+            task_graph_cv_.wait(lock, [&] {
+                dependency_exception = dependency_failure_locked(dependencies);
+                return dependency_exception || dependencies_succeeded_locked(dependencies);
+            });
+        }
+
+        if (dependency_exception) {
+            mark_task_graph_failed(
+                handle,
+                dependency_exception,
+                "Dependency failed before dependent task execution");
+            std::rethrow_exception(dependency_exception);
+        }
+
+        mark_task_graph_running(handle);
+        try {
+            if constexpr (std::is_void_v<return_type>) {
+                std::apply(f, std::move(args_tuple));
+                mark_task_graph_succeeded(handle);
+            } else {
+                auto result = std::apply(f, std::move(args_tuple));
+                mark_task_graph_succeeded(handle);
+                return result;
+            }
+        } catch (...) {
+            auto exception = std::current_exception();
+            mark_task_graph_failed(handle, exception, "Dependent task failed");
+            throw;
+        }
+    });
+
+    return submission;
 }
 
 template<typename F, typename... Args>

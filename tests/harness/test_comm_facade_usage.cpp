@@ -1,4 +1,5 @@
 #include <executor/comm.hpp>
+#include <executor/executor.hpp>
 
 #include <gtest/gtest.h>
 
@@ -144,6 +145,32 @@ TEST(FacadeCommUsage, RealtimeCycleDrainsMessages) {
     EXPECT_EQ(second_cycle, 1U);
     EXPECT_EQ(applied_sum, 60);
     EXPECT_TRUE(commands.empty());
+}
+
+TEST(FacadeCommUsage, TaskGraphSubmitAfter) {
+    executor::Executor executor;
+    executor::ExecutorConfig config;
+    config.min_threads = 2;
+    config.max_threads = 2;
+    ASSERT_TRUE(executor.initialize(config));
+
+    std::atomic<int> stage{0};
+    auto init = executor.submit_with_handle([&] {
+        stage.store(1, std::memory_order_release);
+        return 10;
+    });
+
+    auto planned = executor.submit_after(init.handle, [&] {
+        EXPECT_EQ(stage.load(std::memory_order_acquire), 1);
+        stage.store(2, std::memory_order_release);
+        return 20;
+    });
+
+    EXPECT_EQ(init.future.get(), 10);
+    EXPECT_EQ(planned.get(), 20);
+    EXPECT_EQ(stage.load(std::memory_order_acquire), 2);
+
+    executor.shutdown();
 }
 
 } // namespace

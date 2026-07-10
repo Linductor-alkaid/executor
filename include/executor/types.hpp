@@ -9,6 +9,7 @@
 #include <vector>
 #include <atomic>
 #include <functional>
+#include <future>
 #include <map>
 #include <utility>
 
@@ -100,6 +101,38 @@ struct ExecutorResult {
         result.message = std::move(msg);
         return result;
     }
+};
+
+/**
+ * @brief Facade task graph handle.
+ */
+class TaskHandle {
+public:
+    TaskHandle() = default;
+
+    explicit TaskHandle(std::string id)
+        : id_(std::move(id)) {}
+
+    const std::string& id() const noexcept {
+        return id_;
+    }
+
+    bool valid() const noexcept {
+        return !id_.empty();
+    }
+
+    explicit operator bool() const noexcept {
+        return valid();
+    }
+
+private:
+    std::string id_;
+};
+
+template <class T>
+struct TaskSubmission {
+    TaskHandle handle;
+    std::future<T> future;
 };
 
 /**
