@@ -20,7 +20,7 @@
 #include <executor/comm.hpp>
 ```
 
-当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型、`MpscChannel` / `SpscChannel`、`LatestMailbox` 和 `RealtimeChannel`。`PhaseGate`、`DoubleBuffer` 等行为组件将在通信 facade 后续阶段逐步开放。
+当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型、`MpscChannel` / `SpscChannel`、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer` 和 `DoubleBuffer`。后续阶段会继续开放任务依赖 facade 等组件。
 
 ---
 
@@ -914,7 +914,7 @@ if (!result) {
 - **CommStats**：发送/接收/drop/覆盖/超时、handler 异常、missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
 - **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。
 
-Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate` 和 `Sequencer` 已开放；`Snapshot`、`DoubleBuffer` 仍是后续阶段组件。
+Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot` 和 `DoubleBuffer` 已开放。
 
 ### 7.5 Typed Channel
 
@@ -1054,7 +1054,41 @@ waiter.join();
 - `wait_until_published(ticket, timeout)`：等待精确 ticket；超时、关闭和错过 ticket 均可通过 `CommResult` 区分。
 - `close()` / `is_closed()` / `published_ticket()` / `stats()` / `set_event_callback(...)`：生命周期、观察和诊断入口。
 
-### 7.8 TaskPriority
+### 7.8 Snapshot / DoubleBuffer
+
+`Snapshot<T>` / `DoubleBuffer<T>` 适合把共享 mutable state 改成“发布完整快照、读者按值读取”的模式。读者不会拿到可变引用，也不会看到 writer 更新到一半的对象。
+
+```cpp
+struct SystemState {
+    int tick = 0;
+    int checksum = 0;
+};
+
+executor::comm::DoubleBuffer<SystemState> states(SystemState{});
+
+states.update([](SystemState& state) {
+    state.tick += 1;
+    state.checksum = state.tick * 17;
+});
+
+auto snapshot = states.load();
+if (snapshot.value.checksum == snapshot.value.tick * 17) {
+    monitor(snapshot.value);
+}
+```
+
+主要 API：
+
+- `Snapshot<T>`：包含 `value`、`sequence`、`timestamp`。
+- `publish(T)`：直接发布一个完整的新状态，返回新 sequence。
+- `update(fn)`：在非当前读缓冲区上复制当前状态并执行 writer，writer 返回后一次性发布。
+- `load()`：读取当前完整快照。
+- `load_newer_than(last_seen, out)`：仅在 sequence 更新时返回 `true`，否则返回 `false` 并增加 `stale_read_count`。
+- `sequence()` / `stats()` / `set_event_callback(...)`：观察版本、统计和低频诊断事件。
+
+第一版写入模型是单写多读；多写场景建议先通过 `MpscChannel` 汇聚到一个状态 owner，再由 owner 调用 `publish()` 或 `update()`。`load()` 和 `load_newer_than()` 会复制 `T`，大型对象需要评估复制成本；后续可增加 `SnapshotPtr<T>`，用 `std::shared_ptr<const T>` 降低大对象快照复制成本。
+
+### 7.9 TaskPriority
 
 ```cpp
 enum class TaskPriority { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 };

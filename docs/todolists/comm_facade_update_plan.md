@@ -182,32 +182,32 @@
 
 ### 任务
 
-- [ ] 实现 `Snapshot<T>`：
+- [x] 实现 `Snapshot<T>`：
   - `value`
   - `sequence`
   - `timestamp`
-- [ ] 实现 `DoubleBuffer<T>`：
+- [x] 实现 `DoubleBuffer<T>`：
   - `publish(T)`
   - `update(fn)`
   - `load()`
   - `load_newer_than(last_seen, out)`
   - `sequence()`
   - `stats()`
-- [ ] 明确第一版写入模型：单写多读；多写场景建议通过 channel 汇聚。
-- [ ] 文档说明大型对象的复制成本和后续 `SnapshotPtr<T>` 扩展方向。
+- [x] 明确第一版写入模型：单写多读；多写场景建议通过 channel 汇聚。
+- [x] 文档说明大型对象的复制成本和后续 `SnapshotPtr<T>` 扩展方向。
 
 ### 测试
 
-- [ ] 启用/替换 `FacadeCommUsage.StateWriterMonitorReader`。
-- [ ] 读者只能看到完整发布后的状态。
-- [ ] 多读者并发读取无 data race。
-- [ ] `load_newer_than()` 避免重复消费旧状态。
-- [ ] writer 高频更新时 reader 不读到半更新状态。
+- [x] 启用/替换 `FacadeCommUsage.StateWriterMonitorReader`。
+- [x] 读者只能看到完整发布后的状态。
+- [x] 多读者并发读取无 data race。
+- [x] `load_newer_than()` 避免重复消费旧状态。
+- [x] writer 高频更新时 reader 不读到半更新状态。
 
 ### 验收
 
-- [ ] 共享 mutable state 的典型读写场景可迁移到不可变快照。
-- [ ] 读者有 sequence 判断新旧数据。
+- [x] 共享 mutable state 的典型读写场景可迁移到不可变快照。
+- [x] 读者有 sequence 判断新旧数据。
 
 ---
 

@@ -95,8 +95,28 @@ TEST(FacadeCommUsage, InitThreadWorkerThread) {
     EXPECT_EQ(startup_gate.stats().received_count, 1U);
 }
 
-TEST(FacadeCommUsage, DISABLED_StateWriterMonitorReader) {
-    GTEST_SKIP() << "TODO: enable when executor::comm::DoubleBuffer<T> is introduced.";
+TEST(FacadeCommUsage, StateWriterMonitorReader) {
+    struct SystemState {
+        int tick = 0;
+        int checksum = 0;
+    };
+
+    executor::comm::DoubleBuffer<SystemState> states(SystemState{.tick = 0, .checksum = 0});
+
+    states.publish(SystemState{.tick = 1, .checksum = 17});
+    states.update([](SystemState& state) {
+        state.tick = 2;
+        state.checksum = 34;
+    });
+
+    executor::comm::Snapshot<SystemState> snapshot;
+    ASSERT_TRUE(states.load_newer_than(0, snapshot));
+    EXPECT_EQ(snapshot.sequence, 2U);
+    EXPECT_EQ(snapshot.value.tick, 2);
+    EXPECT_EQ(snapshot.value.checksum, snapshot.value.tick * 17);
+
+    EXPECT_FALSE(states.load_newer_than(snapshot.sequence, snapshot));
+    EXPECT_EQ(states.stats().stale_read_count, 1U);
 }
 
 TEST(FacadeCommUsage, RealtimeCycleDrainsMessages) {
