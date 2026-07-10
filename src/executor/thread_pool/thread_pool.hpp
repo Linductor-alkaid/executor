@@ -469,6 +469,8 @@ private:
     // 监控线程（用于动态扩缩容）
     std::thread resize_monitor_thread_;
     std::atomic<bool> resize_monitor_stop_{false};
+    std::condition_variable resize_monitor_cv_;
+    mutable std::mutex resize_monitor_mutex_;
 
     std::function<void(size_t)> worker_thread_start_hook_for_test_;
 };

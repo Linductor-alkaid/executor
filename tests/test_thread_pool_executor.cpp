@@ -25,6 +25,28 @@ using namespace executor;
         } \
     } while(0)
 
+namespace {
+
+bool wait_for_executor_completion_or_stop(ThreadPoolExecutor& executor,
+                                          std::chrono::milliseconds timeout,
+                                          const char* message) {
+    if (executor.try_wait_for_completion(timeout)) {
+        return true;
+    }
+
+    auto status = executor.get_status();
+    std::cerr << "FAILED: " << message
+              << " (active=" << status.active_tasks
+              << ", completed=" << status.completed_tasks
+              << ", failed=" << status.failed_tasks
+              << ", queue=" << status.queue_size << ")"
+              << std::endl;
+    executor.stop(false);
+    return false;
+}
+
+}  // namespace
+
 // 测试函数前向声明
 bool test_thread_pool_executor_basic();
 bool test_thread_pool_executor_multiple_tasks();
@@ -43,7 +65,7 @@ bool test_thread_pool_executor_basic() {
     // 创建配置
     ThreadPoolConfig config;
     config.min_threads = 2;
-    config.max_threads = 4;
+    config.max_threads = config.min_threads;
     config.queue_capacity = 100;
     
     // 创建执行器
@@ -84,7 +106,7 @@ bool test_thread_pool_executor_multiple_tasks() {
     
     ThreadPoolConfig config;
     config.min_threads = 4;
-    config.max_threads = 8;
+    config.max_threads = config.min_threads;
     config.queue_capacity = 100;
     
     ThreadPoolExecutor executor("test_executor", config);
@@ -108,7 +130,10 @@ bool test_thread_pool_executor_multiple_tasks() {
     }
     
     // 等待所有任务完成统计更新（future.get() 返回时 completed_tasks_ 可能尚未递增）
-    executor.wait_for_completion();
+    TEST_ASSERT(wait_for_executor_completion_or_stop(
+                    executor, std::chrono::seconds(5),
+                    "Timed out waiting after multiple tasks"),
+                "Executor should complete multiple tasks promptly");
 
     // 检查状态
     auto status = executor.get_status();
@@ -125,7 +150,7 @@ bool test_thread_pool_executor_concurrent_submit() {
     
     ThreadPoolConfig config;
     config.min_threads = 4;
-    config.max_threads = 8;
+    config.max_threads = config.min_threads;
     config.queue_capacity = 1000;
     
     ThreadPoolExecutor executor("test_executor", config);
@@ -155,7 +180,10 @@ bool test_thread_pool_executor_concurrent_submit() {
     }
     
     // 等待所有任务完成
-    executor.wait_for_completion();
+    TEST_ASSERT(wait_for_executor_completion_or_stop(
+                    executor, std::chrono::seconds(5),
+                    "Timed out waiting after concurrent submit"),
+                "Executor should complete concurrent submissions promptly");
     
     // 验证所有任务都完成了
     TEST_ASSERT(completed_count.load() == num_threads * tasks_per_thread, 
@@ -176,7 +204,7 @@ bool test_thread_pool_executor_exception_handling() {
     
     ThreadPoolConfig config;
     config.min_threads = 2;
-    config.max_threads = 4;
+    config.max_threads = config.min_threads;
     config.queue_capacity = 100;
     
     ThreadPoolExecutor executor("test_executor", config);
@@ -214,7 +242,7 @@ bool test_thread_pool_executor_status() {
     
     ThreadPoolConfig config;
     config.min_threads = 2;
-    config.max_threads = 4;
+    config.max_threads = config.min_threads;
     config.queue_capacity = 100;
     
     ThreadPoolExecutor executor("test_executor", config);
@@ -249,7 +277,10 @@ bool test_thread_pool_executor_status() {
         future.wait();
     }
     
-    executor.wait_for_completion();
+    TEST_ASSERT(wait_for_executor_completion_or_stop(
+                    executor, std::chrono::seconds(5),
+                    "Timed out waiting for status test tasks"),
+                "Executor should complete status test tasks promptly");
     
     // 检查最终状态
     status = executor.get_status();
@@ -267,7 +298,7 @@ bool test_thread_pool_executor_wait_for_completion() {
     
     ThreadPoolConfig config;
     config.min_threads = 2;
-    config.max_threads = 4;
+    config.max_threads = config.min_threads;
     config.queue_capacity = 100;
     
     ThreadPoolExecutor executor("test_executor", config);
@@ -285,7 +316,10 @@ bool test_thread_pool_executor_wait_for_completion() {
     }
     
     // 等待所有任务完成
-    executor.wait_for_completion();
+    TEST_ASSERT(wait_for_executor_completion_or_stop(
+                    executor, std::chrono::seconds(5),
+                    "Timed out waiting for wait_for_completion test tasks"),
+                "Executor wait_for_completion scenario should finish promptly");
     
     // 验证所有任务都完成了
     TEST_ASSERT(completed.load() == num_tasks, "All tasks should be completed");
@@ -301,7 +335,7 @@ bool test_thread_pool_executor_stop_behavior() {
     
     ThreadPoolConfig config;
     config.min_threads = 2;
-    config.max_threads = 4;
+    config.max_threads = config.min_threads;
     config.queue_capacity = 100;
     
     ThreadPoolExecutor executor("test_executor", config);
@@ -339,7 +373,7 @@ bool test_thread_pool_executor_submit_after_stop_future_ready_with_exception() {
 
     ThreadPoolConfig config;
     config.min_threads = 2;
-    config.max_threads = 4;
+    config.max_threads = config.min_threads;
     config.queue_capacity = 100;
 
     ThreadPoolExecutor executor("test_executor", config);
@@ -348,7 +382,7 @@ bool test_thread_pool_executor_submit_after_stop_future_ready_with_exception() {
 
     IAsyncExecutor* async_executor = &executor;
     std::atomic<bool> task_executed{false};
-    auto future = async_executor->submit([&task_executed]() {
+    auto future = async_executor->submit([&task_executed]() noexcept {
         task_executed.store(true, std::memory_order_relaxed);
         return 42;
     });

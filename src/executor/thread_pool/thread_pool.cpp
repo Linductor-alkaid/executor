@@ -92,7 +92,11 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
 void ThreadPool::rollback_initialization_failure() {
     initialized_.store(false);
     stop_.store(true);
-    resize_monitor_stop_.store(true);
+    {
+        std::lock_guard<std::mutex> lock(resize_monitor_mutex_);
+        resize_monitor_stop_.store(true, std::memory_order_release);
+    }
+    resize_monitor_cv_.notify_all();
     condition_.notify_all();
 
     if (resize_monitor_thread_.joinable()) {
@@ -431,7 +435,11 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
         }
 
         // 停止监控线程
-        resize_monitor_stop_.store(true);
+        {
+            std::lock_guard<std::mutex> lock(resize_monitor_mutex_);
+            resize_monitor_stop_.store(true, std::memory_order_release);
+        }
+        resize_monitor_cv_.notify_all();
         if (resize_monitor_thread_.joinable()) {
             resize_monitor_thread_.join();
         }
@@ -661,12 +669,14 @@ bool ThreadPool::should_exit(size_t worker_id) const {
 }
 
 void ThreadPool::resize_monitor_thread() {
-    while (!resize_monitor_stop_.load()) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        
-        if (resize_monitor_stop_.load()) {
+    while (true) {
+        std::unique_lock<std::mutex> lock(resize_monitor_mutex_);
+        if (resize_monitor_cv_.wait_for(lock, std::chrono::seconds(1), [this]() {
+                return resize_monitor_stop_.load(std::memory_order_acquire);
+            })) {
             break;
         }
+        lock.unlock();
         
         // 更新线程池状态信息
         ThreadPoolStatus status = get_status();

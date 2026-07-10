@@ -58,6 +58,25 @@ public:
     }
 };
 
+bool wait_for_pool_completion_or_shutdown(ThreadPool& pool,
+                                          std::chrono::milliseconds timeout,
+                                          const char* context) {
+    if (pool.try_wait_for_completion(timeout)) {
+        return true;
+    }
+
+    auto st = pool.get_status();
+    std::cerr << "FAILED: timed out waiting for " << context
+              << " (total=" << st.total_tasks
+              << ", completed=" << st.completed_tasks
+              << ", failed=" << st.failed_tasks
+              << ", active=" << st.active_threads
+              << ", queue=" << st.queue_size << ")"
+              << std::endl;
+    pool.shutdown(false);
+    return false;
+}
+
 bool run_test() {
     g_throw_count.store(0);
     g_user_fn_count.store(0);
@@ -91,7 +110,9 @@ bool run_test() {
 
     // ---- assert (a): wait_for_completion returns within 5s, not 300s ----
     auto t0 = std::chrono::steady_clock::now();
-    pool.wait_for_completion();
+    if (!wait_for_pool_completion_or_shutdown(pool, 5s, "throwing monitor tasks")) {
+        return false;
+    }
     auto elapsed = std::chrono::steady_clock::now() - t0;
     if (elapsed > 5s) {
         std::cerr << "FAILED: wait_for_completion took " << elapsed.count() / 1'000'000
@@ -133,7 +154,9 @@ bool run_test() {
     pool.submit([&]() noexcept {
         follow_up_done.store(true, std::memory_order_release);
     });
-    pool.wait_for_completion();
+    if (!wait_for_pool_completion_or_shutdown(pool, 5s, "follow-up task")) {
+        return false;
+    }
     if (!follow_up_done.load(std::memory_order_acquire)) {
         std::cerr << "FAILED: follow-up task did not run — workers died?"
                   << std::endl;
