@@ -7,4 +7,5 @@
 
 #include <executor/comm/channel.hpp>
 #include <executor/comm/fwd.hpp>
+#include <executor/comm/mailbox.hpp>
 #include <executor/comm/types.hpp>

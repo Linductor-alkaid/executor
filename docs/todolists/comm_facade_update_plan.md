@@ -106,39 +106,39 @@
 
 ### 任务
 
-- [ ] 实现 `LatestMailbox<T>`：
+- [x] 实现 `LatestMailbox<T>`：
   - `publish(...)`
   - `try_load(T&)`
   - `try_load_newer_than(last_seen, out, new_sequence)`
   - `sequence()`
   - `stats()`
-- [ ] 实现 `RealtimeChannel<T>`：
+- [x] 实现 `RealtimeChannel<T>`：
   - `try_send(...)`
   - `drain_for_cycle(handler, max_items)`
   - `close()`
   - `stats()`
-- [ ] 支持 `RealtimeChannelOptions`：
+- [x] 支持 `RealtimeChannelOptions`：
   - `capacity`
   - `max_items_per_cycle`
   - `drop_policy`
   - `enable_stats`
   - `name`
-- [ ] 定义 handler 抛异常时的最小语义：停止本轮 drain、记录计数、让异常是否外抛保持一致。
-- [ ] 与 `RealtimeThreadConfig::max_tasks_per_cycle` 的文档语义对齐。
+- [x] 定义 handler 抛异常时的最小语义：停止本轮 drain、增加 `handler_exception_count`、记录 `HandlerException` 事件并继续外抛。
+- [x] 与 `RealtimeThreadConfig::max_tasks_per_cycle` 的文档语义对齐：`0` 表示不限，非 0 表示单周期预算。
 
 ### 测试
 
-- [ ] 启用/替换 `FacadeCommUsage.ConfigThreadRealtimeControlThread`。
-- [ ] 启用/替换 `FacadeCommUsage.RealtimeCycleDrainsMessages`。
-- [ ] mailbox 多次 publish 后实时线程只消费最新值。
-- [ ] `try_load_newer_than()` 不重复消费旧 sequence。
-- [ ] `drain_for_cycle()` 不超过每周期预算。
-- [ ] 满队列策略计数正确。
+- [x] 启用/替换 `FacadeCommUsage.ConfigThreadRealtimeControlThread`。
+- [x] 启用/替换 `FacadeCommUsage.RealtimeCycleDrainsMessages`。
+- [x] mailbox 多次 publish 后实时线程只消费最新值。
+- [x] `try_load_newer_than()` 不重复消费旧 sequence。
+- [x] `drain_for_cycle()` 不超过每周期预算。
+- [x] 满队列策略计数正确。
 
 ### 验收
 
-- [ ] 实时周期内可用非阻塞 API 消费最新配置或有限条消息。
-- [ ] producer 过快时，drop/overwrite/lag 均可观察。
+- [x] 实时周期内可用非阻塞 API 消费最新配置或有限条消息。
+- [x] producer 过快时，drop/overwrite/lag 均可观察。
 
 ---
 

@@ -49,8 +49,25 @@ TEST(FacadeCommUsage, SensorProducerPlannerConsumer) {
     EXPECT_EQ(frames.stats().received_count, 8U);
 }
 
-TEST(FacadeCommUsage, DISABLED_ConfigThreadRealtimeControlThread) {
-    GTEST_SKIP() << "TODO: enable when executor::comm::LatestMailbox<T> is introduced.";
+TEST(FacadeCommUsage, ConfigThreadRealtimeControlThread) {
+    struct ControlConfig {
+        int gain = 0;
+        bool enabled = false;
+    };
+
+    executor::comm::LatestMailbox<ControlConfig> config_box("control_config");
+    config_box.publish(ControlConfig{.gain = 1, .enabled = true});
+    config_box.publish(ControlConfig{.gain = 3, .enabled = true});
+
+    uint64_t seen_sequence = 0;
+    ControlConfig active_config;
+    ASSERT_TRUE(config_box.try_load_newer_than(seen_sequence, active_config, seen_sequence));
+
+    EXPECT_EQ(active_config.gain, 3);
+    EXPECT_TRUE(active_config.enabled);
+    EXPECT_EQ(seen_sequence, 2U);
+    EXPECT_FALSE(config_box.try_load_newer_than(seen_sequence, active_config, seen_sequence));
+    EXPECT_EQ(config_box.stats().overwritten_count, 1U);
 }
 
 TEST(FacadeCommUsage, DISABLED_InitThreadWorkerThread) {
@@ -61,8 +78,31 @@ TEST(FacadeCommUsage, DISABLED_StateWriterMonitorReader) {
     GTEST_SKIP() << "TODO: enable when executor::comm::DoubleBuffer<T> is introduced.";
 }
 
-TEST(FacadeCommUsage, DISABLED_RealtimeCycleDrainsMessages) {
-    GTEST_SKIP() << "TODO: enable when executor::comm::RealtimeChannel<T> is introduced.";
+TEST(FacadeCommUsage, RealtimeCycleDrainsMessages) {
+    executor::comm::RealtimeChannelOptions options;
+    options.capacity = 8;
+    options.max_items_per_cycle = 2;
+
+    executor::comm::RealtimeChannel<int> commands(options);
+    ASSERT_TRUE(commands.try_send(10));
+    ASSERT_TRUE(commands.try_send(20));
+    ASSERT_TRUE(commands.try_send(30));
+
+    int applied_sum = 0;
+    const size_t first_cycle = commands.drain_for_cycle([&](int command) {
+        applied_sum += command;
+    });
+
+    EXPECT_EQ(first_cycle, 2U);
+    EXPECT_EQ(applied_sum, 30);
+    EXPECT_EQ(commands.stats().current_depth, 1U);
+
+    const size_t second_cycle = commands.drain_for_cycle([&](int command) {
+        applied_sum += command;
+    });
+    EXPECT_EQ(second_cycle, 1U);
+    EXPECT_EQ(applied_sum, 60);
+    EXPECT_TRUE(commands.empty());
 }
 
 } // namespace

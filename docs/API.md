@@ -20,7 +20,7 @@
 #include <executor/comm.hpp>
 ```
 
-当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型和后续组件的前置声明。`MpscChannel`、`LatestMailbox`、`PhaseGate`、`DoubleBuffer`、`RealtimeChannel` 等行为组件将在通信 facade 后续阶段逐步开放。
+当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型、`MpscChannel` / `SpscChannel`、`LatestMailbox` 和 `RealtimeChannel`。`PhaseGate`、`DoubleBuffer` 等行为组件将在通信 facade 后续阶段逐步开放。
 
 ---
 
@@ -909,15 +909,16 @@ if (!result) {
 - **CommErrorCode**：`Ok`、`Closed`、`Full`、`Empty`、`Timeout`、`Stale`、`MissedPhase`、`InvalidArgument`、`NotReady`、`Unknown`。
 - **CommResult**：`ok`、`error_code`、`message`，支持 `operator bool()`、`success()`、`failure()`。
 - **ChannelOptions**：`capacity`、`drop_policy`、`enable_stats`、`name`，用于配置 typed channel。
+- **RealtimeChannelOptions**：`capacity`、`max_items_per_cycle`、`drop_policy`、`enable_stats`、`name`，用于配置实时周期内有限 drain 的消息通道。
 - **DropPolicy**：`RejectNewest`（默认策略）、`DropOldest`、`KeepLatest`。
-- **CommStats**：发送/接收/drop/覆盖/超时/missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
+- **CommStats**：发送/接收/drop/覆盖/超时、handler 异常、missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
 - **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。
 
-Typed Channel 已开放；`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot`、`DoubleBuffer` 仍是后续阶段组件。
+Typed Channel、`LatestMailbox` 和 `RealtimeChannel` 已开放；`PhaseGate`、`Sequencer`、`Snapshot`、`DoubleBuffer` 仍是后续阶段组件。
 
 ### 7.5 Typed Channel
 
-`MpscChannel<T>` 提供类型安全的有界多生产者/单消费者通道，适合采集线程到规划线程、控制线程到通信线程等普通跨线程数据传递。第一版内部使用受控锁保护非实时路径，支持非平凡类型和 move-only 类型；实时周期内消费消息应等待后续 `RealtimeChannel<T>`。
+`MpscChannel<T>` 提供类型安全的有界多生产者/单消费者通道，适合采集线程到规划线程、控制线程到通信线程等普通跨线程数据传递。第一版内部使用受控锁保护非实时路径，支持非平凡类型和 move-only 类型；实时周期内消费有限消息应优先使用 `RealtimeChannel<T>`。
 
 ```cpp
 executor::comm::ChannelOptions options;
@@ -950,7 +951,56 @@ auto stats = frames.stats();
 
 默认 `RejectNewest` 满队列时拒绝新消息并增加 `dropped_count`；`DropOldest` 满队列时丢弃最旧消息再接收新消息；`KeepLatest` 保留最新值，适合后续 mailbox 风格场景。
 
-### 7.6 TaskPriority
+### 7.6 Realtime Mailbox / RealtimeChannel
+
+`LatestMailbox<T>` 适合“配置线程发布、实时控制线程每周期只消费最新值”的场景。它只保留最近一次发布的值，并用单调递增的 sequence 帮助实时线程避免重复消费旧配置。
+
+```cpp
+executor::comm::LatestMailbox<ControlConfig> config_box("control_config");
+
+config_box.publish(load_config());
+
+uint64_t seen = 0;
+ControlConfig config;
+if (config_box.try_load_newer_than(seen, config, seen)) {
+    apply_config(config);
+}
+```
+
+主要 API：
+
+- `publish(const T&)` / `publish(T&&)`：发布最新值；覆盖已有值时增加 `overwritten_count`。
+- `try_load(T&)`：读取当前最新值；从未发布时返回 `false`。
+- `try_load_newer_than(last_seen, out, new_sequence)`：仅在 sequence 更新时返回 `true`，未更新时增加 `stale_read_count`。
+- `sequence()` / `stats()` / `set_event_callback(...)`：观察当前版本、统计和低频诊断事件。
+
+`RealtimeChannel<T>` 适合实时周期内 drain 一批消息但不能无限处理的场景。`drain_for_cycle(handler, max_items)` 不等待 condition variable；`max_items == 0` 时使用 `RealtimeChannelOptions::max_items_per_cycle`。这与 `RealtimeThreadConfig::max_tasks_per_cycle` 的语义保持一致：`0` 表示不限，非 0 表示本周期预算上限；生产环境建议保留明确上限以维持周期确定性。
+
+```cpp
+executor::comm::RealtimeChannelOptions options;
+options.capacity = 128;
+options.max_items_per_cycle = 8;
+options.drop_policy = executor::comm::DropPolicy::RejectNewest;
+
+executor::comm::RealtimeChannel<ControlCommand> commands(options);
+
+commands.try_send(ControlCommand{});
+
+commands.drain_for_cycle([&](ControlCommand& command) {
+    apply_command(command);
+});
+```
+
+主要 API：
+
+- `try_send(const T&)` / `try_send(T&&)`：非阻塞发送；满队列或关闭后返回 `false`。
+- `drain_for_cycle(handler, max_items = 0)`：实时周期入口，最多处理预算条消息并返回实际处理数量。
+- `close()` / `is_closed()`：关闭生产者入口；已缓存消息仍可 drain。
+- `stats()`：观察发送、接收、drop/overwrite、关闭后发送、当前深度和峰值。
+
+handler 抛异常时，`drain_for_cycle()` 停止本轮 drain，增加 `handler_exception_count`，触发 `HandlerException` 诊断事件，并将异常继续外抛；是否桥接到 `Executor` failure event 由调用方或后续集成层决定。
+
+### 7.7 TaskPriority
 
 ```cpp
 enum class TaskPriority { LOW = 0, NORMAL = 1, HIGH = 2, CRITICAL = 3 };

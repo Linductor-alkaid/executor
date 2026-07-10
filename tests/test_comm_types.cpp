@@ -65,6 +65,7 @@ TEST(CommTypesTest, DropPolicyAndEventKindStringifyToStableNames) {
     EXPECT_STREQ(comm_event_kind_to_string(CommEventKind::ProducerLag), "ProducerLag");
     EXPECT_STREQ(comm_event_kind_to_string(CommEventKind::ConsumerLag), "ConsumerLag");
     EXPECT_STREQ(comm_event_kind_to_string(CommEventKind::LatencyHigh), "LatencyHigh");
+    EXPECT_STREQ(comm_event_kind_to_string(CommEventKind::HandlerException), "HandlerException");
 }
 
 TEST(CommTypesTest, StatsDefaultToZeroLatencyAndCounts) {
@@ -77,6 +78,7 @@ TEST(CommTypesTest, StatsDefaultToZeroLatencyAndCounts) {
     EXPECT_EQ(stats.stale_read_count, 0U);
     EXPECT_EQ(stats.closed_send_count, 0U);
     EXPECT_EQ(stats.timeout_count, 0U);
+    EXPECT_EQ(stats.handler_exception_count, 0U);
     EXPECT_EQ(stats.missed_phase_count, 0U);
     EXPECT_EQ(stats.current_depth, 0U);
     EXPECT_EQ(stats.peak_depth, 0U);

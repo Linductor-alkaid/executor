@@ -105,6 +105,14 @@ struct ChannelOptions {
     std::string name;
 };
 
+struct RealtimeChannelOptions {
+    size_t capacity = 1024;
+    size_t max_items_per_cycle = 64;
+    DropPolicy drop_policy = DropPolicy::RejectNewest;
+    bool enable_stats = true;
+    std::string name;
+};
+
 /**
  * @brief Local cumulative communication statistics.
  */
@@ -116,6 +124,7 @@ struct CommStats {
     uint64_t stale_read_count = 0;
     uint64_t closed_send_count = 0;
     uint64_t timeout_count = 0;
+    uint64_t handler_exception_count = 0;
     uint64_t missed_phase_count = 0;
     uint64_t current_depth = 0;
     uint64_t peak_depth = 0;
@@ -135,7 +144,8 @@ enum class CommEventKind {
     MissedPhase,
     ProducerLag,
     ConsumerLag,
-    LatencyHigh
+    LatencyHigh,
+    HandlerException
 };
 
 inline const char* comm_event_kind_to_string(CommEventKind kind) noexcept {
@@ -158,6 +168,8 @@ inline const char* comm_event_kind_to_string(CommEventKind kind) noexcept {
         return "ConsumerLag";
     case CommEventKind::LatencyHigh:
         return "LatencyHigh";
+    case CommEventKind::HandlerException:
+        return "HandlerException";
     default:
         return "Unknown";
     }
