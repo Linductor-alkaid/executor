@@ -7,8 +7,8 @@ on:
     branches: [ master ]
   workflow_dispatch:
   schedule:
-    # Nightly sanitizer coverage. Regular PR gating is handled by build-and-test
-    # plus lockfree-queue below; scheduled runs are intentionally TSAN-only.
+    # Nightly focused concurrency coverage. Regular PR gating also runs
+    # build-and-test, TSAN, and the lockfree worker queue functional suite.
     - cron: '0 19 * * *'
 
 jobs:
@@ -96,11 +96,10 @@ jobs:
         retention-days: 7
 
   lockfree-queue:
-    # LockfreeWorkerQueue path is exercised manually/scheduled as functional
-    # coverage. Benchmarks and stress tests are intentionally excluded by name
-    # below: on 2-vCPU GitHub runners they are too noisy to be reliable
-    # pass/fail signals for the lockfree queue implementation.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # LockfreeWorkerQueue path is exercised as focused functional coverage.
+    # Benchmarks and stress tests are intentionally excluded by name below:
+    # on 2-vCPU GitHub runners they are too noisy to be reliable pass/fail
+    # signals for the lockfree queue implementation.
     name: Lockfree worker queue - gcc 11 Release
     runs-on: ubuntu-22.04
 
@@ -132,7 +131,6 @@ jobs:
       run: ctest -C Release --output-on-failure --verbose -E '^(benchmark_|test_(performance|stress)$)'
 
   thread-sanitizer:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     name: ThreadSanitizer concurrency tests - gcc 11 Release
     runs-on: ubuntu-22.04
 
