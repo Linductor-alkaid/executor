@@ -85,7 +85,8 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
         return false;
     }
 
-    initialized_.store(true);
+    initialized_.store(true, std::memory_order_release);
+    condition_.notify_all();
     return true;
 }
 
@@ -134,6 +135,21 @@ void ThreadPool::rollback_initialization_failure() {
 }
 
 void ThreadPool::worker_thread(size_t worker_id) {
+    // Workers are created before initialize() can publish a usable pool.
+    // Keep them out of the scheduling path until that publication succeeds;
+    // an initialization rollback instead sets stop_ and releases them to exit.
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        condition_.wait(lock, [this]() {
+            return initialized_.load(std::memory_order_acquire) ||
+                   stop_.load(std::memory_order_acquire);
+        });
+
+        if (stop_.load(std::memory_order_acquire)) {
+            return;
+        }
+    }
+
     while (true) {
         Task task;
         bool has_task = false;
