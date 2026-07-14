@@ -43,6 +43,9 @@
 - **Real-Time Facade Push and Backpressure Counters**
   Use `Executor::push_realtime_task()` / `try_push_realtime_task()` to push real-time work without touching `IRealtimeExecutor*`. Failures return `false` and are observable via failure events plus counters such as `dropped_task_count`, `queue_full_count`, and `pool_exhausted_count`; the existing `push_task()` API remains compatible.
 
+- **Clear Integration Boundaries**
+  `submit_periodic()` schedules periodic work on the general asynchronous pool and is not a dedicated real-time thread. Real-time threads consume bounded queues per cycle; `wait_for_completion()` waits only for the asynchronous executor; a separate hard-zero bypass handles emergency stops; and application code retains the thread-safety responsibility for stateful algorithms such as PIDs. See the [API integration contract](docs/API.md#43-集成契约周期队列与安全路径) for the complete boundaries and deployment status.
+
 - **Diagnosable Facade Setup APIs**
   `initialize_ex()`, `register_realtime_task_ex()`, `start_realtime_task_ex()`, and `register_gpu_executor_ex()` return `ExecutorResult` with stable error codes such as `InvalidConfig`, `DuplicateName`, `NotFound`, `BackendUnavailable`, and `StartFailed`; legacy `bool` APIs delegate to these paths.
 

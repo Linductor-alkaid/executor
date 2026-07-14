@@ -73,7 +73,7 @@ void set_current_thread_name(const std::string& name);
  *
  * @param slack_ns timer slack（纳秒）
  */
-void set_current_thread_timer_slack_ns(uint64_t slack_ns);
+bool set_current_thread_timer_slack_ns(uint64_t slack_ns);
 
 } // namespace util
 } // namespace executor

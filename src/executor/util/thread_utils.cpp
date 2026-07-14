@@ -124,8 +124,9 @@ void set_current_thread_name(const std::string& name) {
     SetThreadDescription(GetCurrentThread(), wname.c_str());
 }
 
-void set_current_thread_timer_slack_ns(uint64_t /*slack_ns*/) {
+bool set_current_thread_timer_slack_ns(uint64_t /*slack_ns*/) {
     // Windows 不支持 per-thread timer slack，空实现
+    return false;
 }
 
 #elif defined(__linux__)
@@ -256,8 +257,8 @@ void set_current_thread_name(const std::string& name) {
     pthread_setname_np(pthread_self(), truncated.c_str());
 }
 
-void set_current_thread_timer_slack_ns(uint64_t slack_ns) {
-    prctl(PR_SET_TIMERSLACK, static_cast<unsigned long>(slack_ns));
+bool set_current_thread_timer_slack_ns(uint64_t slack_ns) {
+    return prctl(PR_SET_TIMERSLACK, static_cast<unsigned long>(slack_ns)) == 0;
 }
 
 #endif

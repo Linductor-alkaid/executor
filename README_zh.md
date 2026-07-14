@@ -43,6 +43,9 @@
 - **实时 facade 推送与背压计数器**
   新代码优先使用 `Executor::push_realtime_task()` / `try_push_realtime_task()` 推送实时任务，无需接触 `IRealtimeExecutor*`。失败会返回 `false`，并进入 failure event 及 `dropped_task_count`、`queue_full_count`、`pool_exhausted_count` 等状态计数；既有 `push_task()` API 继续兼容。
 
+- **集成边界清晰**
+  `submit_periodic()` 是普通异步线程池上的周期提交，不等同于专用实时线程。实时线程按周期消费有界队列；`wait_for_completion()` 只等待异步执行器；紧急停止由独立硬零旁路处理；PID 等有状态算法的线程安全性由应用保持。完整边界与部署状态见 [API 集成契约](docs/API.md#43-集成契约周期队列与安全路径)。
+
 - **可诊断的 facade 配置 API**
   `initialize_ex()`、`register_realtime_task_ex()`、`start_realtime_task_ex()`、`register_gpu_executor_ex()` 返回 `ExecutorResult`，可通过 `InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed` 等稳定错误码判断原因；旧 `bool` API 委托到这些路径。
 

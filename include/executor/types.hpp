@@ -273,6 +273,10 @@ struct RealtimeExecutorStatus {
     int64_t cycle_timeout_count = 0;              // 周期超时计数
     double avg_cycle_time_ns = 0.0;                // 平均周期执行时间（纳秒）
     double max_cycle_time_ns = 0.0;               // 最大周期执行时间（纳秒）
+    bool priority_applied = false;                // 请求的实时调度/优先级是否成功应用
+    bool cpu_affinity_applied = false;            // 请求的 CPU 亲和性是否成功应用
+    bool memory_locked = false;                   // 请求的内存锁定是否成功应用
+    bool timer_slack_applied = false;             // 请求的 timer slack 是否成功应用
     // P-001 (260615): 背压可见性字段
     uint64_t dropped_task_count = 0;              // 累计丢任务数 (未运行+空任务+队列满+池耗尽, 始终累计)
     uint64_t failed_pushes = 0;                   // LockFreeQueue 失败入队数 (仅 enable_stats=true)

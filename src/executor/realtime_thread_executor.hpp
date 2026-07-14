@@ -186,6 +186,10 @@ private:
     std::atomic<int64_t> cycle_timeout_count_{0};   // 周期超时计数
     std::atomic<int64_t> avg_cycle_time_ns_{0};     // 平均周期执行时间（纳秒）
     std::atomic<int64_t> max_cycle_time_ns_{0};     // 最大周期执行时间（纳秒）
+    std::atomic<bool> priority_applied_{false};
+    std::atomic<bool> cpu_affinity_applied_{false};
+    std::atomic<bool> memory_locked_{false};
+    std::atomic<bool> timer_slack_applied_{false};
 
     // P-001 (260615): 背压可见性 — 始终累计, 与 enable_stats 无关.
     // 未运行 / 空任务 / 队列满 / 对象池耗尽 任一路径触发 drop 时 +1.

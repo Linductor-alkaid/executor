@@ -73,11 +73,15 @@ bool RealtimeThreadExecutor::start() {
                 auto_priority = 50;  // 软实时, 中周期
             }  // > 10ms 保持 0 (普通调度够用)
             if (auto_priority > 0) {
-                util::set_thread_priority(self_handle, auto_priority);
+                priority_applied_.store(
+                    util::set_thread_priority(self_handle, auto_priority),
+                    std::memory_order_release);
             }
         } else if (config_.thread_priority != 0) {
             // 用户显式设了, 尊重覆盖
-            util::set_thread_priority(self_handle, config_.thread_priority);
+            priority_applied_.store(
+                util::set_thread_priority(self_handle, config_.thread_priority),
+                std::memory_order_release);
         }
 
         // CPU 亲和性: 空 = 自适应 sentinel, 用 round-robin 跨核分布; 显式设值尊重覆盖
@@ -90,15 +94,20 @@ bool RealtimeThreadExecutor::start() {
                 const unsigned hint =
                     g_next_rt_cpu_hint.fetch_add(1, std::memory_order_relaxed);
                 const int cpu = allowed_cpus[hint % allowed_cpus.size()];
-                util::set_cpu_affinity(self_handle, {cpu});
+                cpu_affinity_applied_.store(
+                    util::set_cpu_affinity(self_handle, {cpu}),
+                    std::memory_order_release);
             }
         } else {
-            util::set_cpu_affinity(self_handle, config_.cpu_affinity);
+            cpu_affinity_applied_.store(
+                util::set_cpu_affinity(self_handle, config_.cpu_affinity),
+                std::memory_order_release);
         }
 
         // 锁定内存，避免分页到 swap 引入抖动（默认开启，失败静默回退；用户可显式设 false 关闭）
         if (config_.enable_memory_lock) {
-            util::try_mlock_current_thread();
+            memory_locked_.store(
+                util::try_mlock_current_thread(), std::memory_order_release);
         }
 
         // 设置线程名，便于 top/htop/perf 调试
@@ -108,7 +117,9 @@ bool RealtimeThreadExecutor::start() {
 
         // 降低 timer slack，减少定时唤醒抖动（默认 1ns；0 为显式 opt-out，保留内核默认）
         if (config_.timer_slack_ns > 0) {
-            util::set_current_thread_timer_slack_ns(config_.timer_slack_ns);
+            timer_slack_applied_.store(
+                util::set_current_thread_timer_slack_ns(config_.timer_slack_ns),
+                std::memory_order_release);
         }
 
         // 如果提供了外部周期管理器，使用它进行精确周期控制
@@ -400,6 +411,10 @@ RealtimeExecutorStatus RealtimeThreadExecutor::get_status() const {
     status.cycle_timeout_count = cycle_timeout_count_.load(std::memory_order_acquire);
     status.avg_cycle_time_ns = static_cast<double>(avg_cycle_time_ns_.load(std::memory_order_acquire));
     status.max_cycle_time_ns = static_cast<double>(max_cycle_time_ns_.load(std::memory_order_acquire));
+    status.priority_applied = priority_applied_.load(std::memory_order_acquire);
+    status.cpu_affinity_applied = cpu_affinity_applied_.load(std::memory_order_acquire);
+    status.memory_locked = memory_locked_.load(std::memory_order_acquire);
+    status.timer_slack_applied = timer_slack_applied_.load(std::memory_order_acquire);
     // P-001 (260615): 背压可见性
     status.dropped_task_count = dropped_task_count_.load(std::memory_order_acquire);
     status.rejected_not_running_count =

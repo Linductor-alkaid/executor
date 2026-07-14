@@ -314,6 +314,12 @@ bool cancel_task(const std::string& task_id);
 - `submit_periodic`：按 `period_ms` 周期重复执行，返回任务 ID。
 - `cancel_task`：取消对应周期性任务。
 
+#### 集成契约：普通周期任务不是实时线程
+
+`submit_periodic()` 只负责在 Facade 的定时器到期后，将回调提交给**普通异步线程池**。它不创建专用线程，也不承诺实时调度策略、CPU 亲和性、内存锁定、确定性唤醒或不被其他异步任务延迟。回调运行时间超过周期，或线程池拥堵时，后续一次提交可以与前一次回调重叠；因此同一个有状态对象不能被周期回调并发访问，除非应用自行串行化。
+
+`submit_periodic()` 提供允许抖动的遥测、健康检查和后台刷新能力。固定控制周期、单线程状态所有权和实时调度尝试由第 4 节的专用实时线程提供。
+
 ---
 
 ## 4. 实时任务 API（专用线程）
@@ -346,6 +352,18 @@ std::vector<std::string> get_realtime_task_list() const;
 - `push_realtime_task` / `try_push_realtime_task`：推荐任务推送入口；失败返回 `false`，并写入 failure event / 状态计数。
 - `get_realtime_executor`：高级逃生口，用于直接访问 `push_task_ex` 等底层操作；若不存在返回 `nullptr`。
 - `get_realtime_task_list`：当前已注册的实时任务名称列表。
+
+### 4.3 集成契约：周期、队列与安全路径
+
+- 专用实时线程采用“每周期执行 `cycle_callback`，再在该线程中消费已入队工作”的模型，不是可无限 `drain()` 的串行执行器。`max_tasks_per_cycle` 默认限制为 64，剩余工作会留到后续周期，以保护周期预算。`LatestMailbox` 和有界通信通道提供最新状态传递能力，不会在周期内清空无界历史积压。
+- `push_realtime_task()` 是有界、可拒绝的队列入口；返回值表示本次是否成功入队。`dropped_task_count`、`queue_full_count` 与 `pool_exhausted_count` 提供拒绝和背压统计。入队成功只表示工作会在实时线程的后续周期处理，不表示已完成。
+- `wait_for_completion()` / `wait_for_completion_ex()` 仅等待默认**异步执行器**已提交任务完成，不等待实时线程的周期回调或实时队列。视觉、控制等多消费者流水线的完成状态由应用自己的确认序号、future 或 `PhaseGate` 汇总。
+- `push_realtime_task()` 会等待实时线程的后续周期消费，因此不构成紧急停止路径。紧急停止由应用提供的独立硬零旁路执行，例如直接写安全 I/O、硬件急停或经过安全控制器的同步命令；实时队列承载常规控制工作。
+- executor 提供并行调度，不改变业务算法的线程安全属性。PID、限幅器、轨迹跟踪器等有状态对象可由一个控制线程串行访问；其他线程可通过消息传递输入数据或读取已发布快照。
+
+### 4.4 实时调优的降级与部署检查
+
+Linux 上请求 `SCHED_FIFO`、CPU 亲和性和 `mlockall` 可能因 `CAP_SYS_NICE`、`CAP_IPC_LOCK`、容器 cpuset 或平台限制而失败；库会继续运行以保持可用性。这不表示所请求的调优已经生效。`RealtimeExecutorStatus` 通过 `priority_applied`、`cpu_affinity_applied`、`memory_locked` 和 `timer_slack_applied` 报告各项请求的实际结果；未请求、平台不支持或权限不足的项目均为 `false`。这些字段可与周期统计和丢弃计数共同构成应用的健康或降级状态。
 
 ---
 
@@ -907,6 +925,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `cycle_timeout_count` (int64_t)：超时周期计数。
   - `avg_cycle_time_ns` (double)：平均周期执行时间（纳秒）。
   - `max_cycle_time_ns` (double)：最大周期执行时间（纳秒）。
+  - `priority_applied` / `cpu_affinity_applied` / `memory_locked` / `timer_slack_applied` (bool)：请求的实时优先级、CPU 亲和性、内存锁定和 timer slack 是否成功应用；未请求或平台不支持/权限不足时为 `false`，用于将调优降级显式上报。
   - `dropped_task_count` (uint64_t)：累计丢任务数（队列满 + 对象池耗尽，**始终累计**，不受 `enable_stats` 影响；P-001 260615 引入的背压可见性核心指标，应作为告警依据）。
   - `failed_pushes` (uint64_t)：LockFreeQueue 失败入队数（仅 `enable_stats=true` 时由底层队列统计；与 `dropped_task_count` 的子集：仅含"队列满"那一部分）。
   - `peak_queue_size` (uint64_t)：队列峰值长度（仅 `enable_stats=true`）。
@@ -918,7 +937,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 - **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。执行前软超时增加 `timeout_count`，不增加 `fail_count`。
 - **ExecutorFailureStatus**：`task_exception_count`、`submit_rejected_count`、`timeout_count`、`realtime_drop_count`、`gpu_failure_count`、`wait_timeout_count`、`tuning_fallback_count`、`total_count`。`wait_for_completion()` 或 `try_wait_for_completion(timeout)` 等待超时时记录 `FailureKind::WaitTimeout` 并增加 `wait_timeout_count`；这只表示等待动作超时，不表示任务被取消、panic 或抛异常。
 - **ExecutorResult**：`ok`、`error_code`、`message`，用于 `initialize_ex`、`register_realtime_task_ex`、`start_realtime_task_ex`、`register_gpu_executor_ex`。常见 `ExecutorErrorCode`：`AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed`、`PermissionDenied`。`_ex` 失败会写入 failure/diagnostic event，但配置错误不会计入 `task_exception_count`。
-- **CompletionStatus**：`executor_name`、`is_initialized`、`is_running`、`is_idle`、`active_tasks`、`queued_tasks`、`pending_tasks`、`completed_tasks`、`failed_tasks`。由 `get_completion_status()` 和 `WaitResult::status` 返回；状态查询不会触发默认异步执行器懒初始化。
+- **CompletionStatus**：`executor_name`、`is_initialized`、`is_running`、`is_idle`、`active_tasks`、`queued_tasks`、`pending_tasks`、`completed_tasks`、`failed_tasks`。由 `get_completion_status()` 和 `WaitResult::status` 返回；状态查询不会触发默认异步执行器懒初始化。它仅描述默认异步执行器，不包含实时线程、实时队列或应用自建的多消费者流水线；跨视觉、控制等消费者的 idle 状态由应用定义并汇总。
 - **WaitResult**：`completed`、`timed_out`、`timeout`、`status`、`message`。由 `wait_for_completion_ex(timeout)` 返回；超时会记录 `FailureKind::WaitTimeout` 并保留当时的 pending 状态快照。
 - **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
