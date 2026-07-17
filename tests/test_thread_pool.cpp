@@ -514,6 +514,9 @@ bool test_thread_pool_exception_handling() {
         throw std::runtime_error("Test exception");
         return 42;
     });
+
+    future.wait();
+    pool.shutdown();
     
     // 应该能够捕获异常
     bool exception_caught = false;
@@ -525,8 +528,6 @@ bool test_thread_pool_exception_handling() {
     }
     
     TEST_ASSERT(exception_caught, "Exception should be caught");
-    
-    pool.shutdown();
     
     std::cout << "  ThreadPool exception handling: PASSED" << std::endl;
     return true;
