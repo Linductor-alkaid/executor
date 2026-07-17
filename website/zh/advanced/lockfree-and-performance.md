@@ -31,7 +31,17 @@ queue.stop();
 
 ## 当前内部结构
 
-当前实现中的 `LockFreeQueue` 提供有界入队/出队；`ObjectPool` 预分配任务包装以避免热路径分配。对象池的正确性优先于“所有东西都无锁”：其 acquire/release 使用互斥保护 free list，以避免 ABA、外来指针和重复释放问题。线程池内的 `WorkerLocalQueue`、工作窃取和对象池同样是实现细节，不能从 `src/` 直接集成。
+### 生产、消费与停止
+
+每次 `push_task()` 先拒绝空函数，再通过 `active_pushes_` 登记生产者，随后从固定容量 `ObjectPool` 获取 wrapper，写入 `std::function` 后尝试压入有界 `LockFreeQueue`。任一环节失败都返回 `false`；调用方要把它视作明确背压，而不是重试到无限期。
+
+唯一消费者一次最多 `pop_batch(32)` 项，逐个执行并归还 wrapper。空队列时采用三级退避：短暂 CPU pause、自旋后 `yield`，再退化为 1 微秒 sleep；停止时先阻止新 producer、等待已登记 producer 离开，再停止 worker 并 drain 剩余队列。这个顺序避免 producer 在最终 drain 后继续放入任务。
+
+### “无锁”的实际范围
+
+当前实现中的 `LockFreeQueue` 提供有界入队/出队；`ObjectPool` 预分配任务包装以避免热路径分配。对象池的正确性优先于“所有东西都无锁”：其 acquire/release 使用 mutex 保护 free list，以避免 ABA、外来指针和重复释放问题。异常 handler 的读取/更新同样受 mutex 保护。换言之，队列是无锁的，执行器整体不是 lock-free 进度保证；这是用可验证的内存回收正确性换取的工程选择。
+
+线程池内的 `WorkerLocalQueue`、工作窃取和对象池同样是实现细节，不能从 `src/` 直接集成。
 
 ## 如何验证性能
 
@@ -43,6 +53,8 @@ queue.stop();
 | 是否改善真实端到端延迟？ | 测量提交、排队、执行和尾延迟，而非只看单次 microbenchmark。 |
 
 性能数字只在测量环境内成立。记录版本、编译器、构建类型、硬件、频率/功耗策略、任务体、并发度与统计方法；不要把一次基准结果写成接口承诺。
+
+对应源码入口：[`src/executor/lockfree_task_executor.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/src/executor/lockfree_task_executor.cpp)、[`src/executor/util/lockfree_queue.hpp`](https://github.com/Linductor-alkaid/executor/blob/master/src/executor/util/lockfree_queue.hpp) 和 [`src/util/object_pool.hpp`](https://github.com/Linductor-alkaid/executor/blob/master/src/util/object_pool.hpp)。
 
 ## 下一步阅读
 
