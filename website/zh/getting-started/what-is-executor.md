@@ -101,7 +101,7 @@ try {
 1. 用默认配置运行[第一个任务](/zh/quick-start/first-task)，确认构建、链接、返回值和异常路径。
 2. 在真实组件边界确定[初始化与关闭](/zh/quick-start/lifecycle)的 owner。
 3. 按自然语言需求阅读[如何选择提交接口](/zh/guides/choosing-submit-api)，不要从 API 名称反推设计。
-4. 为长期服务建立[生产接入检查清单](/zh/guides/production-readiness)，补齐有界等待与失败观察。
+4. 现有项目先按[从线程代码迁移](/zh/guides/migrating-existing-threads)划清所有权，再用[生产接入检查清单](/zh/guides/production-readiness)补齐有界等待与失败观察。
 5. 只有需求明确时，再进入实时与通信、GPU 或高级逃生口。
 
 如果目前只想验证项目能否工作，下一页直接进入[构建与安装](/zh/quick-start/build)。

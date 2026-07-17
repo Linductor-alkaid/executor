@@ -7,6 +7,8 @@ description: 在长期运行服务中明确 Executor 的所有权、失败观察
 
 教程跑通只证明编译、链接和基本语义正确。真正接入服务前，还要把 Executor 放进应用的生命周期、容量和故障模型中。本页按接入顺序给出一套最小评审清单。
 
+如果项目仍在使用 detached thread、`std::async` 或自建任务队列，先阅读[从现有线程代码迁移](/zh/guides/migrating-existing-threads)；检查已完成的设计时，可用[并发架构反模式](/zh/guides/concurrency-antipatterns)从症状反查。
+
 ## 1. 确定运行时 owner
 
 默认单例适合进程内共享线程池；独立 `Executor` 实例适合测试隔离、插件隔离或不同组件需要独立关闭的场景。不要在每次请求中创建 Executor，也不要让多个模块都认为自己可以关闭共享单例。

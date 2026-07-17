@@ -100,7 +100,7 @@ fire-and-forget 只是省略逐项 future，不等于 failure-and-forget。
 
 “加载模型 → 并行预处理 → 规划”属于任务图，而不是优先级问题。先用 `submit_with_handle()` 获得 `TaskHandle`，再用 `submit_after()` 或 `when_all()` 建立依赖。前置任务失败时，后续任务不会照常执行，其 future 会体现依赖失败。
 
-不要提交一个任务后在另一个 worker 任务内部直接 `future.get()` 等它，尤其在线程数较少时；大量互等会占满 worker。任务依赖让等待发生在调度层，而不是用阻塞 worker 模拟顺序。
+不要在任意业务 lambda 中用 `future.get()` 隐藏任务关系；显式 handle 能校验依赖并统一传播失败。但当前 dependent wrapper 仍会进入线程池等待前置状态，并非完全非阻塞调度。大量依赖链在低线程数下仍可能占满 worker，应先提交前置任务、限制在途图规模，并在最小线程配置下验证。需要大规模动态 DAG 时选择专门图调度器。
 
 `TaskHandle` 只在创建它的 Executor 实例内有效。无效 handle、未知 handle 或跨实例混用属于配置错误，不应作为正常重试路径。
 

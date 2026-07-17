@@ -59,6 +59,8 @@ export default defineConfig({
           items: [
             { text: '如何选择提交接口', link: '/zh/guides/choosing-submit-api' },
             { text: '如何选择通信组件', link: '/zh/guides/choosing-communication' },
+            { text: '从现有线程代码迁移', link: '/zh/guides/migrating-existing-threads' },
+            { text: '并发架构反模式', link: '/zh/guides/concurrency-antipatterns' },
             { text: '生产接入检查清单', link: '/zh/guides/production-readiness' }
           ]
         }
