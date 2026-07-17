@@ -412,43 +412,43 @@
 
 ### 8.1 资源与生命周期逃生口
 
-- [ ] 对比全局单例和独立 `Executor` 实例。
-- [ ] 说明何时直接使用 `ExecutorManager`。
-- [ ] 说明 `get_realtime_executor()` / `get_gpu_executor()` 的高级用途与责任。
-- [ ] 说明公开接口与 `src/` 内部实现的稳定性边界。
+- [x] 对比全局单例和独立 `Executor` 实例。
+- [x] 说明何时直接使用 `ExecutorManager`。
+- [x] 说明 `get_realtime_executor()` / `get_gpu_executor()` 的高级用途与责任。
+- [x] 说明公开接口与 `src/` 内部实现的稳定性边界。
 
 ### 8.2 自定义周期源
 
-- [ ] 介绍 `ICycleManager` 的适用场景。
-- [ ] 提供最小实现和生命周期图。
-- [ ] 说明注册、启动、停止失败时的回退行为。
+- [x] 介绍 `ICycleManager` 的适用场景。
+- [x] 提供最小实现和生命周期图。
+- [x] 说明注册、启动、停止失败时的回退行为。
 
 ### 8.3 一次普通任务的执行路径
 
-- [ ] 讲解 `Executor → ExecutorManager → ThreadPoolExecutor → ThreadPool`。
-- [ ] 讲解优先级调度、任务分发、负载均衡、本地队列和工作窃取。
-- [ ] 讲解动态 resize、shutdown 和完成状态。
-- [ ] 将内部细节标注为实现说明，不承诺为稳定 API。
+- [x] 讲解 `Executor → ExecutorManager → ThreadPoolExecutor → ThreadPool`。
+- [x] 讲解优先级调度、任务分发、负载均衡、本地队列和工作窃取。
+- [x] 讲解动态 resize、shutdown 和完成状态。
+- [x] 将内部细节标注为实现说明，不承诺为稳定 API。
 
 ### 8.4 一次实时任务的执行路径
 
-- [ ] 讲解周期循环、callback、队列 drain、对象池和统计更新。
-- [ ] 讲解 MPSC 生产者与单消费者模型。
-- [ ] 讲解为什么实时路径避免锁、无限等待和运行期分配。
+- [x] 讲解周期循环、callback、队列 drain、对象池和统计更新。
+- [x] 讲解 MPSC 生产者与单消费者模型。
+- [x] 讲解为什么实时路径避免锁、无限等待和运行期分配。
 
 ### 8.5 无锁与性能
 
-- [ ] 介绍 `LockFreeTaskExecutor` 适用边界。
-- [ ] 介绍 LockFreeQueue、WorkerLocalQueue 和 ObjectPool 的职责。
-- [ ] 解释 ObjectPool 正确性优先于“全部无锁”的设计取舍。
-- [ ] 提供 benchmark 复现指南和结果解读方法。
-- [ ] 说明 TSAN、压力测试和性能测试各自回答的问题。
+- [x] 介绍 `LockFreeTaskExecutor` 适用边界。
+- [x] 介绍 LockFreeQueue、WorkerLocalQueue 和 ObjectPool 的职责。
+- [x] 解释 ObjectPool 正确性优先于“全部无锁”的设计取舍。
+- [x] 提供 benchmark 复现指南和结果解读方法。
+- [x] 说明 TSAN、压力测试和性能测试各自回答的问题。
 
 ### 验收
 
-- [ ] 用户知道何时需要离开 Facade，而不是把底层入口当默认方案。
-- [ ] 每个逃生口明确新增的生命周期、并发或平台责任。
-- [ ] 原理页面与当前实现一致，并链接对应设计和测试。
+- [x] 用户知道何时需要离开 Facade，而不是把底层入口当默认方案。
+- [x] 每个逃生口明确新增的生命周期、并发或平台责任。
+- [x] 原理页面与当前实现一致，并链接对应设计和测试。
 
 ---
 
