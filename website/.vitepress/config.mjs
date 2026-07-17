@@ -87,7 +87,13 @@ export default defineConfig({
       '/zh/realtime-and-communication/': [
         {
           text: '实时与通信',
-          items: [{ text: '组件选择', link: '/zh/realtime-and-communication/' }]
+          items: [
+            { text: '概览与边界', link: '/zh/realtime-and-communication/' },
+            { text: '启动专用实时控制循环', link: '/zh/realtime-and-communication/realtime-control' },
+            { text: '传递每一条消息', link: '/zh/realtime-and-communication/channels' },
+            { text: '传递最新值、快照和阶段', link: '/zh/realtime-and-communication/state-and-phases' },
+            { text: '通信可观察性', link: '/zh/realtime-and-communication/observability' }
+          ]
         }
       ],
       '/zh/gpu/': [

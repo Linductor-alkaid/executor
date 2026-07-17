@@ -335,46 +335,46 @@
 
 ### 6.1 实时线程
 
-- [ ] 从 CAN/控制循环场景解释为何需要专用周期线程。
-- [ ] 覆盖实时配置的最小必要字段。
-- [ ] 使用 `register_realtime_task_ex()` 和 `start_realtime_task_ex()` 展示可诊断启动。
-- [ ] 覆盖 `push_realtime_task()` / `try_push_realtime_task()`。
-- [ ] 覆盖 `stop_realtime_task()`、任务列表和状态查询。
-- [ ] 解释 CPU 亲和性、优先级、内存锁、timer slack 和平台权限的默认/回退语义。
-- [ ] 解释 `max_tasks_per_cycle`、skip-late、队列满和对象池耗尽。
-- [ ] 明确 Linux 与 Windows 的实时能力差异。
+- [x] 从 CAN/控制循环场景解释为何需要专用周期线程。
+- [x] 覆盖实时配置的最小必要字段。
+- [x] 使用 `register_realtime_task_ex()` 和 `start_realtime_task_ex()` 展示可诊断启动。
+- [x] 覆盖 `push_realtime_task()` / `try_push_realtime_task()`。
+- [x] 覆盖 `stop_realtime_task()`、任务列表和状态查询。
+- [x] 解释 CPU 亲和性、优先级、内存锁、timer slack 和平台权限的默认/回退语义。
+- [x] 解释 `max_tasks_per_cycle`、skip-late、队列满和对象池耗尽。
+- [x] 明确 Linux 与 Windows 的实时能力差异。
 
 ### 6.2 Channel 与 RealtimeChannel
 
-- [ ] 用采集线程到规划线程场景介绍 `MpscChannel<T>`。
-- [ ] 说明容量、FIFO、drop policy、close 和 timeout。
-- [ ] 用周期控制消费命令场景介绍 `RealtimeChannel<T>`。
-- [ ] 说明非阻塞 drain、单周期预算和 handler 异常。
+- [x] 用采集线程到规划线程场景介绍 `MpscChannel<T>`。
+- [x] 说明容量、FIFO、drop policy、close 和 timeout。
+- [x] 用周期控制消费命令场景介绍 `RealtimeChannel<T>`。
+- [x] 说明非阻塞 drain、单周期预算和 handler 异常。
 
 ### 6.3 Mailbox 与 DoubleBuffer
 
-- [ ] 用动态配置场景介绍 `LatestMailbox<T>`。
-- [ ] 用状态监控场景介绍 `DoubleBuffer<T>`。
-- [ ] 解释 sequence、新旧值判断、覆盖统计和单写多读边界。
+- [x] 用动态配置场景介绍 `LatestMailbox<T>`。
+- [x] 用状态监控场景介绍 `DoubleBuffer<T>`。
+- [x] 解释 sequence、新旧值判断、覆盖统计和单写多读边界。
 
 ### 6.4 PhaseGate 与 Sequencer
 
-- [ ] 用初始化、标定、运行阶段介绍 `PhaseGate`。
-- [ ] 用有序发布场景介绍 `Sequencer`。
-- [ ] 解释 timeout、close、phase 倒退和 missed phase。
+- [x] 用初始化、标定、运行阶段介绍 `PhaseGate`。
+- [x] 用有序发布场景介绍 `Sequencer`。
+- [x] 解释 timeout、close、phase 倒退和 missed phase。
 
 ### 6.5 通信可观察性
 
-- [ ] 统一解释 `CommStats` 和 `CommEventCallback`。
-- [ ] 展示 drop、overwrite、stale、latency、lag 和 missed phase。
-- [ ] 说明通信事件默认不进入 `ExecutorFailureStatus`。
+- [x] 统一解释 `CommStats` 和 `CommEventCallback`。
+- [x] 展示 drop、overwrite、stale、latency、lag 和 missed phase。
+- [x] 说明通信事件默认不进入 `ExecutorFailureStatus`。
 
 ### 验收
 
-- [ ] 用户能判断普通周期任务和实时线程的边界。
-- [ ] 用户能够根据数据语义而非底层实现选择通信组件。
-- [ ] 所有背压、覆盖、超时和时序错误均有可观察路径。
-- [ ] 实时教程的基本路径无需直接获取 `IRealtimeExecutor*`。
+- [x] 用户能判断普通周期任务和实时线程的边界。
+- [x] 用户能够根据数据语义而非底层实现选择通信组件。
+- [x] 所有背压、覆盖、超时和时序错误均有可观察路径。
+- [x] 实时教程的基本路径无需直接获取 `IRealtimeExecutor*`。
 
 ---
 
