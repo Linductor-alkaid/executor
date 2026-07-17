@@ -25,6 +25,7 @@
 .VPButton.alt { border-radius: 12px; border-color: var(--vp-c-divider); color: var(--vp-c-text-1); }
 .VPHomeHero { padding-top: 96px; padding-bottom: 64px; }
 .VPHomeHero .name, .VPHomeHero .text { font-weight: 400; letter-spacing: 0; }
+.VPHomeHero .text { text-wrap: balance; }
 .VPHomeFeatures { padding-top: 32px; padding-bottom: 96px; }
 .VPFeature { border: 0; border-radius: 10px; background: var(--vp-c-bg-soft); }
 .VPFeature .title { font-weight: 500; }
@@ -63,8 +64,13 @@
 .dark .VPDoc td { color: #e0e2e6; }
 .dark .version-note { background: #3b3020; color: #f8fafc; }
 
+@media (min-width: 960px) {
+  .VPHomeHero .text { max-width: 720px; }
+}
+
 @media (max-width: 767px) {
   .VPHomeHero { padding-top: 64px; }
+  .VPHomeHero .text { font-size: 26px; line-height: 36px; }
   .VPDoc h1 { font-size: 32px; }
   .VPDoc h2 { font-size: 28px; }
 }
