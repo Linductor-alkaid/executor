@@ -1,6 +1,6 @@
 ---
 title: 循序教程
-description: 以机器人数据流水线逐步学习 Executor Facade。
+description: 通过机器人数据流水线与服务端数据导入逐步学习 Executor Facade。
 ---
 
 # 循序教程
@@ -15,9 +15,12 @@ description: 以机器人数据流水线逐步学习 Executor Facade。
 4. [加载、感知与规划依赖](/zh/tutorial/dependencies)：让规划在前置工作完成后执行。
 5. [有界等待与状态快照](/zh/tutorial/waiting-and-status)：在切换阶段或关闭前可靠收尾。
 6. [完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)：把启动依赖、帧流、配置、控制命令、状态快照、诊断和退出组合起来。
+7. [服务端数据导入案例](/zh/tutorial/service-data-import)：验证依赖、批量、逐项失败和有界关闭同样适用于服务端请求。
 
 前五章分别引入一种普通任务问题；完整案例进一步连接 `examples/comm_robot_pipeline.cpp`，并明确哪些部分只是可移植教学模拟、哪些必须在生产中替换为实时 Facade、停止协议与过载策略。
 
 每章都按同一组问题深化：示例规模和并发假设是什么、异步对象由谁拥有、失败如何注入、退出时还会有哪些在途工作，以及需求变化后应该继续使用当前接口还是更换抽象。阅读时可直接把这些小节当作项目评审清单。
+
+服务端案例不是第二套 API 教程，而是对教学模型的交叉验证：机器人场景强调长期角色、通信和实时边界；数据导入场景强调请求生命周期、部分失败、事务、幂等和下游容量。
 
 需要直接按问题选接口时，进入[场景指南](/zh/guides/choosing-submit-api)；需要逐项深入控制循环和通信组件时，进入[实时与通信](/zh/realtime-and-communication/)。

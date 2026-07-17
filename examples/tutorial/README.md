@@ -13,6 +13,7 @@
 | `07_realtime.cpp` | 非特权实时线程路径 | 基础 | 是 |
 | `08_communication.cpp` | 最新值、消息流与快照 | 基础 | 是 |
 | `09_gpu.cpp` | 无后端 GPU 诊断与 CPU 回退 | 基础；不需要 CUDA/OpenCL | 是 |
+| `10_service_data_import.cpp` | 服务端数据导入与部分失败 | 基础 | 是 |
 
 构建并运行全部示例：
 

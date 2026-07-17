@@ -162,6 +162,7 @@
   - `07_realtime.cpp`
   - `08_communication.cpp`
   - `09_gpu.cpp`
+  - `10_service_data_import.cpp`
 - [x] 为教程示例增加统一的 CMake 构建入口。
 - [x] 明确每个示例所需选项：`01`–`09` 均走基础构建；`07` 使用非特权实时配置；`09` 验证无后端 GPU 诊断，不要求 CUDA/OpenCL 或设备。
 - [x] 为首个教程示例设计稳定、短小、可核对的输出。
@@ -180,7 +181,7 @@
 - [x] 基础 smoke tests 在 Linux CI 中可重复通过。
 - [x] Windows CI 已启用示例构建，能编译适用的教程示例。
 - [x] 教程片段与完整示例保持一致（首发片段使用 VitePress `<<< @` 引用）。
-- [x] 示例运行时间足够短，不显著拖慢常规 CI（本地 9 个 smoke tests 约 0.15 秒）。
+- [x] 示例运行时间足够短，不显著拖慢常规 CI（本地 10 个 smoke tests 约 0.10 秒，均为无外部服务路径）。
 
 ### 验收
 
@@ -554,7 +555,7 @@
 
 - [x] 将机器人数据流水线扩展为贯穿普通任务、依赖、通信、实时控制和观测的完整案例。
 - [x] 每章补充输入规模、所有权、并发假设、故障注入、退出行为和验证命令。
-- [ ] 增加一个非机器人案例，验证教程模型对服务端或数据处理用户同样可理解。
+- [x] 增加一个非机器人案例，验证教程模型对服务端或数据处理用户同样可理解。
 - [x] 为关键页面增加“需求变化时如何演进”小节，避免示例只展示静态最终代码。
 
 ### 12.3 排障与平台实践
@@ -636,6 +637,7 @@
 | 实时线程 | `07_realtime.cpp`、`examples/realtime_can.cpp` | 编译 + 非特权 smoke test |
 | 通信组件 | `08_communication.cpp`、`comm_robot_pipeline.cpp` | 编译 + comm tests |
 | GPU | `09_gpu.cpp`、现有 GPU examples | header build + 无硬件路径 |
+| 服务端数据导入 | `10_service_data_import.cpp` | 编译 + 部分失败 smoke test |
 
 ---
 

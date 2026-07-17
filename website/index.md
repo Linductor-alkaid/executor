@@ -36,6 +36,7 @@ executor.shutdown();
 - 第一次使用：从[构建与安装](/zh/quick-start/build)到[第一个任务](/zh/quick-start/first-task)。
 - 按场景选型：[选择提交接口](/zh/guides/choosing-submit-api)。
 - 改造现有项目：[从线程代码迁移](/zh/guides/migrating-existing-threads)，并检查[并发架构反模式](/zh/guides/concurrency-antipatterns)。
+- 验证服务端模型：[数据导入案例](/zh/tutorial/service-data-import)讲清部分失败、幂等与请求排空。
 - 准备接入服务：[生产接入检查清单](/zh/guides/production-readiness)。
 - 深入原理：[高级与原理](/zh/advanced/)；按需了解实时线程、通信、GPU 与底层执行路径。
 

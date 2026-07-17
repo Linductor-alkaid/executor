@@ -37,7 +37,7 @@ jobs:
       - name: Build tutorial examples
         run: |
           cmake -S . -B build-docs -DEXECUTOR_BUILD_TESTS=ON -DEXECUTOR_BUILD_EXAMPLES=ON -DEXECUTOR_ENABLE_GPU=OFF
-          cmake --build build-docs --target tutorial_01_first_task tutorial_02_priority tutorial_03_delayed_periodic tutorial_04_batch tutorial_05_dependencies tutorial_06_observability tutorial_07_realtime tutorial_08_communication tutorial_09_gpu
+          cmake --build build-docs --target tutorial_01_first_task tutorial_02_priority tutorial_03_delayed_periodic tutorial_04_batch tutorial_05_dependencies tutorial_06_observability tutorial_07_realtime tutorial_08_communication tutorial_09_gpu tutorial_10_service_data_import
       - name: Run tutorial smoke tests
         run: ctest --test-dir build-docs -L tutorial --output-on-failure
       - uses: actions/upload-pages-artifact@v3
