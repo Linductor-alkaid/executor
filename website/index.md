@@ -44,8 +44,8 @@ executor.shutdown();
 | 平台 | Linux、Windows |
 | 语言 | C++20 |
 | 构建系统 | CMake 3.16+ |
-| 版本 | `v0.2.3-dev` 开发快照 |
+| 版本 | `v0.2.3` 源码基线的开发快照（含待发布能力） |
 | 持续集成 | [GitHub Actions](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml) |
 | 许可证 | [MIT](https://github.com/Linductor-alkaid/executor/blob/master/LICENSE) |
 
-<div class="version-note">本手册以当前开发快照为准；稳定版本发布后会在页面中明确标注适用版本。</div>
+<div class="version-note">本手册以当前开发快照为准，不能将待发布能力视为既有稳定版承诺；稳定发布后会明确标注适用 tag。</div>

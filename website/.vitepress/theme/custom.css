@@ -36,6 +36,9 @@
 .VPDoc p, .VPDoc li { color: var(--vp-c-text-2); }
 .VPDoc a { color: #1b61c9; }
 .VPDoc table { display: table; width: 100%; }
+.migration-table table { table-layout: fixed; }
+.migration-table th:first-child, .migration-table td:first-child { width: 58%; }
+.migration-table :not(pre) > code { white-space: normal; overflow-wrap: anywhere; }
 .version-note { margin-top: 48px; padding: 24px; border-radius: 10px; background: #f5e9d4; color: #181d26; }
 
 .dark {
