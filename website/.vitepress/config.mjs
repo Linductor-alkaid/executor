@@ -99,7 +99,12 @@ export default defineConfig({
       '/zh/gpu/': [
         {
           text: 'GPU',
-          items: [{ text: 'GPU 与降级', link: '/zh/gpu/' }]
+          items: [
+            { text: 'GPU 与降级', link: '/zh/gpu/' },
+            { text: '诊断后端并安全降级', link: '/zh/gpu/diagnostics' },
+            { text: '注册并提交 GPU 工作', link: '/zh/gpu/register-and-submit' },
+            { text: 'CPU/GPU 自动选择', link: '/zh/gpu/automatic-scheduling' }
+          ]
         }
       ],
       '/zh/advanced/': [
