@@ -4,7 +4,7 @@
 
 ## 要求
 
-- Node.js 20 LTS 或更新版本
+- Node.js 24 LTS 或更新版本
 - npm（使用提交的 `package-lock.json` 进行严格安装）
 
 ## 本地开发
@@ -30,6 +30,10 @@ npm run docs:check --prefix website
 ```
 
 该检查验证站内路由、相对文件链接及教程嵌入源文件；外部链接不在 PR 阶段访问，以避免网络波动阻塞构建。GitHub Actions 对 PR 执行严格安装、站点构建和教程 smoke tests；仅 `master` 与 `v*` tag 会部署 GitHub Pages。
+
+## 首次启用 GitHub Pages
+
+仓库管理员需要在 GitHub 的 **Settings → Pages → Build and deployment** 中将 **Source** 设为 **GitHub Actions**，保存后再重新运行文档 workflow。这个一次性仓库设置不在 workflow 的权限范围内；未启用时 `actions/deploy-pages` 会在创建部署时返回 404。工作流使用 Node.js 24；`actions/deploy-pages` 自身依赖产生的 `punycode` deprecation warning 不影响 artifact 或部署结果。
 
 ## 目录约定
 
