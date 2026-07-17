@@ -40,6 +40,23 @@
 .migration-table th:first-child, .migration-table td:first-child { width: 58%; }
 .migration-table :not(pre) > code { white-space: normal; overflow-wrap: anywhere; }
 .version-note { margin-top: 48px; padding: 24px; border-radius: 10px; background: #f5e9d4; color: #181d26; }
+.maintenance-hero { margin: 32px 0 64px; padding: 40px 48px; border-radius: 12px; background: #181d26; color: #ffffff; }
+.maintenance-hero p { margin: 0; color: #ffffff; }
+.maintenance-hero .maintenance-eyebrow { margin-bottom: 12px; color: #a8d8c4; font-size: 13px; font-weight: 500; letter-spacing: 0.12em; }
+.maintenance-hero .maintenance-version { margin-bottom: 16px; font-size: 28px; line-height: 1.25; }
+.maintenance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin: 32px 0 64px; }
+.maintenance-card { min-height: 220px; padding: 32px; border-radius: 10px; color: #181d26; }
+.maintenance-card > span { display: block; margin-bottom: 32px; font-size: 14px; font-weight: 500; }
+.maintenance-card h3 { margin: 0 0 12px; border: 0; color: inherit; font-size: 20px; font-weight: 500; }
+.maintenance-card p { margin: 0; color: inherit; }
+.maintenance-card-coral { background: #aa2d00; color: #ffffff; }
+.maintenance-card-cream { background: #f5e9d4; }
+.maintenance-card-forest { background: #0a2e0e; color: #ffffff; }
+.maintenance-card-coral code, .maintenance-card-forest code { background: rgba(255, 255, 255, 0.14); color: #ffffff; }
+.maintenance-callout { display: flex; align-items: center; justify-content: space-between; gap: 32px; margin-top: 64px; padding: 32px; border-radius: 12px; background: #e0e2e6; color: #181d26; }
+.maintenance-callout strong { font-size: 20px; font-weight: 500; }
+.maintenance-callout p { margin: 8px 0 0; color: #333840; }
+.VPDoc .maintenance-callout a { flex: 0 0 auto; padding: 14px 20px; border-radius: 12px; background: #181d26; color: #ffffff; font-weight: 500; text-decoration: none; }
 
 .dark {
   --vp-c-brand-1: #ffffff;
@@ -66,6 +83,10 @@
 .dark .VPDoc th { color: #f8fafc; }
 .dark .VPDoc td { color: #e0e2e6; }
 .dark .version-note { background: #3b3020; color: #f8fafc; }
+.dark .maintenance-card-cream { background: #3b3020; color: #f8fafc; }
+.dark .maintenance-callout { background: #252b35; color: #f8fafc; }
+.dark .maintenance-callout p { color: #e0e2e6; }
+.dark .VPDoc .maintenance-callout a { background: #f8fafc; color: #181d26; }
 
 @media (min-width: 960px) {
   .VPHomeHero .text { max-width: 720px; }
@@ -76,4 +97,8 @@
   .VPHomeHero .text { font-size: 26px; line-height: 36px; }
   .VPDoc h1 { font-size: 32px; }
   .VPDoc h2 { font-size: 28px; }
+  .maintenance-hero { padding: 32px 24px; }
+  .maintenance-grid { grid-template-columns: 1fr; }
+  .maintenance-card { min-height: 0; }
+  .maintenance-callout { align-items: flex-start; flex-direction: column; }
 }

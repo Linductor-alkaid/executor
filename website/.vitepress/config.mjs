@@ -58,7 +58,8 @@ export default defineConfig({
           text: '场景指南',
           items: [
             { text: '如何选择提交接口', link: '/zh/guides/choosing-submit-api' },
-            { text: '如何选择通信组件', link: '/zh/guides/choosing-communication' }
+            { text: '如何选择通信组件', link: '/zh/guides/choosing-communication' },
+            { text: '生产接入检查清单', link: '/zh/guides/production-readiness' }
           ]
         }
       ],
