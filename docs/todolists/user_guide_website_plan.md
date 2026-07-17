@@ -296,38 +296,38 @@
 
 ### 5.1 失败可观察性
 
-- [ ] 完成 future、返回值、状态计数和事件回调的职责对照。
-- [ ] 完成 `set_failure_callback()` 教程。
-- [ ] 覆盖 `get_failure_status()`。
-- [ ] 覆盖 `get_recent_failures()`、`clear_recent_failures()` 和容量配置。
-- [ ] 说明 callback 异常隔离和长期运行时的缓冲容量。
-- [ ] 说明任务失败、调优回退和通信事件不是同一类状态。
+- [x] 完成 future、返回值、状态计数和事件回调的职责对照。
+- [x] 完成 `set_failure_callback()` 教程。
+- [x] 覆盖 `get_failure_status()`。
+- [x] 覆盖 `get_recent_failures()`、`clear_recent_failures()` 和容量配置。
+- [x] 说明 callback 异常隔离和长期运行时的缓冲容量。
+- [x] 说明任务失败、调优回退和通信事件不是同一类状态。
 
 ### 5.2 监控
 
-- [ ] 覆盖 `enable_monitoring()`。
-- [ ] 覆盖 `set_monitoring_sampling_rate()`。
-- [ ] 覆盖单类与全部任务统计查询。
-- [ ] 说明监控成本、采样率和何时关闭监控。
+- [x] 覆盖 `enable_monitoring()`。
+- [x] 覆盖 `set_monitoring_sampling_rate()`。
+- [x] 覆盖单类与全部任务统计查询。
+- [x] 说明监控成本、采样率和何时关闭监控。
 
 ### 5.3 任务接口选型
 
-- [ ] 建立立即、优先、延迟、周期、批量和依赖任务决策树。
-- [ ] 对比 `submit_periodic()` 与实时执行器。
-- [ ] 对比循环 `submit()` 与 batch API。
-- [ ] 对比 `future` 返回路径与 no-future 路径。
+- [x] 建立立即、优先、延迟、周期、批量和依赖任务决策树。
+- [x] 对比 `submit_periodic()` 与实时执行器。
+- [x] 对比循环 `submit()` 与 batch API。
+- [x] 对比 `future` 返回路径与 no-future 路径。
 
 ### 5.4 通信组件选型
 
-- [ ] 用“最新值、每条消息、周期内有限消费、完整快照、阶段顺序”组织选择表。
-- [ ] 对比 `LatestMailbox`、`MpscChannel`、`RealtimeChannel`、`DoubleBuffer` 和 `PhaseGate`。
-- [ ] 说明容量、drop policy、close、stale 和 missed phase。
+- [x] 用“最新值、每条消息、周期内有限消费、完整快照、阶段顺序”组织选择表。
+- [x] 对比 `LatestMailbox`、`MpscChannel`、`RealtimeChannel`、`DoubleBuffer` 和 `PhaseGate`。
+- [x] 说明容量、drop policy、close、stale 和 missed phase。
 
 ### 验收
 
-- [ ] 用户可以从自然语言问题定位默认接口。
-- [ ] 用户知道哪些失败由 future、bool、result、status 或 event 表达。
-- [ ] 选型页面不把性能优化接口描述为无条件更优。
+- [x] 用户可以从自然语言问题定位默认接口。
+- [x] 用户知道哪些失败由 future、bool、result、status 或 event 表达。
+- [x] 选型页面不把性能优化接口描述为无条件更优。
 
 ---
 

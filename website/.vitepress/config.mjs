@@ -56,7 +56,8 @@ export default defineConfig({
         {
           text: '场景指南',
           items: [
-            { text: '如何选择提交接口', link: '/zh/guides/choosing-submit-api' }
+            { text: '如何选择提交接口', link: '/zh/guides/choosing-submit-api' },
+            { text: '如何选择通信组件', link: '/zh/guides/choosing-communication' }
           ]
         }
       ],
@@ -76,7 +77,11 @@ export default defineConfig({
       '/zh/reliability/': [
         {
           text: '可靠性',
-          items: [{ text: '失败可观察性', link: '/zh/reliability/' }]
+          items: [
+            { text: '可靠性概览', link: '/zh/reliability/' },
+            { text: '失败可观察性', link: '/zh/reliability/failure-observability' },
+            { text: '监控与采样', link: '/zh/reliability/monitoring' }
+          ]
         }
       ],
       '/zh/realtime-and-communication/': [
