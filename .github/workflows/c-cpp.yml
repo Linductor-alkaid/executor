@@ -75,7 +75,7 @@ jobs:
       run: |
         cmake -B build `
           -DEXECUTOR_BUILD_TESTS=ON `
-          -DEXECUTOR_BUILD_EXAMPLES=OFF `
+          -DEXECUTOR_BUILD_EXAMPLES=ON `
           -DEXECUTOR_ENABLE_COVERAGE=OFF
 
     - name: 编译

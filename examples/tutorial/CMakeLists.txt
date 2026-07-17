@@ -1,10 +1,27 @@
-add_executable(tutorial_01_first_task 01_first_task.cpp)
-target_link_libraries(tutorial_01_first_task PRIVATE executor)
+set(TUTORIAL_SOURCES
+    01_first_task.cpp
+    02_priority.cpp
+    03_delayed_periodic.cpp
+    04_batch.cpp
+    05_dependencies.cpp
+    06_observability.cpp
+    07_realtime.cpp
+    08_communication.cpp
+    09_gpu.cpp
+)
 
-if(BUILD_TESTING)
-    add_test(NAME tutorial_01_first_task COMMAND tutorial_01_first_task)
-    set_tests_properties(tutorial_01_first_task PROPERTIES
-        LABELS "tutorial;smoke"
-        TIMEOUT 15
-    )
-endif()
+foreach(TUTORIAL_SOURCE IN LISTS TUTORIAL_SOURCES)
+    get_filename_component(TUTORIAL_NAME "${TUTORIAL_SOURCE}" NAME_WE)
+    set(TUTORIAL_TARGET "tutorial_${TUTORIAL_NAME}")
+
+    add_executable(${TUTORIAL_TARGET} ${TUTORIAL_SOURCE})
+    target_link_libraries(${TUTORIAL_TARGET} PRIVATE executor)
+
+    if(BUILD_TESTING)
+        add_test(NAME ${TUTORIAL_TARGET} COMMAND ${TUTORIAL_TARGET})
+        set_tests_properties(${TUTORIAL_TARGET} PROPERTIES
+            LABELS "tutorial;smoke"
+            TIMEOUT 15
+        )
+    endif()
+endforeach()
