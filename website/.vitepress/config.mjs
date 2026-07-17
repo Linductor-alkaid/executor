@@ -63,7 +63,14 @@ export default defineConfig({
       '/zh/tutorial/': [
         {
           text: '循序教程',
-          items: [{ text: '机器人数据流水线', link: '/zh/tutorial/' }]
+          items: [
+            { text: '机器人数据流水线', link: '/zh/tutorial/' },
+            { text: '让控制命令优先', link: '/zh/tutorial/priority' },
+            { text: '延迟重试与健康检查', link: '/zh/tutorial/delayed-and-periodic' },
+            { text: '批量处理传感器帧', link: '/zh/tutorial/batch' },
+            { text: '加载、感知与规划依赖', link: '/zh/tutorial/dependencies' },
+            { text: '有界等待与状态快照', link: '/zh/tutorial/waiting-and-status' }
+          ]
         }
       ],
       '/zh/reliability/': [

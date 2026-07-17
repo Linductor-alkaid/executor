@@ -246,49 +246,49 @@
 
 ### 4.1 普通与优先级任务
 
-- [ ] 从传感器帧解析场景引入 `submit()`。
-- [ ] 从控制命令抢占普通分析场景引入 `submit_priority()`。
-- [ ] 解释优先级只影响排队顺序，不构成实时性保证。
-- [ ] 覆盖空任务、停止后提交和任务异常的可观察行为。
+- [x] 从传感器帧解析场景引入 `submit()`。
+- [x] 从控制命令抢占普通分析场景引入 `submit_priority()`。
+- [x] 解释优先级只影响排队顺序，不构成实时性保证。
+- [x] 覆盖空任务、停止后提交和任务异常的可观察行为。
 
 ### 4.2 延迟与周期任务
 
-- [ ] 从设备重试引入 `submit_delayed()`。
-- [ ] 从健康检查引入 `submit_periodic()`。
-- [ ] 覆盖 `cancel_task()`。
-- [ ] 覆盖 `get_periodic_task_status()` 与 `get_all_periodic_task_status()`。
-- [ ] 明确延迟/周期接口属于 Facade，不属于底层线程池。
-- [ ] 明确软周期与实时线程的边界。
+- [x] 从设备重试引入 `submit_delayed()`。
+- [x] 从健康检查引入 `submit_periodic()`。
+- [x] 覆盖 `cancel_task()`。
+- [x] 覆盖 `get_periodic_task_status()` 与 `get_all_periodic_task_status()`。
+- [x] 明确延迟/周期接口属于 Facade，不属于底层线程池。
+- [x] 明确软周期与实时线程的边界。
 
 ### 4.3 批量任务
 
-- [ ] 从一批数据处理引入 `submit_batch()`。
-- [ ] 说明需要 future 与 fire-and-forget 的差异。
-- [ ] 引入 `submit_batch_no_future()`。
-- [ ] 覆盖 `submit_batch_priority()`。
-- [ ] 链接本地 benchmark，避免固定倍率承诺。
+- [x] 从一批数据处理引入 `submit_batch()`。
+- [x] 说明需要 future 与 fire-and-forget 的差异。
+- [x] 引入 `submit_batch_no_future()`。
+- [x] 覆盖 `submit_batch_priority()`。
+- [x] 链接本地 benchmark，避免固定倍率承诺。
 
 ### 4.4 任务依赖
 
-- [ ] 从“加载 → 感知 → 规划”引入 `submit_with_handle()`。
-- [ ] 覆盖单依赖和多依赖 `submit_after()`。
-- [ ] 覆盖 `submit_after_with_handle()` 的继续链式构建。
-- [ ] 从并行预处理汇合引入 `when_all()`。
-- [ ] 说明依赖失败传播、无效 handle 和跨实例限制。
+- [x] 从“加载 → 感知 → 规划”引入 `submit_with_handle()`。
+- [x] 覆盖单依赖和多依赖 `submit_after()`。
+- [x] 覆盖 `submit_after_with_handle()` 的继续链式构建。
+- [x] 从并行预处理汇合引入 `when_all()`。
+- [x] 说明依赖失败传播、无效 handle 和跨实例限制。
 
 ### 4.5 等待与状态
 
-- [ ] 说明 `wait_for_completion()` 的兼容用途。
-- [ ] 使用 `try_wait_for_completion()` / `wait_for_completion_for()` 处理有界等待。
-- [ ] 使用 `wait_for_completion_ex()` 展示超时状态快照。
-- [ ] 覆盖 `is_idle()`、`get_completion_status()` 和 `get_async_executor_status()`。
+- [x] 说明 `wait_for_completion()` 的兼容用途。
+- [x] 使用 `try_wait_for_completion()` / `wait_for_completion_for()` 处理有界等待。
+- [x] 使用 `wait_for_completion_ex()` 展示超时状态快照。
+- [x] 覆盖 `is_idle()`、`get_completion_status()` 和 `get_async_executor_status()`。
 
 ### 验收
 
-- [ ] 普通业务用户只通过 Facade 即可完成主线场景。
-- [ ] 章节顺序遵循业务问题演进，而不是公开头文件顺序。
-- [ ] 每章都有“为什么选择”“何时不选”和“失败如何观察”。
-- [ ] 设计文档中的普通任务 Facade 接口均能追踪到教程或专题页面。
+- [x] 普通业务用户只通过 Facade 即可完成主线场景。
+- [x] 章节顺序遵循业务问题演进，而不是公开头文件顺序。
+- [x] 每章都有“为什么选择”“何时不选”和“失败如何观察”。
+- [x] 设计文档中的普通任务 Facade 接口均能追踪到教程或专题页面。
 
 ---
 
