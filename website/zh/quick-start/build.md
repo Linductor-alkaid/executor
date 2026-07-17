@@ -18,21 +18,55 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_BUILD_EXAMPLES=ON -DEXECUTO
 cmake --build build
 ```
 
-Linux 需要 CMake 3.16+ 和 C++20 编译器；Windows 使用 Visual Studio 2019+ / MSVC。完整安装、`add_subdirectory` 与 `find_package(executor)` 集成方式见仓库的 [`docs/BUILD.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/BUILD.md)。
+Linux 需要 CMake 3.16+ 和 C++20 编译器；Windows 使用 Visual Studio 2019+ / MSVC。首次路径不要求 CUDA、OpenCL 或实时权限。
+
+## 加入自己的工程
+
+未安装时，将仓库作为子目录加入项目：
+
+```cmake
+set(EXECUTOR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(EXECUTOR_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+add_subdirectory(path/to/executor)
+target_link_libraries(myapp PRIVATE executor::executor)
+```
+
+安装后，配置消费者工程时提供安装前缀：
+
+```bash
+cmake --install build --prefix /opt/executor
+cmake -B build-consumer -DCMAKE_PREFIX_PATH=/opt/executor
+```
+
+消费者 `CMakeLists.txt` 使用：
+
+```cmake
+find_package(executor REQUIRED)
+target_link_libraries(myapp PRIVATE executor::executor)
+```
+
+完整安装和打包说明见 [`docs/BUILD.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/BUILD.md)。
 
 ## 验证教程示例
 
 ```bash
-./build/examples/tutorial/01_first_task
-ctest --test-dir build -L tutorial --output-on-failure
+./build/examples/tutorial/tutorial_01_first_task
 ```
 
-Windows 下可通过构建目录中的同名 `.exe` 运行。预期首先看到 `answer=42`，然后看到已捕获的示例异常。
+Windows 下可通过构建目录中的同名 `.exe` 运行。预期首先看到 `answer=42`，然后看到已捕获的示例异常；这说明结果和任务失败都回到了调用方。
+
+若要运行全部教程 smoke test，先构建全部示例：
+
+```bash
+cmake --build build
+ctest --test-dir build -L tutorial --output-on-failure
+```
 
 ## 常见错误
 
 - 忘记 `-DEXECUTOR_BUILD_EXAMPLES=ON`：教程可执行文件不会生成。
 - 把 GPU 依赖带入首次构建：首个教程不需要 GPU，先显式设为 `OFF` 可减少环境差异。
+- 使用多配置 Windows 生成器时：在构建和 CTest 命令中补充 `--config Release`。
 - 只构建不运行：下一页用输出确认 `future.get()` 的行为。
 
 ## 下一步

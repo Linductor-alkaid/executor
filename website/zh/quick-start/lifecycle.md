@@ -26,11 +26,13 @@ if (!initialized) {
 executor.shutdown(true);
 ```
 
-`initialize_ex()` 返回带错误码和消息的 `ExecutorResult`，比兼容的 `bool` 初始化接口更适合诊断。`shutdown(true)` 会等待已接受的任务完成；RAII 与进程退出路径仍提供兜底，但应用的正常退出边界应显式关闭。
+`initialize_ex()` 返回带错误码和消息的 `ExecutorResult`，比兼容的 `bool` 初始化接口更适合诊断。`shutdown(true)` 会等待已接受的异步任务完成；如果等待超过默认上限，库会记录超时诊断并改走非等待关闭，不能把它理解为无限等待。
+
+单例在进程退出时有 `shutdown(false)` 兜底，独立 `Executor` 实例由析构负责回收；两者都不替代应用在业务边界显式决定是否等待的责任。
 
 ## 常见错误
 
-- 首次 `submit()` 后再修改初始化配置。
+- 首次 `submit()` 后再修改初始化配置：已完成懒初始化时，配置不会按预期替换。
 - 进程退出前既不等待 future，也不调用关闭，使业务完成顺序不清楚。
 - 把任务异常和初始化失败混为一谈：前者通常经 future 观察，后者由 `ExecutorResult` 表达。
 

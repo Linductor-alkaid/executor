@@ -55,6 +55,7 @@ add_library(executor ${LIBRARY_TYPE}
     ${EXECUTOR_SOURCES}
     ${EXECUTOR_HEADERS}
 )
+add_library(executor::executor ALIAS executor)
 
 # 设置包含目录
 # PUBLIC: 使用此库的项目也会获得这些包含目录
@@ -115,8 +116,8 @@ if(UNIX AND NOT APPLE)
     # 链接rt库（用于某些Linux系统上的实时调度函数）
     target_link_libraries(executor PRIVATE rt)
 elseif(WIN32)
-    # Windows: 可能需要额外的库
-    # 目前仅使用标准库，无需额外链接
+    # Windows Multimedia API（timeBeginPeriod / timeEndPeriod）
+    target_link_libraries(executor PRIVATE winmm)
 endif()
 
 # 设置 C++ 标准（确保与根 CMakeLists.txt 一致）

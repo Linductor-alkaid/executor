@@ -2,12 +2,12 @@
 layout: home
 hero:
   name: Executor 使用手册
-  text: 从第一个任务开始构建可靠的 C++ 并发程序
+  text: 为 C++20 程序提供可靠的任务执行与线程管理
   tagline: 十分钟完成构建、提交任务、获取结果并观察异常。
   actions:
     - theme: brand
       text: 十分钟开始使用
-      link: /zh/quick-start/first-task
+      link: /zh/quick-start/build
     - theme: alt
       text: 了解 Executor
       link: /zh/getting-started/what-is-executor
@@ -35,6 +35,17 @@ executor.shutdown();
 
 - 第一次使用：从[构建与安装](/zh/quick-start/build)到[第一个任务](/zh/quick-start/first-task)。
 - 按场景选型：[选择提交接口](/zh/guides/choosing-submit-api)。
-- 深入原理：后续将覆盖实时线程、通信、GPU 与底层执行路径。
+- 深入原理：[高级与原理](/zh/advanced/)；按需了解实时线程、通信、GPU 与底层执行路径。
 
-<div class="version-note">适用版本：v0.2.3-dev（当前开发快照）</div>
+## 发布信息
+
+| 项目 | 当前支持 |
+| --- | --- |
+| 平台 | Linux、Windows |
+| 语言 | C++20 |
+| 构建系统 | CMake 3.16+ |
+| 版本 | `v0.2.3-dev` 开发快照 |
+| 持续集成 | [GitHub Actions](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml) |
+| 许可证 | [MIT](https://github.com/Linductor-alkaid/executor/blob/master/LICENSE) |
+
+<div class="version-note">本手册以当前开发快照为准；稳定版本发布后会在页面中明确标注适用版本。</div>
