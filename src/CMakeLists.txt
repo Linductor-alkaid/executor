@@ -123,7 +123,7 @@ endif()
 target_compile_features(executor PUBLIC cxx_std_20)
 
 if(EXECUTOR_BUILD_TESTS)
-    target_compile_definitions(executor PRIVATE EXECUTOR_THREAD_POOL_TEST_HOOKS)
+    target_compile_definitions(executor PUBLIC EXECUTOR_THREAD_POOL_TEST_HOOKS)
 endif()
 
 # MSVC: 设置源文件编码为UTF-8，避免C4819警告
