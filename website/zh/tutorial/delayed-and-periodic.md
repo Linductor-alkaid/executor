@@ -42,6 +42,14 @@ periodic status=running, cancelled=yes
 - `get_all_periodic_task_status()` 适合监控页或关闭前检查所有仍注册的周期任务。
 - 延迟任务返回 `future`，因此其返回值、执行异常和拒绝提交仍由 `get()` 观察。
 
+## 运行假设与所有权
+
+示例的延迟只有 `1 ms`，周期为 `5 ms`，运行约 `30 ms`；这些值只是让 smoke test 快速完成，不是设备重试参数。调度时间使用相对时长，表示“最早到期时间”，到期后仍要等待共享线程池可用。
+
+周期 callback 捕获 `health_checks` 的引用，因此该原子对象必须活到取消任务、停止 timer 并完成在途 callback 之后。长期服务中，task ID 的 owner 通常也是 callback 所依赖状态的生命周期 owner。
+
+当前 timer 在每次到期时把 callback 提交给普通线程池，不等待上一次执行完成。如果 callback 执行时间大于 period，同一个周期任务可能有多个在途执行；有状态 callback 必须自行保证并发安全，或增加应用级 single-flight 防护。软周期接口不会自动串行化每次调用。
+
 ## 为什么这样做
 
 延迟与周期调度属于 Facade 的能力：调用方不需要取得线程池对象或管理计时器线程。周期任务没有逐次 `future` 可保存，至少应保留任务 ID、查看执行/失败状态，并在不再需要时取消它。
@@ -49,6 +57,27 @@ periodic status=running, cancelled=yes
 ## 失败如何观察
 
 周期回调的异常不会由调用 `submit_periodic()` 的位置返回；运行中的任务应检查周期状态，并在长期服务中配置失败状态或回调。`cancel_task()` 返回 `false` 表示 ID 已不存在、已取消或不是当前实例的周期任务，不能把它当作已经安全停止的证明。
+
+取消成功只会移除后续周期调度；已经提交到线程池或正在运行的 callback 仍可能完成。需要销毁 callback 捕获的对象时，取消后还要有界等待普通任务排空。
+
+## 故障注入与退出
+
+1. 让 retry 抛异常，确认延迟 future 在 `get()` 处重新抛出。
+2. 让健康检查每次执行 `20 ms`、period 保持 `5 ms`，观察重叠执行和队列增长；不要以增加队列容量作为修复。
+3. 让 callback 连续失败，检查 `failed_count`、`consecutive_failure_count` 和 `last_error_message`，并定义达到阈值后的停止或降级。
+4. 在 delayed task 到期前开始 shutdown，确认 future 得到“timer stopped before delayed task execution”的可观察拒绝，而不是永久等待。
+
+推荐退出顺序是：停止创建新的延迟/周期工作，取消所有保存的 task ID，等待已经提交的 callback，最后关闭 Executor。若 callback 内有网络或设备 I/O，它们必须有自己的超时。
+
+## 需求变化时如何演进
+
+| 新需求 | 下一步选择 |
+| --- | --- |
+| 重试间隔需要指数退避 | 每次失败后按策略提交下一次 delayed task，并限制总次数 |
+| 同一健康检查不能重入 | 增加 single-flight 状态，或由一个长期 owner 串行调度 |
+| 多实例争抢同一外部资源 | 在业务层加租约/幂等协议，周期 API 不提供分布式互斥 |
+| 需要固定相位与 jitter 预算 | 使用专用实时任务，不使用 `submit_periodic()` |
+| 停机后需要恢复未到期重试 | 将计划持久化；内存 timer 不承担恢复保证 |
 
 ## 何时不选
 

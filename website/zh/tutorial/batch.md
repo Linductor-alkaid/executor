@@ -41,6 +41,14 @@ batch processed=6, completed=yes
 
 示例先检查 `submit_batch()` 的全部 future，再提交 no-future 批次，并以 `wait_for_completion_for()` 做有界收尾。
 
+## 运行假设与所有权
+
+示例只有三项任务，每项只递增一个原子计数器；同一任务列表被提交两次，所以最终计数为六。lambda 捕获的 `processed` 必须活到两批任务全部完成，原子类型只解决这个计数器的数据竞争，不代表任意业务对象都能安全共享。
+
+batch 适合由同一生产者同时产生、相互独立且调度语义一致的工作。返回的 futures 与输入位置一一对应，但任务完成顺序不固定。若第 2 项依赖第 1 项结果，就不再是独立批次，应改用依赖或在单个任务内串行处理。
+
+`submit_batch()` 将任务列表交给一次底层批量接收调用；批次含空任务，或执行器已经停止而无法接收时，每个 future 都会得到异常结果，不应只检查第一个。不要把这理解成业务事务：一项运行失败不会回滚已经执行的其他项。`submit_batch_priority()` 当前逐项走 priority 提交，也不能假设它与普通 batch 有相同的接收边界。
+
 ## 为什么这样做
 
 批量接口表达“这些工作属于同一提交批次”，可以减少重复提交路径的开销；但收益取决于任务体、数量、线程数、硬件和构建配置。不要承诺固定倍率，性能判断请运行仓库的 [`benchmark_batch_submit_real.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/tests/benchmark_batch_submit_real.cpp)。
@@ -50,6 +58,25 @@ batch processed=6, completed=yes
 - **把 no-future 当成无失败**：它只省去 future 管理，不会让任务异常消失；需要为长期运行程序配置失败可观察路径。
 - **只因任务数量多就改用 batch**：少量或彼此有依赖的任务，普通提交或任务依赖通常更清晰。
 - **用优先级替代背压策略**：队列持续堆积时，优先级不能消除容量和截止时间问题。
+
+## 故障注入与退出
+
+1. 让批次中间一项抛异常；遍历全部 futures，确认其他独立项的结果仍被逐项处理。
+2. 在批次中放入空 `std::function`，以及在 Executor shutdown 后尝试提交；确认所有返回 futures 都以异常结束，或入口直接给出明确拒绝，而不是永久等待。
+3. 在 no-future 任务中抛异常；确认 failure callback/status 能定位 `facade_submit_batch_no_future[index]`。
+4. 让任务比退出预算更长；`wait_for_completion_for()` 返回 false 后记录 pending，并执行预先定义的继续等待或快速关闭策略。
+
+关闭前必须保证 `tasks` 捕获的引用仍然有效。no-future 路径尤其容易让调用方误以为函数返回后输入可以销毁；事实上任务可能尚未开始。
+
+## 需求变化时如何演进
+
+| 新需求 | 下一步选择 |
+| --- | --- |
+| 每项要返回不同结果 | 循环 `submit()`，或在业务层为结果建立索引容器 |
+| 一项失败后其余项必须停止 | 设计共享停止标志和幂等任务；普通 batch 默认独立执行 |
+| 数据太大，不宜复制到每个 lambda | 使用所有权明确的 buffer/view，并保证底层存储活到完成 |
+| 批次持续到达并造成积压 | 上游限流、分块和容量预算，不无限扩大队列 |
+| 任务之间存在先后或汇合 | 使用 `TaskHandle` / `when_all()`，不要依赖提交顺序 |
 
 ## 下一步阅读
 

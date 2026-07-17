@@ -50,9 +50,34 @@ plan score=42
 - 用生产配置中的最小线程数进行压力测试；
 - 大规模动态 DAG 需要专门图调度器时，不要只靠增大线程池和队列规避问题。
 
+## 运行假设与所有权
+
+示例只有两个前置任务和一个 dependent，并固定两个 worker。`load`、`sense` 及其 futures 都由 `main()` 持有到 `plan.get()` 完成；dependent lambda 捕获引用是安全的，仅因为这些局部对象在整个等待期间仍然存在。把同样 lambda 从函数中返回会产生悬空引用。
+
+`TaskHandle` 只表达完成状态，不携带任务返回值。dependent 仍需通过对应 future 或业务状态取得结果，因此 handle owner、future owner 和结果数据 owner 都要写清楚。`when_all()` 是汇合状态，不会生成一个结果 tuple。
+
 ## 失败如何观察
 
 前置任务失败时，其 `future.get()` 会重新抛出异常；依赖任务默认不会运行，并在自己的 `future.get()` 上给出失败。无效句柄和跨 `Executor` 实例的句柄也是可观察的拒绝，不要把句柄跨实例保存或混用。
+
+## 故障注入与退出
+
+1. 让 `load` 抛异常；确认 `plan` 任务体不执行，`load.future` 与 `plan` future 都能解释失败。
+2. 传入默认构造或另一 Executor 创建的 handle；确认 dependent future 得到可观察拒绝。
+3. 用最小线程数提交多组长依赖链；观察 active/queued 和完成情况，验证容量不会因等待 wrapper 耗尽。
+4. 在依赖未完成时开始退出；先停止创建新图，保留所有 futures，再有界等待或记录未完成图的业务 ID。
+
+Executor shutdown 不会把内存中的任务图持久化。若流程必须跨进程恢复，应把阶段和输入写入外部存储，并让任务幂等。
+
+## 需求变化时如何演进
+
+| 新需求 | 下一步选择 |
+| --- | --- |
+| 继续依赖 plan 的结果 | 使用 `submit_after_with_handle()` 保留新 handle |
+| 任一前置失败后执行补偿 | 在调用方观察 futures 后显式提交补偿，不把失败路径藏进成功 DAG |
+| 大规模动态 DAG | 使用专门图调度器并定义资源配额 |
+| 持续帧流逐条处理 | 使用 channel；任务图不是数据流 |
+| 初始化、标定、运行阶段推进 | 使用 `PhaseGate`；它表达阶段而非计算返回值 |
 
 ## 何时不选
 
