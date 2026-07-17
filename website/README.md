@@ -23,6 +23,14 @@ npm run docs:preview --prefix website
 
 静态文件输出到 `website/.vitepress/dist/`。页面通过 VitePress 引用或仓库链接关联完整教程示例，示例仍由根 CMake 工程构建和测试。
 
+## 本地检查
+
+```bash
+npm run docs:check --prefix website
+```
+
+该检查验证站内路由、相对文件链接及教程嵌入源文件；外部链接不在 PR 阶段访问，以避免网络波动阻塞构建。GitHub Actions 对 PR 执行严格安装、站点构建和教程 smoke tests；仅 `master` 与 `v*` tag 会部署 GitHub Pages。
+
 ## 目录约定
 
 - `.vitepress/`：站点配置、主题和样式。

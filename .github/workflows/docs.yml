@@ -1,0 +1,62 @@
+name: Documentation
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Build and validate documentation
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci --prefix website
+      - run: npm run docs:check --prefix website
+      - run: npm run docs:build --prefix website
+      - name: Build tutorial examples
+        run: |
+          cmake -S . -B build-docs -DEXECUTOR_BUILD_TESTS=ON -DEXECUTOR_BUILD_EXAMPLES=ON -DEXECUTOR_ENABLE_GPU=OFF
+          cmake --build build-docs --target tutorial_01_first_task tutorial_02_priority tutorial_03_delayed_periodic tutorial_04_batch tutorial_05_dependencies tutorial_06_observability tutorial_07_realtime tutorial_08_communication tutorial_09_gpu
+      - name: Run tutorial smoke tests
+        run: ctest --test-dir build-docs -L tutorial --output-on-failure
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: website/.vitepress/dist
+
+  deploy:
+    name: Deploy GitHub Pages
+    needs: verify
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Smoke check published routes
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          for path in / /zh/quick-start/first-task /zh/reference/api /404; do
+            curl --fail --silent --show-error --location "$SITE_URL$path" > /dev/null
+          done

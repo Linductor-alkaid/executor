@@ -134,7 +134,7 @@ export default defineConfig({
     outline: { level: [2, 3], label: '本页内容' },
     docFooter: { prev: '上一页', next: '下一页' },
     footer: {
-      message: 'MIT License',
+      message: 'MIT License · <a href="https://github.com/Linductor-alkaid/executor/issues/new/choose">反馈文档问题</a> · <a href="/executor/maintenance">内容维护</a>',
       copyright: 'Executor contributors'
     }
   }
