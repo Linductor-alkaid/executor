@@ -21,7 +21,7 @@ npm run docs:build --prefix website
 npm run docs:preview --prefix website
 ```
 
-静态文件输出到 `website/.vitepress/dist/`。页面使用相对仓库链接引用完整教程示例，示例仍由根 CMake 工程构建和测试。
+静态文件输出到 `website/.vitepress/dist/`。页面通过 VitePress 引用或仓库链接关联完整教程示例，示例仍由根 CMake 工程构建和测试。
 
 ## 目录约定
 
