@@ -7,9 +7,6 @@
 #include <future>
 #include <algorithm>
 #include <unordered_set>
-#include <cstdlib>
-#include <cstdint>
-#include <new>
 
 // 包含 thread_pool 模块的头文件
 #include <executor/config.hpp>
@@ -20,54 +17,6 @@
 #include "executor/thread_pool/thread_pool.hpp"
 
 using namespace executor;
-
-namespace {
-
-std::atomic<bool> g_fail_large_allocations{false};
-std::atomic<int> g_large_allocation_count{0};
-std::atomic<int> g_fail_large_allocation_number{0};
-std::atomic<size_t> g_large_allocation_threshold{0};
-
-void* allocate_with_failure_injection(std::size_t size) {
-    if (g_fail_large_allocations.load(std::memory_order_relaxed) &&
-        size >= g_large_allocation_threshold.load(std::memory_order_relaxed)) {
-        int allocation_number = g_large_allocation_count.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (allocation_number == g_fail_large_allocation_number.load(std::memory_order_relaxed)) {
-            throw std::bad_alloc();
-        }
-    }
-
-    if (void* p = std::malloc(size)) {
-        return p;
-    }
-    throw std::bad_alloc();
-}
-
-} // namespace
-
-void* operator new(std::size_t size) {
-    return allocate_with_failure_injection(size);
-}
-
-void* operator new[](std::size_t size) {
-    return allocate_with_failure_injection(size);
-}
-
-void operator delete(void* p) noexcept {
-    std::free(p);
-}
-
-void operator delete[](void* p) noexcept {
-    std::free(p);
-}
-
-void operator delete(void* p, std::size_t) noexcept {
-    std::free(p);
-}
-
-void operator delete[](void* p, std::size_t) noexcept {
-    std::free(p);
-}
 
 // 测试辅助宏
 #define TEST_ASSERT(condition, message) \
@@ -316,27 +265,18 @@ bool test_thread_pool_init_oom_safety() {
     config.max_threads = 4;
     config.queue_capacity = 1024;
 
-    g_large_allocation_count.store(0, std::memory_order_relaxed);
-    g_fail_large_allocation_number.store(1, std::memory_order_relaxed);
-#ifdef USE_LOCKFREE_WORKER_QUEUE
-    // LockFreeWorkerQueue stores task pointers in a LockFreeQueue<uintptr_t>
-    // during initialization, while WorkerLocalQueue preallocates Task wrappers.
-    g_large_allocation_threshold.store(config.queue_capacity * sizeof(std::uintptr_t), std::memory_order_relaxed);
-#else
-    g_large_allocation_threshold.store(config.queue_capacity * sizeof(Task), std::memory_order_relaxed);
-#endif
-    g_fail_large_allocations.store(true, std::memory_order_release);
-
     bool initialized = true;
     {
         ThreadPool pool;
+        pool.set_worker_queue_create_hook_for_test([](size_t worker_id) {
+            if (worker_id == 0) {
+                throw std::bad_alloc();
+            }
+        });
         initialized = pool.initialize(config);
     }
 
-    g_fail_large_allocations.store(false, std::memory_order_release);
     TEST_ASSERT(!initialized, "initialize should return false when worker queue construction throws");
-    TEST_ASSERT(g_large_allocation_count.load(std::memory_order_relaxed) >= 1,
-                "failure injection should reach a worker queue allocation");
 
     std::cout << "  ThreadPool initialize OOM safety: PASSED" << std::endl;
     return true;

@@ -122,6 +122,10 @@ endif()
 # 设置 C++ 标准（确保与根 CMakeLists.txt 一致）
 target_compile_features(executor PUBLIC cxx_std_20)
 
+if(EXECUTOR_BUILD_TESTS)
+    target_compile_definitions(executor PRIVATE EXECUTOR_THREAD_POOL_TEST_HOOKS)
+endif()
+
 # MSVC: 设置源文件编码为UTF-8，避免C4819警告
 if(MSVC)
     target_compile_options(executor PRIVATE /utf-8)

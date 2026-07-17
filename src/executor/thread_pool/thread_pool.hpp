@@ -273,6 +273,10 @@ public:
     }
 
 #ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
+    void set_worker_queue_create_hook_for_test(std::function<void(size_t)> hook) {
+        worker_queue_create_hook_for_test_ = std::move(hook);
+    }
+
     void set_worker_thread_start_hook_for_test(std::function<void(size_t)> hook) {
         worker_thread_start_hook_for_test_ = std::move(hook);
     }
@@ -485,7 +489,10 @@ private:
     std::condition_variable resize_monitor_cv_;
     mutable std::mutex resize_monitor_mutex_;
 
+#ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
+    std::function<void(size_t)> worker_queue_create_hook_for_test_;
     std::function<void(size_t)> worker_thread_start_hook_for_test_;
+#endif
 };
 
 // 模板方法实现
