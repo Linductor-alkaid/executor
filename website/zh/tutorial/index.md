@@ -14,7 +14,8 @@ description: 以机器人数据流水线逐步学习 Executor Facade。
 3. [批量处理传感器帧](/zh/tutorial/batch)：根据是否需要 future 选择批量提交路径。
 4. [加载、感知与规划依赖](/zh/tutorial/dependencies)：让规划在前置工作完成后执行。
 5. [有界等待与状态快照](/zh/tutorial/waiting-and-status)：在切换阶段或关闭前可靠收尾。
+6. [完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)：把启动依赖、帧流、配置、控制命令、状态快照、诊断和退出组合起来。
 
-后续章节将覆盖失败可观察性、实时线程、通信和 GPU；每章都会先加入 `examples/tutorial/` 并通过构建验证，再发布页面。
+前五章分别引入一种普通任务问题；完整案例进一步连接 `examples/comm_robot_pipeline.cpp`，并明确哪些部分只是可移植教学模拟、哪些必须在生产中替换为实时 Facade、停止协议与过载策略。
 
-需要直接按问题选接口时，进入[场景指南](/zh/guides/choosing-submit-api)。
+需要直接按问题选接口时，进入[场景指南](/zh/guides/choosing-submit-api)；需要逐项深入控制循环和通信组件时，进入[实时与通信](/zh/realtime-and-communication/)。

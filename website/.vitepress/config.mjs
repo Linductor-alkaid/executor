@@ -74,7 +74,8 @@ export default defineConfig({
             { text: '延迟重试与健康检查', link: '/zh/tutorial/delayed-and-periodic' },
             { text: '批量处理传感器帧', link: '/zh/tutorial/batch' },
             { text: '加载、感知与规划依赖', link: '/zh/tutorial/dependencies' },
-            { text: '有界等待与状态快照', link: '/zh/tutorial/waiting-and-status' }
+            { text: '有界等待与状态快照', link: '/zh/tutorial/waiting-and-status' },
+            { text: '完整机器人数据流水线', link: '/zh/tutorial/complete-robot-pipeline' }
           ]
         }
       ],

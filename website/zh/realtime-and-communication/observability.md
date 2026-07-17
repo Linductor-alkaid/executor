@@ -42,4 +42,4 @@ if (stats.dropped_count != 0 || stats.timeout_count != 0) {
 
 ## 下一步阅读
 
-回顾[如何选择通信组件](/zh/guides/choosing-communication)，或进入 GPU 与高级专题继续扩展流水线。
+回到[完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)按故障注入步骤验证背压与退出，或回顾[如何选择通信组件](/zh/guides/choosing-communication)。
