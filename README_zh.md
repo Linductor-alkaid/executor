@@ -176,6 +176,7 @@ int main() {
 
 | 文档 | 说明 |
 |------|------|
+| [使用手册网站](website/README.md) | 中文优先的 VitePress 使用手册；包含从构建到第一个任务的学习路径 |
 | [BUILD.md](docs/BUILD.md) | 构建、安装、`find_package`、选项与发布包 |
 | [API.md](docs/API.md) | API 使用说明与主要类型 |
 | [MIGRATION.md](docs/MIGRATION.md) | 迁移指南（版本升级说明） |

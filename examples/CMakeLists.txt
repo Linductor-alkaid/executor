@@ -26,6 +26,8 @@ foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
     target_link_libraries(${EXAMPLE_NAME} PRIVATE executor)
 endforeach()
 
+add_subdirectory(tutorial)
+
 # GPU 示例：仅在启用 GPU 时构建
 if(EXECUTOR_ENABLE_GPU)
     # 设备查询示例（CUDA或OpenCL任一可用即可）

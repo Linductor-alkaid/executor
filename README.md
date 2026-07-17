@@ -176,6 +176,7 @@ int main() {
 
 | Document | Description |
 |----------|-------------|
+| [User guide website](website/README.md) | Chinese-first VitePress user guide, including the build-to-first-task learning path |
 | [BUILD.md](docs/BUILD.md) | Build, install, `find_package`, options, and release packages |
 | [API.md](docs/API.md) | API usage and primary types |
 | [MIGRATION.md](docs/MIGRATION.md) | Migration guide (version upgrade notes) |
