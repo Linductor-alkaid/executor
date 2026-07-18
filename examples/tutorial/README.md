@@ -20,7 +20,7 @@
 
 ```bash
 cmake -B build -DEXECUTOR_BUILD_EXAMPLES=ON -DEXECUTOR_ENABLE_GPU=OFF
-cmake --build build
+cmake --build build --target tutorial_examples
 ctest --test-dir build -L tutorial --output-on-failure
 ```
 

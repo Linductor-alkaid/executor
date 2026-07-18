@@ -12,12 +12,15 @@ set(TUTORIAL_SOURCES
     11_task_inputs.cpp
 )
 
+set(TUTORIAL_TARGETS)
+
 foreach(TUTORIAL_SOURCE IN LISTS TUTORIAL_SOURCES)
     get_filename_component(TUTORIAL_NAME "${TUTORIAL_SOURCE}" NAME_WE)
     set(TUTORIAL_TARGET "tutorial_${TUTORIAL_NAME}")
 
     add_executable(${TUTORIAL_TARGET} ${TUTORIAL_SOURCE})
     target_link_libraries(${TUTORIAL_TARGET} PRIVATE executor)
+    list(APPEND TUTORIAL_TARGETS ${TUTORIAL_TARGET})
 
     if(BUILD_TESTING)
         add_test(NAME ${TUTORIAL_TARGET} COMMAND ${TUTORIAL_TARGET})
@@ -27,3 +30,5 @@ foreach(TUTORIAL_SOURCE IN LISTS TUTORIAL_SOURCES)
         )
     endif()
 endforeach()
+
+add_custom_target(tutorial_examples DEPENDS ${TUTORIAL_TARGETS})
