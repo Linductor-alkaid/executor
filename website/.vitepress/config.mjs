@@ -85,6 +85,8 @@ export default defineConfig({
           text: '可靠性',
           items: [
             { text: '可靠性概览', link: '/zh/reliability/' },
+            { text: '按症状排查运行故障', link: '/zh/reliability/troubleshooting' },
+            { text: 'Linux 与 Windows 部署核对', link: '/zh/reliability/platform-deployment' },
             { text: '失败可观察性', link: '/zh/reliability/failure-observability' },
             { text: '监控与采样', link: '/zh/reliability/monitoring' }
           ]
@@ -98,7 +100,8 @@ export default defineConfig({
             { text: '启动专用实时控制循环', link: '/zh/realtime-and-communication/realtime-control' },
             { text: '传递每一条消息', link: '/zh/realtime-and-communication/channels' },
             { text: '传递最新值、快照和阶段', link: '/zh/realtime-and-communication/state-and-phases' },
-            { text: '通信可观察性', link: '/zh/realtime-and-communication/observability' }
+            { text: '通信可观察性', link: '/zh/realtime-and-communication/observability' },
+            { text: '容量判断与告警落地', link: '/zh/realtime-and-communication/capacity-and-alerting' }
           ]
         }
       ],
@@ -121,7 +124,8 @@ export default defineConfig({
             { text: '何时使用高级逃生口', link: '/zh/advanced/escape-hatches' },
             { text: '接入自定义周期源', link: '/zh/advanced/custom-cycle-manager' },
             { text: '任务如何穿过执行器', link: '/zh/advanced/execution-paths' },
-            { text: '无锁与性能实验', link: '/zh/advanced/lockfree-and-performance' }
+            { text: '无锁与性能实验', link: '/zh/advanced/lockfree-and-performance' },
+            { text: '性能测量与回归门禁', link: '/zh/advanced/performance-measurement' }
           ]
         }
       ],

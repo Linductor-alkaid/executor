@@ -13,5 +13,6 @@ description: 按数据语义选择专用实时线程和跨线程通信组件。
 2. [传递每一条消息](/zh/realtime-and-communication/channels)：普通帧流与实时周期内有限 drain。
 3. [传递最新值、快照和阶段](/zh/realtime-and-communication/state-and-phases)：配置、完整状态与启动顺序。
 4. [通信可观察性](/zh/realtime-and-communication/observability)：统一理解 `CommStats` 与本地事件 callback。
+5. [容量判断与告警落地](/zh/realtime-and-communication/capacity-and-alerting)：把累计统计转换成窗口速率、消费余量、告警级别和处置动作。
 
 完整 API 见 [`docs/API.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md)；综合页面的可运行事实源是 [`examples/comm_robot_pipeline.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/comm_robot_pipeline.cpp)。

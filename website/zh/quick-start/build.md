@@ -71,4 +71,4 @@ ctest --test-dir build -L tutorial --output-on-failure
 
 ## 下一步
 
-进入[第一个任务](/zh/quick-start/first-task)。
+进入[第一个任务](/zh/quick-start/first-task)。准备部署到正式 Linux/Windows 环境时，使用[平台部署核对](/zh/reliability/platform-deployment)验证权限、亲和性和实际运行状态。

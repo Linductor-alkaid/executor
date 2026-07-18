@@ -58,4 +58,4 @@ queue.stop();
 
 ## 下一步阅读
 
-回到[API 参考](/zh/reference/api)确认公开接口；性能报告和内部优化历史可作为事实来源，但不是用户程序的依赖契约。
+使用[性能测量与回归门禁](/zh/advanced/performance-measurement)固定实验环境、指标语义和门禁层级；回到[API 参考](/zh/reference/api)确认公开接口。性能报告和内部优化历史可作为事实来源，但不是用户程序的依赖契约。
