@@ -121,6 +121,7 @@ export default defineConfig({
           text: '高级与原理',
           items: [
             { text: '概览与边界', link: '/zh/advanced/' },
+            { text: '源码架构与阅读地图', link: '/zh/advanced/source-architecture' },
             { text: '何时使用高级逃生口', link: '/zh/advanced/escape-hatches' },
             { text: '接入自定义周期源', link: '/zh/advanced/custom-cycle-manager' },
             { text: '任务如何穿过执行器', link: '/zh/advanced/execution-paths' },
