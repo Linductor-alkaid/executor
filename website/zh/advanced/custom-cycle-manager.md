@@ -42,6 +42,12 @@ executor.stop_realtime_task("control");
 
 完整的最小实现见 [`examples/realtime_can.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/realtime_can.cpp)。
 
+## callback 与周期源如何接收输入
+
+`register_cycle()` 收到的是已经绑定输入的 `std::function<void()>`。自定义实现必须按值保存这个 callback，并在周期触发时调用；不能只保存对 `register_cycle()` 参数的引用。业务输入应在 `config.cycle_callback` 中按值或稳定 owner 捕获，规则与内置实时周期一致。
+
+`config.cycle_manager` 则是一个借用的裸指针：Executor 不复制也不拥有 `ExternalClock`。周期源对象、它保存的 callback，以及 callback 捕获的业务对象必须按停止顺序逆序释放：先停止实时任务并让 `start_cycle()` 返回，再销毁业务对象和周期源。若周期源自己启动辅助线程，还要在析构前 join，不能让线程继续调用已经销毁的 callback。
+
 ## 生命周期与失败
 
 - 注册失败时不要启动周期源；检查 `ExecutorResult` 并清理任何已分配资源。

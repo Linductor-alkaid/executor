@@ -40,6 +40,32 @@ realtime started=yes, command=queued, cycles=observed, command ran=yes
 
 实时队列是有界入口：入队成功只表示将在后续周期处理，并不表示任务已完成。`max_tasks_per_cycle` 默认是 `64`；剩余工作会留给下一周期，以保护周期预算。周期回调超时后，运行时会跳过已错过的节拍并重新以“当前时间加一个周期”调相，避免追赶造成抖动风暴；通过 `cycle_timeout_count` 观察超时。紧急停止必须走应用自己的硬件或安全控制旁路，不能等待实时队列消费。
 
+## 实时线程如何接收函数与输入
+
+实时路径有两个不同入口，二者都只接收无参数、无返回值的 `void()` callable：
+
+| 入口 | 何时调用 | 输入绑定方式 | 完成观察 |
+| --- | --- | --- | --- |
+| `config.cycle_callback` | 每个周期固定调用 | 注册前用 lambda 捕获长期状态 | `cycle_count`、超时和应用状态 |
+| `try_push_realtime_task(name, task)` | 入队后由后续周期有限消费 | 推送时用 lambda 捕获该命令输入 | 返回值只表示是否入队，状态计数观察执行 |
+
+```cpp
+auto controller = std::make_shared<Controller>(config_snapshot);
+config.cycle_callback = [controller] {
+    controller->run_cycle();
+};
+
+ControlCommand command = read_command();
+const bool queued = executor.try_push_realtime_task(
+    "control", [controller, command] {
+        controller->apply(command);
+    });
+```
+
+这里没有 `try_push_realtime_task(name, fn, args...)` 重载，也没有每项 future；输入必须先绑定进可复制的 `std::function<void()>`。不要捕获提交线程栈上的引用，也不要在 callback 内分配大型对象、阻塞等待或取得普通 mutex：输入应在非实时线程准备好，再以小型值、稳定 handle 或预分配对象传入。
+
+`cycle_callback` 捕获的对象必须活到 `stop_realtime_task()` 返回；动态推送任务捕获的对象必须活到任务被消费或执行器停止清理。使用 `shared_ptr` 只能解决生命周期，不能保证实时确定性；引用计数、析构位置和对象内部锁仍需在目标硬件测量。
+
 ## 配置与降级
 
 默认配置会尽力申请实时优先级、CPU 亲和性、内存锁和低 timer slack。Linux 的 `SCHED_FIFO`、`mlockall`、容器 cpuset 和 Windows 调度能力可能受权限或平台限制；库会安全继续运行，但这不代表请求已生效。

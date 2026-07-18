@@ -37,6 +37,18 @@ priority tasks=analysis,control
 - 优先级只影响等待队列的取出顺序；已经开始运行的低优先级任务不会被抢占。
 - 多工作线程、已有执行中的任务和同优先级 FIFO 都会影响实际观察到的完成顺序，因此不要把这个示例的输出顺序当作调度时序证明。
 
+## 优先级任务如何接收输入
+
+完整形式是 `submit_priority(priority, fn, args...)`：只有最前面的 priority 是额外调度信息，后面的 callable 与参数保存规则和 `submit(fn, args...)` 相同。
+
+```cpp
+ControlCommand command = read_command();
+auto applied = executor.submit_priority(
+    3, apply_control_command, command);
+```
+
+`command` 会按值保存到任务中。若改用 lambda，也优先按值捕获命令或捕获稳定 owner；提高优先级不会缩短引用必须存活的时间，也不会让裸 `this`、指针或共享可变状态变安全。
+
 ## 运行假设与所有权
 
 示例固定一个 worker，只提交一个分析任务和一个控制任务，目的是验证两种 future 都能完成，而不是证明控制任务一定先完成。任务返回短字符串，没有捕获外部对象；真实 `ControlCommand` 应按值或用明确所有权传入，不能引用提交函数栈上的临时对象。

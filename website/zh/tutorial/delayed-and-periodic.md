@@ -42,6 +42,21 @@ periodic status=running, cancelled=yes
 - `get_all_periodic_task_status()` 适合监控页或关闭前检查所有仍注册的周期任务。
 - 延迟任务返回 `future`，因此其返回值、执行异常和拒绝提交仍由 `get()` 观察。
 
+## 周期任务如何接收业务输入
+
+`submit_delayed(delay, fn, args...)` 与普通 `submit()` 一样，可以把函数和参数分别传入。`submit_periodic(period, task)` 不同：它只接收可重复调用的 `std::function<void()>`，没有单独的参数列表，也没有逐次返回值。需要输入时，应先用 lambda 把输入绑定到这个无参数 callback：
+
+```cpp
+auto device = std::make_shared<DeviceClient>(endpoint);
+const auto task_id = executor.submit_periodic(1000, [device] {
+    device->check_health();
+});
+```
+
+callback 必须可复制，移动独占的 `unique_ptr` lambda 通常不能直接转换为 `std::function<void()>`；需要长期独占资源时，让一个稳定 owner 持有它，或捕获 `shared_ptr`。按引用捕获只适用于能够保证“取消后等待所有在途 callback，再销毁对象”的场景。
+
+每次周期触发都会调用同一个闭包，因此闭包中的可变状态可能被多次甚至重叠访问。若需要累计状态，使用原子、mutex 或应用级 single-flight；不要把普通成员变量的可变引用捕获进去后假设每次调用天然串行。
+
 ## 运行假设与所有权
 
 示例的延迟只有 `1 ms`，周期为 `5 ms`，运行约 `30 ms`；这些值只是让 smoke test 快速完成，不是设备重试参数。调度时间使用相对时长，表示“最早到期时间”，到期后仍要等待共享线程池可用。

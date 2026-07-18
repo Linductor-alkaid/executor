@@ -90,6 +90,8 @@ auto result = executor.submit([model, frame] {
 
 周期任务和 batch 的形状不同：`submit_periodic()` 接受可重复调用的 `void()` 任务，通常用 lambda 显式捕获长期状态；batch 接受一组独立的 `void()` callable，每个任务都应各自拥有稳定输入。
 
+实时、GPU 与通信也不是普通参数包的简单变体：实时 callback 和动态实时任务接收预绑定的 `void()` callable，GPU callable 可接收后端 stream，通信组件传递的是值对象。请在对应的[实时控制](/zh/realtime-and-communication/realtime-control)、[GPU 提交](/zh/gpu/register-and-submit)和[通信通道](/zh/realtime-and-communication/channels)页面按各自输入契约使用。
+
 ## 常见编译与运行问题
 
 - **重载函数无法推导**：用 lambda 调用目标重载，或显式转换函数指针类型。

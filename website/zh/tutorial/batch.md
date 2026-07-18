@@ -41,6 +41,24 @@ batch processed=6, completed=yes
 
 示例先检查 `submit_batch()` 的全部 future，再提交 no-future 批次，并以 `wait_for_completion_for()` 做有界收尾。
 
+## 每个批量任务如何接收输入
+
+batch 不提供 `submit_batch(fn, args...)` 形式。它接收的是一组已经绑定好输入、可独立调用的 `void()` callable，常用 `std::vector<std::function<void()>>`：
+
+```cpp
+std::vector<std::function<void()>> tasks;
+for (SensorFrame frame : frames) {
+    tasks.push_back([frame, processor] {
+        processor->process(frame);
+    });
+}
+auto futures = executor.submit_batch(tasks);
+```
+
+这里每个 lambda 各自拥有一个 `frame` 副本，并共享 `processor` 的生命周期。不要写 `[&frame]` 捕获循环变量；循环进入下一轮或离开作用域后，任务可能读到同一对象或悬空引用。大型帧可捕获有明确归还协议的 buffer handle，或捕获 `shared_ptr<const FrameData>`，但不能只传一个无法证明存活时间的 view。
+
+任务列表和其中的 callable 当前需要可复制；move-only 资源应由可复制的共享 owner 间接持有，或改用逐项 `submit()` 的移动捕获 lambda。batch future 只表示每个 `void()` callable 是否完成，不自动收集业务返回值。
+
 ## 运行假设与所有权
 
 示例只有三项任务，每项只递增一个原子计数器；同一任务列表被提交两次，所以最终计数为六。lambda 捕获的 `processed` 必须活到两批任务全部完成，原子类型只解决这个计数器的数据竞争，不代表任意业务对象都能安全共享。

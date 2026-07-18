@@ -30,6 +30,24 @@ future.get();
 
 CPU 路径以空 stream 调用同一个 callable；GPU 路径调用 `submit_gpu()`。因此 callable 必须能正确处理 CPU 的 `nullptr` stream，也必须在 GPU 路径调用前已成功注册指定 executor。
 
+## 一个 callable 必须覆盖两种输入环境
+
+与 `submit_gpu()` 可接受无参数 callable 不同，`submit_auto()` 的 callable 必须能够以 `void*` 参数调用，因为 CPU 分支会明确执行 `kernel(nullptr)`：
+
+```cpp
+auto data = std::make_shared<WorkData>(prepare_work());
+auto future = executor.submit_auto(work, "cuda0",
+    [data](void* stream) {
+        if (stream == nullptr) {
+            run_cpu(*data);
+        } else {
+            run_gpu(stream, *data);
+        }
+    }, gpu_task_config);
+```
+
+捕获的数据必须同时满足 CPU 与 GPU 路径的生命周期和线程安全要求。不要让 `nullptr` 分支误用设备指针，也不要让 GPU 分支访问只在提交栈帧有效的 host view。两条路径应产生相同业务语义；若它们需要完全不同的输入结构，应用显式选择 `submit()` 或 `submit_gpu()` 往往更清晰。
+
 ## 不会隐式回退的情况
 
 `submit_auto()` 的决策只依据特征和调度器历史；若它选择 GPU 而 `cuda0` 未注册或不可用，提交会明确失败，不会偷偷改走 CPU。推荐流程是先完成 `register_gpu_executor_ex()`、检查状态，再允许 GPU 特征或 `prefer_gpu` 进入调度器；注册失败时由应用直接使用 `submit()` 处理 CPU 回退。

@@ -38,6 +38,19 @@ plan score=42
 - 还要继续依赖规划时，使用 `submit_after_with_handle()`；它与 `submit_with_handle()` 一样同时给出 `future` 和 `TaskHandle`。
 - `when_all(handles)` 只表达“全部完成”的汇合点，可嵌套使用。
 
+## 依赖任务的输入何时保存
+
+`submit_with_handle(fn, args...)`、`submit_after(handle, fn, args...)` 与普通 `submit()` 使用相同的 callable 和参数模型，但 dependent 的输入在**提交依赖任务时**就被保存，不是等前置成功后才从调用方读取：
+
+```cpp
+PlanConfig config = load_plan_config();
+auto plan = executor.submit_after(prerequisites, run_planner, config);
+```
+
+后续修改调用方的 `config` 不会更新任务已经保存的副本。若依赖任务要消费前置任务的返回值，`TaskHandle` 本身不会传值；应让前置任务把结果写入所有权明确的共享对象，或像本例一样保留对应 future，并只在依赖已满足后读取。
+
+引用输入必须从 dependent 提交时一直活到它最终执行完成，等待前置任务的时间也算在内。因此依赖链越长，越应该按值保存不可变配置，或捕获 `shared_ptr`；不要把调用栈局部变量通过 `[&]` 交给一个可能很久以后才运行的 dependent。
+
 ## 当前容量边界
 
 任务句柄让完成关系和失败传播显式化，但当前实现不是完全非阻塞的 DAG 调度器：dependent wrapper 会进入普通线程池，并在前置状态确定前等待。低线程数、大量长依赖链，或在前置任务之前集中提交 dependent，都可能占住 worker。
