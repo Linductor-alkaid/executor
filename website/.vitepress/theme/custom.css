@@ -64,7 +64,22 @@
 }
 .mermaid-diagram svg { max-width: 100%; height: auto; }
 .mermaid-diagram[data-mermaid-error="true"] { display: block; overflow-x: auto; }
-.VPDoc table { display: table; width: 100%; }
+.VPDoc table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.VPDoc #从-api-反查源码 + table { table-layout: fixed; font-size: 13px; }
+.VPDoc #从-api-反查源码 + table th:nth-child(1) { width: 18%; }
+.VPDoc #从-api-反查源码 + table th:nth-child(2),
+.VPDoc #从-api-反查源码 + table th:nth-child(3) { width: 29%; }
+.VPDoc #从-api-反查源码 + table th:nth-child(4) { width: 24%; }
+.VPDoc #从-api-反查源码 + table td { vertical-align: top; }
+.VPDoc #从-api-反查源码 + table :not(pre) > code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .migration-table table { table-layout: fixed; }
 .migration-table th:first-child, .migration-table td:first-child { width: 58%; }
 .migration-table :not(pre) > code { white-space: normal; overflow-wrap: anywhere; }

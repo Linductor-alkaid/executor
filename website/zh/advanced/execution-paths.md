@@ -58,16 +58,18 @@ flowchart TD
 `submit_with_handle()` 先在 Facade 的 `task_graph_nodes_` 创建 `Pending` 节点，再提交一个包装任务。包装任务开始时转为 `Running`，成功后转为 `Succeeded`，异常时转为 `Failed`。
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Pending
-    Pending --> Running
-    Running --> Succeeded
-    Running --> Failed
-    state WhenAll {
-      [*] --> Pending
-      Pending --> Succeeded: 所有前置成功
-      Pending --> Failed: 任一前置失败
-    }
+flowchart LR
+    subgraph task[普通任务节点]
+      A[创建节点] --> B[Pending]
+      B -->|包装任务开始执行| C[Running]
+      C -->|用户函数返回| D[Succeeded]
+      C -->|用户函数抛异常| E[Failed]
+    end
+
+    subgraph whenall[WhenAll 虚拟节点]
+      F[等待所有前置任务] -->|全部成功| G[Succeeded]
+      F -->|任一失败| H[Failed]
+    end
 ```
 
 `submit_after_with_handle()` 不应让 worker 在任务体里同步等待依赖。Facade 先验证 handle 是否属于当前任务图、用 `TaskDependencyManager` 增加有向边并做 DFS 环检测；依赖未完成时，提交包装逻辑等待图状态变为可运行或失败，再决定是否将真正工作交给异步执行器。前置失败会把同一个 `exception_ptr` 传播到 dependent future，不执行 dependent 用户函数。
