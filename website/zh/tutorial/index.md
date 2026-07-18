@@ -7,7 +7,7 @@ description: 通过机器人数据流水线与服务端数据导入逐步学习 
 
 教程使用同一条机器人数据流水线：采集 `SensorFrame`、解析 `ParsedFrame`、生成 `Plan`，并把 `ControlCommand` 送入控制循环。每章只增加一个业务问题和一组必要 API。
 
-从[第一个任务](/zh/quick-start/first-task)开始，然后沿着下面的业务问题推进：
+从[第一个任务](/zh/quick-start/first-task)开始，并先掌握[如何提交自己的函数与数据](/zh/quick-start/task-inputs-and-ownership)，然后沿着下面的业务问题推进：
 
 1. [让控制命令优先](/zh/tutorial/priority)：普通分析与紧急控制命令共用线程池。
 2. [延迟重试与健康检查](/zh/tutorial/delayed-and-periodic)：稍后重试设备，并取消可观察的软周期任务。

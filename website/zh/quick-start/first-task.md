@@ -47,4 +47,4 @@ task failed: expected tutorial failure
 
 ## 下一步阅读
 
-[返回值与异常](/zh/quick-start/return-values-and-errors)解释如何选择和补充失败观察路径；[初始化与关闭](/zh/quick-start/lifecycle)说明何时显式管理生命周期。
+先阅读[提交自己的函数与数据](/zh/quick-start/task-inputs-and-ownership)，学习如何传入自由函数、成员函数、参数和业务对象；然后由[返回值与异常](/zh/quick-start/return-values-and-errors)解释如何选择和补充失败观察路径。[初始化与关闭](/zh/quick-start/lifecycle)说明何时显式管理生命周期。

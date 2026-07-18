@@ -53,6 +53,7 @@ export default defineConfig({
             { text: 'Executor 是什么', link: '/zh/getting-started/what-is-executor' },
             { text: '构建与安装', link: '/zh/quick-start/build' },
             { text: '第一个任务', link: '/zh/quick-start/first-task' },
+            { text: '提交自己的函数与数据', link: '/zh/quick-start/task-inputs-and-ownership' },
             { text: '返回值与异常', link: '/zh/quick-start/return-values-and-errors' },
             { text: '初始化与关闭', link: '/zh/quick-start/lifecycle' }
           ]

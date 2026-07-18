@@ -14,6 +14,7 @@
 | `08_communication.cpp` | 最新值、消息流与快照 | 基础 | 是 |
 | `09_gpu.cpp` | 无后端 GPU 诊断与 CPU 回退 | 基础；不需要 CUDA/OpenCL | 是 |
 | `10_service_data_import.cpp` | 服务端数据导入与部分失败 | 基础 | 是 |
+| `11_task_inputs.cpp` | 自由函数、成员函数、捕获与输入所有权 | 基础 | 是 |
 
 构建并运行全部示例：
 

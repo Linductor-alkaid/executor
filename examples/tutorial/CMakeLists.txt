@@ -9,6 +9,7 @@ set(TUTORIAL_SOURCES
     08_communication.cpp
     09_gpu.cpp
     10_service_data_import.cpp
+    11_task_inputs.cpp
 )
 
 foreach(TUTORIAL_SOURCE IN LISTS TUTORIAL_SOURCES)
