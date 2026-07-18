@@ -105,13 +105,13 @@ if (!result.completed) {
 
 ### 先确认关闭顺序
 
-```text
-停止接收新请求和外部回调
-→ 通知长期循环与阻塞 I/O 停止
-→ 等待业务 producer 退出
-→ 有界等待已接受任务
-→ 根据快照选择 shutdown(true) 或 shutdown(false)
-→ 销毁任务捕获的业务对象
+```mermaid
+flowchart TD
+    A[停止接收新请求和外部回调] --> B[通知长期循环与阻塞 I/O 停止]
+    B --> C[等待业务 producer 退出]
+    C --> D[有界等待已接受任务]
+    D --> E[根据快照选择<br/>shutdown(true) 或 shutdown(false)]
+    E --> F[销毁任务捕获的业务对象]
 ```
 
 最常见的原因不是 Executor 自身在“死锁”，而是业务任务永久阻塞、producer 在排空期间继续提交，或任务捕获对象先于任务被析构。

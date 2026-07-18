@@ -13,24 +13,19 @@ description: 从公开 Facade 追到 Manager、线程池、任务图、实时执
 
 ## 四层结构
 
-```text
-应用
-  │  submit / future / status / shutdown
-  ▼
-公开 Facade（include/executor/executor.hpp）
-  │  统一 promise、失败事件、任务图和命名
-  ▼
-资源拥有者（src/executor/executor_manager.cpp）
-  │  默认异步执行器、实时注册表、GPU 注册表、监控提供者
-  ├───────────────┬────────────────┬─────────────────┐
-  ▼               ▼                ▼                 ▼
-ThreadPoolExecutor  RealtimeThreadExecutor  GPU executor  Comm components
-  │               │
-  ▼               ▼
-PriorityScheduler  cycle callback + bounded MPSC queue
-  │
-  ▼
-TaskDispatcher → WorkerLocalQueue / LockFreeWorkerQueue → worker
+```mermaid
+flowchart TD
+    A[应用<br/>submit / future / status / shutdown] --> B[公开 Facade<br/>include/executor/executor.hpp]
+    B --> C[资源拥有者<br/>executor_manager.cpp]
+    C --> D[ThreadPoolExecutor]
+    C --> E[RealtimeThreadExecutor]
+    C --> F[GPU executor]
+    C --> G[Comm components]
+    D --> H[PriorityScheduler]
+    H --> I[TaskDispatcher]
+    I --> J[WorkerLocalQueue / LockFreeWorkerQueue]
+    J --> K[worker]
+    E --> L[cycle callback + bounded MPSC queue]
 ```
 
 每层只应承担自己的责任：
@@ -75,29 +70,27 @@ TaskDispatcher → WorkerLocalQueue / LockFreeWorkerQueue → worker
 
 普通执行路径依赖两个计数事实：
 
-```text
-accepted task
-  → scheduler 或 worker queue
-  → active worker
-  → completed 或 failed
-
-completion_ready ⇔ scheduler_empty
-                 ∧ all_local_queues_empty
-                 ∧ active_threads == 0
-                 ∧ total_tasks == completed_tasks
+```mermaid
+flowchart LR
+    A[accepted task] --> B[scheduler 或 worker queue]
+    B --> C[active worker]
+    C --> D[completed 或 failed]
+    E[completion_ready] --> F[scheduler_empty]
+    F --> G[all local queues empty]
+    G --> H[active_threads = 0]
+    H --> I[total_tasks = completed_tasks]
 ```
 
 `failed_tasks` 是 `completed_tasks` 的子集，不能再从完成等式中扣除。任务从 scheduler 出队后，如果 worker ID 失效或本地队列满，dispatcher 必须把任务重新放回 scheduler；否则会出现“提交成功但永远没有 future 结果”的丢失窗口。
 
 实时路径的对应不变量是：
 
-```text
-accepted realtime task
-  → bounded MPSC queue
-  → current cycle consumes it
-  → wrapper returned to pool
-
-rejected task → dropped_task_count + reason counter
+```mermaid
+flowchart LR
+    A[accepted realtime task] --> B[bounded MPSC queue]
+    B --> C[current cycle consumes it]
+    C --> D[wrapper returned to pool]
+    E[rejected task] --> F[dropped_task_count + reason counter]
 ```
 
 停止时先禁止新 producer，再等待已登记 producer 退出，最后 drain 队列；这保证最终 drain 后不会凭空出现一个“已接受但未清理”的 wrapper。

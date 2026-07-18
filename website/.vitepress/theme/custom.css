@@ -49,6 +49,21 @@
 .VPDoc h2 { font-size: 32px; line-height: 1.2; margin-top: 64px; }
 .VPDoc p, .VPDoc li { color: var(--vp-c-text-2); }
 .VPDoc a { color: #1b61c9; }
+.mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  margin: 24px 0;
+  padding: 20px;
+  overflow-x: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  background: var(--vp-c-bg-soft);
+  color: var(--vp-c-text-2);
+  text-align: left;
+  white-space: pre;
+}
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-diagram[data-mermaid-error="true"] { display: block; overflow-x: auto; }
 .VPDoc table { display: table; width: 100%; }
 .migration-table table { table-layout: fixed; }
 .migration-table th:first-child, .migration-table td:first-child { width: 58%; }

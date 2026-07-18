@@ -7,6 +7,20 @@ export default defineConfig({
   base: '/executor/',
   cleanUrls: true,
   lastUpdated: true,
+  markdown: {
+    config(md) {
+      const defaultFence = md.renderer.rules.fence
+
+      md.renderer.rules.fence = (tokens, index, options, env, self) => {
+        const token = tokens[index]
+        if (token.info.trim() === 'mermaid') {
+          const source = md.utils.escapeHtml(token.content.trim())
+          return `<div class="mermaid-diagram" data-mermaid-source="${source.replaceAll('"', '&quot;')}">${source}</div>`
+        }
+        return defaultFence(tokens, index, options, env, self)
+      }
+    }
+  },
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/executor-mark.svg' }],
     ['meta', { name: 'theme-color', content: '#181d26' }]
