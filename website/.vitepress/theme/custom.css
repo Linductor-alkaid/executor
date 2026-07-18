@@ -50,10 +50,11 @@
 .VPDoc p, .VPDoc li { color: var(--vp-c-text-2); }
 .VPDoc a { color: #1b61c9; }
 .mermaid-diagram {
+  position: relative;
   display: flex;
   justify-content: center;
   margin: 24px 0;
-  padding: 20px;
+  padding: 56px 20px 20px;
   overflow-x: auto;
   border: 1px solid var(--vp-c-divider);
   border-radius: 10px;
@@ -64,6 +65,80 @@
 }
 .mermaid-diagram svg { max-width: 100%; height: auto; }
 .mermaid-diagram[data-mermaid-error="true"] { display: block; overflow-x: auto; }
+.mermaid-diagram__expand {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.mermaid-diagram__expand:active { background: var(--vp-c-bg-alt); }
+.mermaid-diagram__expand:focus-visible,
+.mermaid-viewer button:focus-visible { outline: 2px solid #458fff; outline-offset: 2px; }
+.mermaid-viewer[hidden] { display: none; }
+.mermaid-viewer {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  padding: 24px;
+  background: rgba(13, 18, 24, 0.82);
+}
+.mermaid-viewer__panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  border-radius: 12px;
+  background: var(--vp-c-bg);
+  overflow: hidden;
+}
+.mermaid-viewer__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+.mermaid-viewer__title { color: var(--vp-c-text-1); font-weight: 500; }
+.mermaid-viewer__actions { display: flex; align-items: center; gap: 8px; }
+.mermaid-viewer__actions button {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  background: var(--vp-c-bg);
+  color: var(--vp-c-text-1);
+  font: inherit;
+  cursor: pointer;
+}
+.mermaid-viewer__actions button:active { background: var(--vp-c-bg-alt); }
+.mermaid-viewer__actions output { min-width: 48px; color: var(--vp-c-text-2); text-align: center; }
+.mermaid-viewer__canvas {
+  display: block;
+  min-width: 0;
+  min-height: 0;
+  padding: 48px;
+  overflow: auto;
+  background: var(--vp-c-bg-soft);
+}
+.mermaid-viewer__canvas svg {
+  display: block;
+  width: auto;
+  max-width: none;
+  height: auto;
+  margin: auto;
+}
+.mermaid-viewer-open { overflow: hidden; }
 .VPDoc table {
   display: block;
   width: 100%;
@@ -143,6 +218,11 @@
   .VPHomeHero .text { font-size: 26px; line-height: 36px; }
   .VPDoc h1 { font-size: 32px; }
   .VPDoc h2 { font-size: 28px; }
+  .mermaid-viewer { padding: 0; }
+  .mermaid-viewer__panel { border-radius: 0; }
+  .mermaid-viewer__toolbar { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .mermaid-viewer__actions { width: 100%; overflow-x: auto; }
+  .mermaid-viewer__canvas { padding: 24px; }
   .maintenance-hero { padding: 32px 24px; }
   .maintenance-grid { grid-template-columns: 1fr; }
   .maintenance-card { min-height: 0; }
