@@ -1,11 +1,78 @@
 import DefaultTheme from 'vitepress/theme'
-import { h, nextTick, onMounted, watch } from 'vue'
-import { useRoute } from 'vitepress'
+import { computed, h, nextTick, onMounted, watch } from 'vue'
+import { useRoute, withBase } from 'vitepress'
 import './custom.css'
 
 const zoomStep = 0.25
 const minZoom = 0.5
 const maxZoom = 3
+
+const translatedPaths = new Set([
+  '/en/',
+  '/en/getting-started/what-is-executor',
+  '/en/quick-start/build',
+  '/en/quick-start/first-task',
+  '/en/quick-start/task-inputs-and-ownership',
+  '/en/quick-start/return-values-and-errors',
+  '/en/quick-start/lifecycle',
+  '/en/tutorial/',
+  '/en/tutorial/priority',
+  '/en/tutorial/delayed-and-periodic',
+  '/en/tutorial/batch',
+  '/en/tutorial/dependencies',
+  '/en/tutorial/waiting-and-status',
+  '/en/tutorial/complete-robot-pipeline',
+  '/en/tutorial/service-data-import',
+  '/en/guides/choosing-submit-api',
+  '/en/guides/choosing-communication',
+  '/en/guides/migrating-existing-threads',
+  '/en/guides/concurrency-antipatterns',
+  '/en/guides/production-readiness',
+  '/en/realtime-and-communication/',
+  '/en/realtime-and-communication/realtime-control',
+  '/en/realtime-and-communication/channels',
+  '/en/realtime-and-communication/state-and-phases',
+  '/en/realtime-and-communication/observability',
+  '/en/realtime-and-communication/capacity-and-alerting',
+  '/en/reliability/',
+  '/en/reliability/troubleshooting',
+  '/en/reliability/platform-deployment',
+  '/en/reliability/failure-observability',
+  '/en/reliability/monitoring',
+  '/en/advanced/',
+  '/en/advanced/source-architecture',
+  '/en/advanced/escape-hatches',
+  '/en/advanced/custom-cycle-manager',
+  '/en/advanced/execution-paths',
+  '/en/advanced/lockfree-and-performance',
+  '/en/advanced/performance-measurement',
+  '/en/gpu/',
+  '/en/gpu/diagnostics',
+  '/en/gpu/register-and-submit',
+  '/en/gpu/automatic-scheduling',
+  '/en/reference/version-and-migration'
+])
+
+const LanguageSwitch = {
+  setup() {
+    const route = useRoute()
+    const target = computed(() => {
+      const path = route.path.replace(/\.html$/, '')
+      if (path === '/en/') return '/'
+      if (path.startsWith('/en/')) return path.replace(/^\/en/, '/zh')
+      const englishPath = path === '/' ? '/en/' : path.replace(/^\/zh/, '/en')
+      return translatedPaths.has(englishPath) ? englishPath : '/en/'
+    })
+    const label = computed(() => route.path.startsWith('/en/') ? '简体中文' : 'English')
+    const fallback = computed(() => !route.path.startsWith('/en/') && target.value === '/en/')
+
+    return () => h('a', {
+      class: 'language-switch',
+      href: withBase(target.value),
+      title: fallback.value ? 'This page is not yet available in English' : undefined
+    }, fallback.value ? `${label.value} · 首页` : label.value)
+  }
+}
 
 function createDiagramViewer() {
   const viewer = document.createElement('div')
@@ -136,7 +203,9 @@ const Layout = {
     const route = useRoute()
     onMounted(() => renderMermaidDiagrams())
     watch(() => route.path, () => nextTick(() => renderMermaidDiagrams()))
-    return () => h(DefaultTheme.Layout)
+    return () => h(DefaultTheme.Layout, null, {
+      'nav-bar-content-after': () => h(LanguageSwitch)
+    })
   }
 }
 

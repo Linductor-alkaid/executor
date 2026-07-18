@@ -4,6 +4,18 @@ export default defineConfig({
   lang: 'zh-CN',
   title: 'Executor 使用手册',
   description: '从第一个任务开始构建可靠的 C++ 并发程序。',
+  locales: {
+    root: {
+      label: '简体中文',
+      lang: 'zh-CN'
+    },
+    en: {
+      label: 'English',
+      lang: 'en-US',
+      title: 'Executor Guide',
+      description: 'Build reliable C++ concurrent programs from your first task.'
+    }
+  },
   base: '/executor/',
   cleanUrls: true,
   lastUpdated: true,
@@ -45,6 +57,134 @@ export default defineConfig({
       },
       { text: 'GitHub', link: 'https://github.com/Linductor-alkaid/executor' }
     ],
+    locales: {
+      en: {
+        nav: [
+          { text: 'Quick Start', link: '/en/quick-start/build' },
+          { text: 'Tutorials', link: '/en/tutorial/' },
+          { text: 'Guides', link: '/en/guides/choosing-submit-api' },
+          { text: 'Real-Time & Communication', link: '/en/realtime-and-communication/' },
+          { text: 'Reliability', link: '/en/reliability/' },
+          { text: 'Advanced', link: '/en/advanced/' },
+          { text: 'GPU', link: '/en/gpu/' },
+          { text: 'Versions and Migration', link: '/en/reference/version-and-migration' },
+          { text: 'Complete API', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' },
+          { text: 'GitHub', link: 'https://github.com/Linductor-alkaid/executor' }
+        ],
+        sidebar: {
+          '/en/quick-start/': [
+            {
+              text: 'Quick Start',
+              items: [
+                { text: 'What is Executor?', link: '/en/getting-started/what-is-executor' },
+                { text: 'Build and Install', link: '/en/quick-start/build' },
+                { text: 'Your First Task', link: '/en/quick-start/first-task' },
+                { text: 'Submit Functions and Data', link: '/en/quick-start/task-inputs-and-ownership' },
+                { text: 'Return Values and Errors', link: '/en/quick-start/return-values-and-errors' },
+                { text: 'Initialization and Shutdown', link: '/en/quick-start/lifecycle' }
+              ]
+            }
+          ],
+          '/en/getting-started/': [
+            {
+              text: 'Getting Started',
+              items: [
+                { text: 'What is Executor?', link: '/en/getting-started/what-is-executor' },
+                { text: 'Build and Install', link: '/en/quick-start/build' }
+              ]
+            }
+          ],
+          '/en/reference/': [
+            {
+              text: 'Reference',
+              items: [
+                { text: 'Versions and Migration', link: '/en/reference/version-and-migration' },
+                { text: 'Complete API Reference', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' }
+              ]
+            }
+          ],
+          '/en/tutorial/': [
+            {
+              text: 'Tutorials',
+              items: [
+                { text: 'Robot Data Pipeline', link: '/en/tutorial/' },
+                { text: 'Prioritize Control Commands', link: '/en/tutorial/priority' },
+                { text: 'Delayed Retry and Health Checks', link: '/en/tutorial/delayed-and-periodic' },
+                { text: 'Batch Sensor Frames', link: '/en/tutorial/batch' },
+                { text: 'Load, Sense, Then Plan', link: '/en/tutorial/dependencies' },
+                { text: 'Bounded Waiting and Status', link: '/en/tutorial/waiting-and-status' },
+                { text: 'Complete Robot Pipeline', link: '/en/tutorial/complete-robot-pipeline' },
+                { text: 'Service Data Import', link: '/en/tutorial/service-data-import' }
+              ]
+            }
+          ],
+          '/en/guides/': [
+            {
+              text: 'Guides',
+              items: [
+                { text: 'Choose a Submission API', link: '/en/guides/choosing-submit-api' },
+                { text: 'Choose a Communication Component', link: '/en/guides/choosing-communication' },
+                { text: 'Migrate Existing Thread Code', link: '/en/guides/migrating-existing-threads' },
+                { text: 'Concurrency Architecture Antipatterns', link: '/en/guides/concurrency-antipatterns' },
+                { text: 'Production Readiness Checklist', link: '/en/guides/production-readiness' }
+              ]
+            }
+          ],
+          '/en/realtime-and-communication/': [
+            {
+              text: 'Real-Time & Communication',
+              items: [
+                { text: 'Overview and Boundaries', link: '/en/realtime-and-communication/' },
+                { text: 'Dedicated Real-Time Control Loop', link: '/en/realtime-and-communication/realtime-control' },
+                { text: 'Deliver Every Message', link: '/en/realtime-and-communication/channels' },
+                { text: 'Latest Values, Snapshots, and Phases', link: '/en/realtime-and-communication/state-and-phases' },
+                { text: 'Communication Observability', link: '/en/realtime-and-communication/observability' },
+                { text: 'Capacity and Alerts', link: '/en/realtime-and-communication/capacity-and-alerting' }
+              ]
+            }
+          ],
+          '/en/reliability/': [
+            {
+              text: 'Reliability',
+              items: [
+                { text: 'Reliability Overview', link: '/en/reliability/' },
+                { text: 'Troubleshoot by Symptom', link: '/en/reliability/troubleshooting' },
+                { text: 'Linux and Windows Deployment', link: '/en/reliability/platform-deployment' },
+                { text: 'Failure Observability', link: '/en/reliability/failure-observability' },
+                { text: 'Monitoring and Sampling', link: '/en/reliability/monitoring' }
+              ]
+            }
+          ],
+          '/en/advanced/': [
+            {
+              text: 'Advanced',
+              items: [
+                { text: 'Overview and Boundaries', link: '/en/advanced/' },
+                { text: 'Source Architecture Map', link: '/en/advanced/source-architecture' },
+                { text: 'Advanced Escape Hatches', link: '/en/advanced/escape-hatches' },
+                { text: 'Custom Cycle Source', link: '/en/advanced/custom-cycle-manager' },
+                { text: 'How Tasks Travel Through Executor', link: '/en/advanced/execution-paths' },
+                { text: 'Lock-Free and Performance Experiments', link: '/en/advanced/lockfree-and-performance' },
+                { text: 'Performance Measurement and Regression Gates', link: '/en/advanced/performance-measurement' }
+              ]
+            }
+          ],
+          '/en/gpu/': [
+            {
+              text: 'GPU',
+              items: [
+                { text: 'GPU and Fallback', link: '/en/gpu/' },
+                { text: 'Diagnose Backend and Fall Back Safely', link: '/en/gpu/diagnostics' },
+                { text: 'Register and Submit GPU Work', link: '/en/gpu/register-and-submit' },
+                { text: 'CPU/GPU Automatic Selection', link: '/en/gpu/automatic-scheduling' }
+              ]
+            }
+          ]
+        },
+        outline: { level: [2, 3], label: 'On this page' },
+        docFooter: { prev: 'Previous page', next: 'Next page' }
+      }
+    },
     sidebar: {
       '/zh/quick-start/': [
         {
