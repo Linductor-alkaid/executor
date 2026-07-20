@@ -1,15 +1,23 @@
 import DefaultTheme from 'vitepress/theme'
 import { computed, h, nextTick, onMounted, watch } from 'vue'
-import { useRoute, withBase } from 'vitepress'
+import { useRoute } from 'vitepress'
 import './custom.css'
 
 const zoomStep = 0.25
 const minZoom = 0.5
 const maxZoom = 3
+const siteBase = '/executor'
+
+function withSiteBase(path) {
+  return `${siteBase}${path}`
+}
 
 function normalizeRoutePath(path) {
   const cleanPath = path.replace(/\.html$/, '').replace(/^\/executor(?=\/|$)/, '') || '/'
-  return cleanPath.endsWith('/') || cleanPath === '/' ? cleanPath : cleanPath.replace(/\/$/, '')
+  const localePath = cleanPath
+    .replace(/^\/en\/zh(?=\/|$)/, '/zh')
+    .replace(/^\/zh\/en(?=\/|$)/, '/en')
+  return localePath.endsWith('/') || localePath === '/' ? localePath : localePath.replace(/\/$/, '')
 }
 
 function switchLocalePath(path) {
@@ -38,7 +46,7 @@ const LanguageSwitch = {
 
     return () => h('a', {
       class: 'language-switch',
-      href: withBase(target.value)
+      href: withSiteBase(target.value)
     }, label.value)
   }
 }
@@ -56,9 +64,9 @@ const NotFound = {
               h('h1', 'Page not found'),
               h('p', 'This link may have moved, or the requested page is not published.'),
               h('ul', [
-                h('li', [h('a', { href: withBase('/en/') }, 'Return to the English home page')]),
-                h('li', [h('a', { href: withBase('/en/quick-start/first-task') }, 'Start the ten-minute quick start')]),
-                h('li', [h('a', { href: withBase('/en/reference/version-and-migration') }, 'Check versions and migration')])
+                h('li', [h('a', { href: withSiteBase('/en/') }, 'Return to the English home page')]),
+                h('li', [h('a', { href: withSiteBase('/en/quick-start/first-task') }, 'Start the ten-minute quick start')]),
+                h('li', [h('a', { href: withSiteBase('/en/reference/version-and-migration') }, 'Check versions and migration')])
               ])
             ])
           ])
@@ -71,9 +79,9 @@ const NotFound = {
             h('h1', '页面未找到'),
             h('p', '该链接可能已经移动，或对应内容尚未发布。'),
             h('ul', [
-              h('li', [h('a', { href: withBase('/') }, '从首页重新开始')]),
-              h('li', [h('a', { href: withBase('/zh/quick-start/first-task') }, '进入十分钟快速开始')]),
-              h('li', [h('a', { href: withBase('/zh/reference/version-and-migration') }, '查看版本与迁移')])
+              h('li', [h('a', { href: withSiteBase('/') }, '从首页重新开始')]),
+              h('li', [h('a', { href: withSiteBase('/zh/quick-start/first-task') }, '进入十分钟快速开始')]),
+              h('li', [h('a', { href: withSiteBase('/zh/reference/version-and-migration') }, '查看版本与迁移')])
             ])
           ])
         ])
