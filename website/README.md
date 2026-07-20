@@ -33,7 +33,7 @@ npm run docs:check --prefix website
 
 ## 首次启用 GitHub Pages
 
-仓库管理员需要在 GitHub 的 **Settings → Pages → Build and deployment** 中将 **Source** 设为 **GitHub Actions**，保存后再重新运行文档 workflow。这个一次性仓库设置不在 workflow 的权限范围内；未启用时 `actions/deploy-pages` 会在创建部署时返回 404。工作流使用 Node.js 24；`actions/deploy-pages` 自身依赖产生的 `punycode` deprecation warning 不影响 artifact 或部署结果。
+工作流会通过 `actions/configure-pages@v5` 的 `enablement: true` 自动启用 GitHub Pages 并配置为 GitHub Actions 部署。若 GitHub Pages 服务暂时返回 5xx，重新运行该 workflow；若仓库或组织策略禁止 Pages，请由管理员在 GitHub 的 **Settings → Pages → Build and deployment** 中确认允许使用 **GitHub Actions**。工作流使用 Node.js 24；第三方 action 产生的 Node 20 弃用提示不影响站点构建或部署。
 
 ## 目录约定
 
