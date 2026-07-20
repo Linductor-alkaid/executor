@@ -1,5 +1,5 @@
 import DefaultTheme from 'vitepress/theme'
-import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vitepress'
 import './custom.css'
 
@@ -35,6 +35,20 @@ function requestedPath(routePath) {
 
 function isEnglishPath(path) {
   return path === '/en' || path.startsWith('/en/')
+}
+
+const LanguageSwitch = {
+  setup() {
+    const route = useRoute()
+    const isEnglish = computed(() => isEnglishPath(normalizeRoutePath(route.path)))
+    const target = computed(() => switchLocalePath(normalizeRoutePath(route.path)))
+    const label = computed(() => isEnglish.value ? '简体中文' : 'English')
+
+    return () => h('a', {
+      class: 'language-switch',
+      href: withSiteBase(target.value)
+    }, label.value)
+  }
 }
 
 const NotFound = {
@@ -209,15 +223,9 @@ const Layout = {
     const route = useRoute()
     onMounted(() => renderMermaidDiagrams())
     watch(() => route.path, () => nextTick(() => renderMermaidDiagrams()))
-    const handleTranslationClick = (event) => {
-      if (!(event.target instanceof Element)) return
-      if (!event.target.closest('.VPNavBarTranslations a')) return
-      event.preventDefault()
-      window.location.assign(withSiteBase(switchLocalePath(requestedPath(route.path))))
-    }
-    onMounted(() => document.addEventListener('click', handleTranslationClick, true))
-    onUnmounted(() => document.removeEventListener('click', handleTranslationClick, true))
-    return () => h(DefaultTheme.Layout)
+    return () => h(DefaultTheme.Layout, null, {
+      'nav-bar-content-after': () => h(LanguageSwitch)
+    })
   }
 }
 

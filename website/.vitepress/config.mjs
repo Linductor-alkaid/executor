@@ -7,13 +7,11 @@ export default defineConfig({
   locales: {
     root: {
       label: '简体中文',
-      lang: 'zh-CN',
-      link: '/'
+      lang: 'zh-CN'
     },
     en: {
       label: 'English',
       lang: 'en-US',
-      link: '/en/',
       title: 'Executor Guide',
       description: 'Build reliable C++ concurrent programs from your first task.',
       themeConfig: {
