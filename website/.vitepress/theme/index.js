@@ -7,113 +7,74 @@ const zoomStep = 0.25
 const minZoom = 0.5
 const maxZoom = 3
 
-const localizedRoutes = new Map([
-  ['/', '/en/'],
-  ['/decisions', '/en/decisions'],
-  ['/maintenance', '/en/maintenance'],
-  ['/zh/getting-started/what-is-executor', '/en/getting-started/what-is-executor'],
-  ['/zh/quick-start/build', '/en/quick-start/build'],
-  ['/zh/quick-start/first-task', '/en/quick-start/first-task'],
-  ['/zh/quick-start/task-inputs-and-ownership', '/en/quick-start/task-inputs-and-ownership'],
-  ['/zh/quick-start/return-values-and-errors', '/en/quick-start/return-values-and-errors'],
-  ['/zh/quick-start/lifecycle', '/en/quick-start/lifecycle'],
-  ['/zh/tutorial/', '/en/tutorial/'],
-  ['/zh/tutorial/priority', '/en/tutorial/priority'],
-  ['/zh/tutorial/delayed-and-periodic', '/en/tutorial/delayed-and-periodic'],
-  ['/zh/tutorial/batch', '/en/tutorial/batch'],
-  ['/zh/tutorial/dependencies', '/en/tutorial/dependencies'],
-  ['/zh/tutorial/waiting-and-status', '/en/tutorial/waiting-and-status'],
-  ['/zh/tutorial/complete-robot-pipeline', '/en/tutorial/complete-robot-pipeline'],
-  ['/zh/tutorial/service-data-import', '/en/tutorial/service-data-import'],
-  ['/zh/guides/choosing-submit-api', '/en/guides/choosing-submit-api'],
-  ['/zh/guides/choosing-communication', '/en/guides/choosing-communication'],
-  ['/zh/guides/migrating-existing-threads', '/en/guides/migrating-existing-threads'],
-  ['/zh/guides/concurrency-antipatterns', '/en/guides/concurrency-antipatterns'],
-  ['/zh/guides/production-readiness', '/en/guides/production-readiness'],
-  ['/zh/realtime-and-communication/', '/en/realtime-and-communication/'],
-  ['/zh/realtime-and-communication/realtime-control', '/en/realtime-and-communication/realtime-control'],
-  ['/zh/realtime-and-communication/channels', '/en/realtime-and-communication/channels'],
-  ['/zh/realtime-and-communication/state-and-phases', '/en/realtime-and-communication/state-and-phases'],
-  ['/zh/realtime-and-communication/observability', '/en/realtime-and-communication/observability'],
-  ['/zh/realtime-and-communication/capacity-and-alerting', '/en/realtime-and-communication/capacity-and-alerting'],
-  ['/zh/reliability/', '/en/reliability/'],
-  ['/zh/reliability/troubleshooting', '/en/reliability/troubleshooting'],
-  ['/zh/reliability/platform-deployment', '/en/reliability/platform-deployment'],
-  ['/zh/reliability/failure-observability', '/en/reliability/failure-observability'],
-  ['/zh/reliability/monitoring', '/en/reliability/monitoring'],
-  ['/zh/advanced/', '/en/advanced/'],
-  ['/zh/advanced/source-architecture', '/en/advanced/source-architecture'],
-  ['/zh/advanced/escape-hatches', '/en/advanced/escape-hatches'],
-  ['/zh/advanced/custom-cycle-manager', '/en/advanced/custom-cycle-manager'],
-  ['/zh/advanced/execution-paths', '/en/advanced/execution-paths'],
-  ['/zh/advanced/lockfree-and-performance', '/en/advanced/lockfree-and-performance'],
-  ['/zh/advanced/performance-measurement', '/en/advanced/performance-measurement'],
-  ['/zh/gpu/', '/en/gpu/'],
-  ['/zh/gpu/diagnostics', '/en/gpu/diagnostics'],
-  ['/zh/gpu/register-and-submit', '/en/gpu/register-and-submit'],
-  ['/zh/gpu/automatic-scheduling', '/en/gpu/automatic-scheduling'],
-  ['/zh/reference/version-and-migration', '/en/reference/version-and-migration']
-])
-
-const englishToChineseRoutes = new Map(
-  [...localizedRoutes].map(([chinesePath, englishPath]) => [englishPath, chinesePath])
-)
-
 function normalizeRoutePath(path) {
   const cleanPath = path.replace(/\.html$/, '').replace(/^\/executor(?=\/|$)/, '') || '/'
-  const localePath = cleanPath.replace(/^\/en\/zh(?=\/|$)/, '/zh')
-  return localePath.endsWith('/') || localePath === '/' ? localePath : localePath.replace(/\/$/, '')
+  return cleanPath.endsWith('/') || cleanPath === '/' ? cleanPath : cleanPath.replace(/\/$/, '')
 }
 
-function findLocalizedRoute(routes, path) {
-  return routes.get(path) ?? (path === '/' ? undefined : routes.get(`${path}/`))
+function switchLocalePath(path) {
+  if (path === '/') return '/en/'
+  if (path === '/en/' || path === '/en') return '/'
+  if (path.startsWith('/zh/')) return path.replace(/^\/zh(?=\/)/, '/en')
+  if (path.startsWith('/en/')) return path.replace(/^\/en(?=\/)/, '/zh')
+  return '/en/'
+}
+
+function requestedPath(routePath) {
+  if (typeof window !== 'undefined') return normalizeRoutePath(window.location.pathname)
+  return normalizeRoutePath(routePath)
+}
+
+function isEnglishPath(path) {
+  return path === '/en' || path.startsWith('/en/')
 }
 
 const LanguageSwitch = {
   setup() {
     const route = useRoute()
-    const isEnglish = computed(() => normalizeRoutePath(route.path).startsWith('/en/'))
-    const target = computed(() => {
-      const path = normalizeRoutePath(route.path)
-      if (isEnglish.value) return findLocalizedRoute(englishToChineseRoutes, path) ?? '/'
-      return findLocalizedRoute(localizedRoutes, path) ?? '/en/'
-    })
+    const isEnglish = computed(() => isEnglishPath(normalizeRoutePath(route.path)))
+    const target = computed(() => switchLocalePath(normalizeRoutePath(route.path)))
     const label = computed(() => isEnglish.value ? '简体中文' : 'English')
-    const fallback = computed(() => !isEnglish.value && target.value === '/en/')
 
     return () => h('a', {
       class: 'language-switch',
-      href: withBase(target.value),
-      title: fallback.value ? 'This page is not yet available in English' : undefined
-    }, fallback.value ? `${label.value} · Home` : label.value)
+      href: withBase(target.value)
+    }, label.value)
   }
 }
 
 const NotFound = {
   setup() {
     const route = useRoute()
-    const isEnglish = computed(() => normalizeRoutePath(route.path).startsWith('/en/'))
+    const isEnglish = computed(() => isEnglishPath(requestedPath(route.path)))
 
     return () => {
-      const english = isEnglish.value
-      return h('main', { class: 'language-not-found VPContent' }, [
+      if (isEnglish.value) {
+        return h('main', { class: 'language-not-found VPContent', lang: 'en' }, [
+          h('div', { class: 'container' }, [
+            h('div', { class: 'content' }, [
+              h('h1', 'Page not found'),
+              h('p', 'This link may have moved, or the requested page is not published.'),
+              h('ul', [
+                h('li', [h('a', { href: withBase('/en/') }, 'Return to the English home page')]),
+                h('li', [h('a', { href: withBase('/en/quick-start/first-task') }, 'Start the ten-minute quick start')]),
+                h('li', [h('a', { href: withBase('/en/reference/version-and-migration') }, 'Check versions and migration')])
+              ])
+            ])
+          ])
+        ])
+      }
+
+      return h('main', { class: 'language-not-found VPContent', lang: 'zh-CN' }, [
         h('div', { class: 'container' }, [
           h('div', { class: 'content' }, [
-            h('h1', english ? 'Page not found' : '页面未找到'),
-            h('p', english
-              ? 'This link may have moved, or the requested page is not published.'
-              : '该链接可能已经移动，或对应内容尚未发布。'),
-            h('ul', english
-              ? [
-                  h('li', [h('a', { href: withBase('/en/') }, 'Return to the English home page')]),
-                  h('li', [h('a', { href: withBase('/en/quick-start/first-task') }, 'Start the ten-minute quick start')]),
-                  h('li', [h('a', { href: withBase('/en/reference/version-and-migration') }, 'Check versions and migration')])
-                ]
-              : [
-                  h('li', [h('a', { href: withBase('/') }, '从首页重新开始')]),
-                  h('li', [h('a', { href: withBase('/zh/quick-start/first-task') }, '进入十分钟快速开始')]),
-                  h('li', [h('a', { href: withBase('/zh/reference/version-and-migration') }, '查看版本与迁移')])
-                ])
+            h('h1', '页面未找到'),
+            h('p', '该链接可能已经移动，或对应内容尚未发布。'),
+            h('ul', [
+              h('li', [h('a', { href: withBase('/') }, '从首页重新开始')]),
+              h('li', [h('a', { href: withBase('/zh/quick-start/first-task') }, '进入十分钟快速开始')]),
+              h('li', [h('a', { href: withBase('/zh/reference/version-and-migration') }, '查看版本与迁移')])
+            ])
           ])
         ])
       ])
