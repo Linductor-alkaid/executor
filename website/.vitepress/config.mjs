@@ -7,7 +7,8 @@ export default defineConfig({
   locales: {
     root: {
       label: '简体中文',
-      lang: 'zh-CN'
+      lang: 'zh-CN',
+      link: '/'
     },
     en: {
       label: 'English',
