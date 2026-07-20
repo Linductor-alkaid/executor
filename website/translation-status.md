@@ -26,6 +26,8 @@ English pages use the same repository examples and commands as Chinese pages; no
 | `/zh/advanced/` | `/en/advanced/` | Published | Public advanced APIs, current source architecture, and benchmark protocol |
 | `/zh/gpu/` | `/en/gpu/` | Published | GPU public APIs, backend diagnostics, and tutorial example `09` |
 | `/zh/reference/version-and-migration` | `/en/reference/version-and-migration` | Published | `CHANGELOG.md`, `docs/MIGRATION.md` |
+| `/decisions` | `/en/decisions` | Published | `website/decisions.md` |
+| `/maintenance` | `/en/maintenance` | Published | `website/maintenance.md` |
 
 ## Pending topic groups
 
@@ -43,5 +45,7 @@ English pages use the same repository examples and commands as Chinese pages; no
 ## Fallback behavior
 
 The language control opens the exact translated counterpart when it is published. On a Chinese page without an English counterpart, it opens the English home page and labels the destination as a home fallback; no empty English page is published. English pages always link back to their Chinese counterpart.
+
+The shared 404 renderer uses the requested URL prefix: `/en/...` displays English recovery links, while other missing routes display Chinese recovery links. `writing-template.md` is an internal authoring template rather than published reader content, so it has no English mirror.
 
 When a Chinese page adds a public capability, update this table to `Needs translation` or add the published English route in the same change. Release review must check this table together with the API and migration documents.

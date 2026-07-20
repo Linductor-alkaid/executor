@@ -46,6 +46,12 @@
 .VPFeature { border: 0; border-radius: 10px; background: var(--vp-c-bg-soft); }
 .VPFeature .title { font-weight: 500; }
 .VPDoc .content { padding-top: 48px; padding-bottom: 96px; }
+.language-not-found { min-height: calc(100vh - 64px); padding: 96px 24px; }
+.language-not-found .container { max-width: 1280px; margin: 0 auto; }
+.language-not-found .content { max-width: 680px; }
+.language-not-found h1 { margin: 0 0 24px; color: var(--vp-c-text-1); font-size: 40px; font-weight: 400; line-height: 1.2; }
+.language-not-found p { color: var(--vp-c-text-2); }
+.language-not-found li { margin: 12px 0; }
 .VPDoc h1, .VPDoc h2 { font-weight: 400; letter-spacing: 0; }
 .VPDoc h1 { font-size: 40px; line-height: 1.2; }
 .VPDoc h2 { font-size: 32px; line-height: 1.2; margin-top: 64px; }
@@ -221,6 +227,8 @@
   .VPHomeHero { padding-top: 64px; }
   .VPHomeHero .text { font-size: 26px; line-height: 36px; }
   .VPDoc h1 { font-size: 32px; }
+  .language-not-found { padding: 64px 24px; }
+  .language-not-found h1 { font-size: 32px; }
   .VPDoc h2 { font-size: 28px; }
   .mermaid-viewer { padding: 0; }
   .mermaid-viewer__panel { border-radius: 0; }

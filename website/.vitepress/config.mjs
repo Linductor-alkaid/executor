@@ -12,53 +12,11 @@ export default defineConfig({
     en: {
       label: 'English',
       lang: 'en-US',
+      link: '/en/',
       title: 'Executor Guide',
-      description: 'Build reliable C++ concurrent programs from your first task.'
-    }
-  },
-  base: '/executor/',
-  cleanUrls: true,
-  lastUpdated: true,
-  markdown: {
-    config(md) {
-      const defaultFence = md.renderer.rules.fence
-
-      md.renderer.rules.fence = (tokens, index, options, env, self) => {
-        const token = tokens[index]
-        if (token.info.trim() === 'mermaid') {
-          const source = md.utils.escapeHtml(token.content.trim())
-          return `<div class="mermaid-diagram" data-mermaid-source="${source.replaceAll('"', '&quot;')}">${source}</div>`
-        }
-        return defaultFence(tokens, index, options, env, self)
-      }
-    }
-  },
-  head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/executor-mark.svg' }],
-    ['meta', { name: 'theme-color', content: '#181d26' }]
-  ],
-  themeConfig: {
-    siteTitle: 'Executor 使用手册',
-    nav: [
-      { text: '快速开始', link: '/zh/quick-start/build' },
-      { text: '循序教程', link: '/zh/tutorial/' },
-      { text: '场景指南', link: '/zh/guides/choosing-submit-api' },
-      { text: 'API 参考', link: '/zh/reference/api' },
-      { text: '开发快照 v0.2.3', link: '/zh/reference/version-and-migration' },
-      {
-        text: '专题',
-        items: [
-          { text: '可靠性', link: '/zh/reliability/' },
-          { text: '实时与通信', link: '/zh/realtime-and-communication/' },
-          { text: 'GPU', link: '/zh/gpu/' },
-          { text: '高级与原理', link: '/zh/advanced/' },
-          { text: '版本与迁移', link: '/zh/reference/version-and-migration' }
-        ]
-      },
-      { text: 'GitHub', link: 'https://github.com/Linductor-alkaid/executor' }
-    ],
-    locales: {
-      en: {
+      description: 'Build reliable C++ concurrent programs from your first task.',
+      themeConfig: {
+        siteTitle: 'Executor Guide',
         nav: [
           { text: 'Quick Start', link: '/en/quick-start/build' },
           { text: 'Tutorials', link: '/en/tutorial/' },
@@ -182,9 +140,55 @@ export default defineConfig({
           ]
         },
         outline: { level: [2, 3], label: 'On this page' },
-        docFooter: { prev: 'Previous page', next: 'Next page' }
+        docFooter: { prev: 'Previous page', next: 'Next page' },
+        footer: {
+          message: 'MIT License · <a href="https://github.com/Linductor-alkaid/executor/issues/new/choose">Report a documentation issue</a> · <a href="/executor/en/maintenance">Content maintenance</a>',
+          copyright: 'Executor contributors'
+        }
       }
-    },
+    }
+  },
+  base: '/executor/',
+  cleanUrls: true,
+  lastUpdated: true,
+  markdown: {
+    config(md) {
+      const defaultFence = md.renderer.rules.fence
+
+      md.renderer.rules.fence = (tokens, index, options, env, self) => {
+        const token = tokens[index]
+        if (token.info.trim() === 'mermaid') {
+          const source = md.utils.escapeHtml(token.content.trim())
+          return `<div class="mermaid-diagram" data-mermaid-source="${source.replaceAll('"', '&quot;')}">${source}</div>`
+        }
+        return defaultFence(tokens, index, options, env, self)
+      }
+    }
+  },
+  head: [
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/executor-mark.svg' }],
+    ['meta', { name: 'theme-color', content: '#181d26' }]
+  ],
+  themeConfig: {
+    siteTitle: 'Executor 使用手册',
+    nav: [
+      { text: '快速开始', link: '/zh/quick-start/build' },
+      { text: '循序教程', link: '/zh/tutorial/' },
+      { text: '场景指南', link: '/zh/guides/choosing-submit-api' },
+      { text: 'API 参考', link: '/zh/reference/api' },
+      { text: '开发快照 v0.2.3', link: '/zh/reference/version-and-migration' },
+      {
+        text: '专题',
+        items: [
+          { text: '可靠性', link: '/zh/reliability/' },
+          { text: '实时与通信', link: '/zh/realtime-and-communication/' },
+          { text: 'GPU', link: '/zh/gpu/' },
+          { text: '高级与原理', link: '/zh/advanced/' },
+          { text: '版本与迁移', link: '/zh/reference/version-and-migration' }
+        ]
+      },
+      { text: 'GitHub', link: 'https://github.com/Linductor-alkaid/executor' }
+    ],
     sidebar: {
       '/zh/quick-start/': [
         {
