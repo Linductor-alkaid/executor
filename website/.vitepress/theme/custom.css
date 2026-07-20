@@ -21,7 +21,12 @@
 }
 
 .VPNav { border-bottom: 1px solid var(--vp-c-divider); }
-.VPNavBarTranslations { display: none; }
+.VPNavBarTranslations,
+.VPNavBarTranslations .VPMenu,
+.VPNavBarTranslations .VPIconLanguages,
+.VPNavBarTranslations:has(.VPIconLanguages),
+.VPNavScreenTranslations,
+.VPNavScreenTranslations .VPIconLanguages { display: none !important; }
 .language-switch { display: inline-flex; align-items: center; min-height: 40px; padding: 0 10px; color: var(--vp-c-text-2); font-size: 14px; font-weight: 500; white-space: nowrap; }
 .language-switch:active { color: var(--vp-c-text-1); }
 .VPNavBarTitle .title { font-weight: 500; }
