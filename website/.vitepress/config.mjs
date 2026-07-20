@@ -21,12 +21,18 @@ export default defineConfig({
           { text: 'Quick Start', link: '/en/quick-start/build' },
           { text: 'Tutorials', link: '/en/tutorial/' },
           { text: 'Guides', link: '/en/guides/choosing-submit-api' },
-          { text: 'Real-Time & Communication', link: '/en/realtime-and-communication/' },
-          { text: 'Reliability', link: '/en/reliability/' },
-          { text: 'Advanced', link: '/en/advanced/' },
-          { text: 'GPU', link: '/en/gpu/' },
-          { text: 'Versions and Migration', link: '/en/reference/version-and-migration' },
-          { text: 'Complete API', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' },
+          { text: 'API Reference', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' },
+          { text: 'Development Snapshot v0.2.3', link: '/en/reference/version-and-migration' },
+          {
+            text: 'Topics',
+            items: [
+              { text: 'Reliability', link: '/en/reliability/' },
+              { text: 'Real-Time & Communication', link: '/en/realtime-and-communication/' },
+              { text: 'GPU', link: '/en/gpu/' },
+              { text: 'Advanced', link: '/en/advanced/' },
+              { text: 'Versions and Migration', link: '/en/reference/version-and-migration' }
+            ]
+          },
           { text: 'GitHub', link: 'https://github.com/Linductor-alkaid/executor' }
         ],
         sidebar: {

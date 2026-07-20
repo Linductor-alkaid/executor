@@ -60,8 +60,9 @@ const englishToChineseRoutes = new Map(
 )
 
 function normalizeRoutePath(path) {
-  const cleanPath = path.replace(/\.html$/, '')
-  return cleanPath.endsWith('/') || cleanPath === '/' ? cleanPath : cleanPath.replace(/\/$/, '')
+  const cleanPath = path.replace(/\.html$/, '').replace(/^\/executor(?=\/|$)/, '') || '/'
+  const localePath = cleanPath.replace(/^\/en\/zh(?=\/|$)/, '/zh')
+  return localePath.endsWith('/') || localePath === '/' ? localePath : localePath.replace(/\/$/, '')
 }
 
 function findLocalizedRoute(routes, path) {
@@ -71,13 +72,14 @@ function findLocalizedRoute(routes, path) {
 const LanguageSwitch = {
   setup() {
     const route = useRoute()
+    const isEnglish = computed(() => normalizeRoutePath(route.path).startsWith('/en/'))
     const target = computed(() => {
       const path = normalizeRoutePath(route.path)
-      if (path.startsWith('/en/')) return findLocalizedRoute(englishToChineseRoutes, path) ?? '/'
+      if (isEnglish.value) return findLocalizedRoute(englishToChineseRoutes, path) ?? '/'
       return findLocalizedRoute(localizedRoutes, path) ?? '/en/'
     })
-    const label = computed(() => route.path.startsWith('/en/') ? '简体中文' : 'English')
-    const fallback = computed(() => !route.path.startsWith('/en/') && target.value === '/en/')
+    const label = computed(() => isEnglish.value ? '简体中文' : 'English')
+    const fallback = computed(() => !isEnglish.value && target.value === '/en/')
 
     return () => h('a', {
       class: 'language-switch',
@@ -90,7 +92,7 @@ const LanguageSwitch = {
 const NotFound = {
   setup() {
     const route = useRoute()
-    const isEnglish = computed(() => route.path.startsWith('/en/'))
+    const isEnglish = computed(() => normalizeRoutePath(route.path).startsWith('/en/'))
 
     return () => {
       const english = isEnglish.value
