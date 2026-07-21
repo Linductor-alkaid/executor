@@ -82,6 +82,12 @@ public:
     GpuExecutorStatus get_status() const override;
     bool start() override;
     void stop() override;
+
+    /**
+     * @brief 请求停止并在外部线程中等待 CUDA worker 结束
+     * @return 外部调用返回 true；worker 线程内调用返回 false
+     */
+    bool stop_and_join();
     void wait_for_completion() override;
 
     /**
@@ -236,7 +242,7 @@ private:
     std::string name_;                          // 执行器名称
     GpuExecutorConfig config_;                  // 配置
     int device_id_;                            // 设备ID
-    bool is_available_;                        // CUDA是否可用
+    std::atomic<bool> is_available_{false};    // CUDA是否可用
     std::atomic<bool> is_running_{false};      // 是否运行中
     CudaLoader* loader_;                       // CUDA加载器（单例引用）
     mutable std::mutex error_mutex_;
@@ -266,7 +272,10 @@ private:
     std::condition_variable queue_not_full_cv_;
     std::condition_variable queue_drained_cv_;
     std::thread worker_thread_;
-    bool worker_joined_ = false;
+    std::thread::id worker_id_;
+    std::mutex stop_mutex_;                    // 串行化 start()/stop() 和 worker 句柄移交
+    std::atomic<bool> self_stop_requested_{false};
+    bool worker_joined_ = true;
 
     util::ExceptionHandler exception_handler_;  // 任务异常处理，与 CPU 执行器一致
 };
