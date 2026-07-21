@@ -14,6 +14,61 @@
 
 using namespace executor;
 
+struct ProducerStallHook {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+};
+
+static void stall_before_publish(void* context) {
+    auto* hook = static_cast<ProducerStallHook*>(context);
+    hook->entered.store(true, std::memory_order_release);
+    while (!hook->release.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+
+static int test_reserved_head_is_skipped() {
+    std::cout << "[P-002] reserved head skip regression test ...\n";
+    util::LockFreeQueue<int> q(16, 1, true);
+    ProducerStallHook hook;
+    q.set_before_publish_hook(stall_before_publish, &hook);
+
+    std::atomic<bool> first_result{true};
+    std::thread stalled([&]() { first_result.store(q.push(1), std::memory_order_release); });
+    while (!hook.entered.load(std::memory_order_acquire)) std::this_thread::yield();
+
+    q.set_before_publish_hook(nullptr, nullptr);
+    if (!q.push(2) || !q.push(3)) {
+        std::cout << "  FAIL: later producers could not publish\n";
+        hook.release.store(true, std::memory_order_release);
+        stalled.join();
+        return 1;
+    }
+
+    int values[2] = {};
+    const size_t popped = q.pop_batch(values, 2);
+    hook.release.store(true, std::memory_order_release);
+    stalled.join();
+
+    int retry_value = 4;
+    bool retry_ok = false;
+    for (int retry = 0; retry < 1000 && !retry_ok; ++retry) {
+        retry_ok = q.push(retry_value);
+        if (!retry_ok) std::this_thread::yield();
+    }
+    int recovered = 0;
+    const bool recovered_ok = q.pop(recovered);
+    const auto stats = q.get_stats();
+
+    if (popped != 2 || values[0] != 2 || values[1] != 3 || first_result.load(std::memory_order_acquire) ||
+        !retry_ok || !recovered_ok || recovered != 4 || stats.ready_count != 0) {
+        std::cout << "  FAIL: stalled reservation was not safely skipped\n";
+        return 1;
+    }
+    std::cout << "  PASS: later producers and consumer bypass reserved head\n";
+    return 0;
+}
+
 static void test_basic_multithread_submit() {
     std::cout << "测试: 多线程提交任务\n";
 
@@ -254,7 +309,8 @@ static int test_push_batch_cas_retry_consistency() {
 int main() {
     test_basic_multithread_submit();
     int rc2 = test_push_batch_cas_retry_consistency();
+    int rc3 = test_reserved_head_is_skipped();
     std::cout << "\n=== P-260626-003 test result: "
-              << (rc2 == 0 ? "PASS" : "FAIL") << " ===\n";
-    return rc2;
+              << (rc2 == 0 && rc3 == 0 ? "PASS" : "FAIL") << " ===\n";
+    return rc2 || rc3;
 }
