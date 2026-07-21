@@ -47,6 +47,10 @@ bool RealtimeThreadExecutor::start() {
 
     // 创建实时线程
     auto thread_entry = [this]() {
+        {
+            std::lock_guard<std::mutex> lock(stop_mutex_);
+            worker_id_ = std::this_thread::get_id();
+        }
 #ifdef _WIN32
         std::optional<util::TimerPeriodGuard> timer_period_guard;
         // 在Windows上提高定时器精度（对于短周期很重要）
@@ -157,26 +161,42 @@ bool RealtimeThreadExecutor::start() {
 }
 
 void RealtimeThreadExecutor::stop() {
-    std::lock_guard<std::mutex> lock(drain_mutex_);
+    (void)stop_and_join();
+}
 
-    // 设置停止标志
-    bool expected = true;
-    if (running_.compare_exchange_strong(expected, false)) {
-        // 如果使用了周期管理器，需要先停止周期任务以解除阻塞
+bool RealtimeThreadExecutor::stop_and_join() {
+    std::thread joiner;
+    {
+        std::lock_guard<std::mutex> lock(stop_mutex_);
+        if (std::this_thread::get_id() == worker_id_) {
+            self_stop_requested_.store(true, std::memory_order_release);
+            running_.store(false, std::memory_order_release);
+            return false;
+        }
+
+        running_.store(false, std::memory_order_release);
         if (config_.cycle_manager) {
             config_.cycle_manager->stop_cycle(name_);
         }
-
-        // 等待线程结束
         if (thread_.joinable()) {
-            thread_.join();
+            joiner = std::move(thread_);
         }
     }
 
+    const bool joined_thread = joiner.joinable();
+    if (joined_thread) {
+        joiner.join();
+    }
+
+    if (!joined_thread) {
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(stop_mutex_);
     while (in_flight_pushes_.load(std::memory_order_acquire) != 0) {
         std::this_thread::yield();
     }
     drain_stopped_queue();
+    return true;
 }
 
 void RealtimeThreadExecutor::drain_stopped_queue() {
@@ -277,7 +297,9 @@ void RealtimeThreadExecutor::simple_cycle_loop() {
         }
 
         // 处理无锁队列中的任务
-        process_tasks();
+        if (running_.load(std::memory_order_acquire)) {
+            process_tasks();
+        }
 
         // 记录周期结束时间
         auto cycle_end = std::chrono::steady_clock::now();
@@ -324,7 +346,9 @@ void RealtimeThreadExecutor::cycle_loop() {
     }
 
     // 处理无锁队列中的任务
-    process_tasks();
+    if (running_.load(std::memory_order_acquire)) {
+        process_tasks();
+    }
 
     // 记录周期结束时间并更新统计信息
     auto cycle_end = std::chrono::steady_clock::now();
@@ -360,6 +384,9 @@ void RealtimeThreadExecutor::process_tasks() {
 
         // 释放回对象池
         task_pool_.release(task_wrapper);
+        if (!running_.load(std::memory_order_acquire)) {
+            break;
+        }
     }
 }
 

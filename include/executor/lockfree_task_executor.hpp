@@ -60,6 +60,12 @@ public:
     void stop();
 
     /**
+     * @brief 请求停止并在外部线程中等待消费者线程结束
+     * @return 外部调用返回 true；消费者线程内调用返回 false
+     */
+    bool stop_and_join();
+
+    /**
      * @brief 检查是否正在运行
      */
     bool is_running() const;
@@ -156,6 +162,9 @@ private:
     std::unique_ptr<util::ObjectPool<TaskWrapper>> task_pool_;
 
     std::thread worker_;
+    std::thread::id worker_id_;
+    std::mutex stop_mutex_;
+    std::atomic<bool> self_stop_requested_{false};
     std::atomic<bool> running_{false};
     std::atomic<bool> stopped_{false};
     std::atomic<uint32_t> active_pushes_{0};

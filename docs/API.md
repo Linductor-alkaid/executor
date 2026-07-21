@@ -459,6 +459,7 @@ public:
 
     bool start();                                    // 启动消费者线程；stop() 后不可再次启动
     void stop();                                     // 停止接收新任务、处理已接受任务并等待
+    bool stop_and_join();                            // 外部线程等待；消费者线程内返回 false
     bool is_running() const;                         // 检查运行状态
 
     // 单任务提交（线程安全，支持多生产者并发）
@@ -511,7 +512,9 @@ public:
 
 #### 停止后的提交语义
 
-`LockFreeTaskExecutor` 区分“从未启动”和“已停止”状态：从未调用 `start()` 前仍允许 `push_task()` / `push_tasks_batch()` 预填充队列；一旦 `stop()` 开始，新的提交会被拒绝并返回 `false`。`stop()` 会等待已经进入提交路径的生产者完成，再让消费者线程处理所有已接受任务并退出，因此 `stop()` 返回后不会有静默接受但无人消费的任务残留在队列中。
+`LockFreeTaskExecutor` 区分“从未启动”和“已停止”状态：从未调用 `start()` 前仍允许 `push_task()` / `push_tasks_batch()` 预填充队列；一旦 `stop()` 开始，新的提交会被拒绝并返回 `false`。外部线程调用 `stop()` 或 `stop_and_join()` 会等待已经进入提交路径的生产者完成，再让消费者线程处理所有已接受任务并退出，因此返回后不会有静默接受但无人消费的任务残留在队列中。
+
+任务或实时周期回调可安全调用 `stop()` / `stop_and_join()` 请求自停止：`stop_and_join()` 在工作线程内返回 `false`，不会尝试等待自身；随后由外部线程调用它完成 join。自停止会丢弃当前批次中尚未执行的任务以及剩余队列，避免在已请求停止后继续 drain。
 
 **典型用法：**
 
