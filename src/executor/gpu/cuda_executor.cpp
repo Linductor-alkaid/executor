@@ -305,7 +305,8 @@ bool CudaExecutor::start() {
         return false;
     }
 
-    if (!is_available_) {
+    std::lock_guard<std::mutex> stop_lock(stop_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
         return false;
     }
 
@@ -314,9 +315,13 @@ bool CudaExecutor::start() {
     }
 
     bool expected = false;
-    if (!is_running_.compare_exchange_strong(expected, true)) {
+    if (worker_thread_.joinable() || !worker_joined_ ||
+        !is_running_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
         return false;  // 已经在运行
     }
+
+    worker_id_ = std::thread::id{};
+    self_stop_requested_.store(false, std::memory_order_release);
 
     clear_last_error();
 
@@ -376,8 +381,15 @@ bool CudaExecutor::start() {
             config_.memory_pool_size);
     }
 
-    worker_thread_ = std::thread(&CudaExecutor::worker_thread_func, this);
-    worker_joined_ = false;
+    try {
+        worker_thread_ = std::thread(&CudaExecutor::worker_thread_func, this);
+        worker_joined_ = false;
+    } catch (...) {
+        is_running_.store(false, std::memory_order_release);
+        set_last_error("CUDA worker thread creation failed");
+        worker_joined_ = true;
+        return false;
+    }
 #else
     set_last_error("CUDA support is not enabled");
     is_running_.store(false);
@@ -389,8 +401,29 @@ bool CudaExecutor::start() {
 }
 
 void CudaExecutor::stop() {
-    if (!is_available_) {
-        return;
+    (void)stop_and_join();
+}
+
+bool CudaExecutor::stop_and_join() {
+    std::thread joiner;
+    {
+        std::lock_guard<std::mutex> stop_lock(stop_mutex_);
+        if (std::this_thread::get_id() == worker_id_) {
+            self_stop_requested_.store(true, std::memory_order_release);
+            is_running_.store(false, std::memory_order_release);
+            queue_not_empty_cv_.notify_all();
+            queue_not_full_cv_.notify_all();
+            return false;
+        }
+
+        if (!is_available_.load(std::memory_order_acquire)) {
+            return true;
+        }
+
+        is_running_.store(false, std::memory_order_release);
+        if (worker_thread_.joinable()) {
+            joiner = std::move(worker_thread_);
+        }
     }
 
     // P-002 fix: signal + join all submit_kernel_after waiter threads before
@@ -408,10 +441,13 @@ void CudaExecutor::stop() {
     wait_for_completion();
 
     queue_not_empty_cv_.notify_all();
-    if (worker_thread_.joinable() && !worker_joined_) {
-        worker_thread_.join();
+    if (joiner.joinable()) {
+        joiner.join();
+        std::lock_guard<std::mutex> stop_lock(stop_mutex_);
         worker_joined_ = true;
+        worker_id_ = std::thread::id{};
     }
+    return true;
 }
 
 void CudaExecutor::set_exception_callback(
@@ -1221,7 +1257,12 @@ GpuExecutorStatus CudaExecutor::get_status() const {
 }
 
 void CudaExecutor::worker_thread_func() {
-    #ifdef EXECUTOR_ENABLE_CUDA
+    {
+        std::lock_guard<std::mutex> stop_lock(stop_mutex_);
+        worker_id_ = std::this_thread::get_id();
+    }
+
+#ifdef EXECUTOR_ENABLE_CUDA
     while (true) {
         GpuQueuedTask task;
         {

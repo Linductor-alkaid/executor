@@ -1213,6 +1213,8 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 - **执行**：`submit_kernel(kernel, config)`（返回 `std::future<void>`）、`synchronize`、`wait_for_completion`
 - **状态**：`get_name`、`get_device_info`、`get_status`、`start`、`stop`
 
+CUDA 的 `stop()` 可被多个外部线程并发调用：其中一个调用方接管并等待 worker 线程，其余调用方安全返回。需要区分调用方时可直接使用 `CudaExecutor::stop_and_join()`；它在外部线程返回 `true`，在 CUDA worker 内调用时只请求停止并返回 `false`，外部线程随后必须调用一次 `stop_and_join()` 完成线程回收。自停止后的重新 `start()` 会在 worker 句柄被外部回收前被拒绝。
+
 ### 8.4 配置与类型
 
 - **GpuExecutorConfig**：`name`、`backend`（支持 CUDA/OpenCL；分别要求 `EXECUTOR_ENABLE_CUDA` / `EXECUTOR_ENABLE_OPENCL` 且运行时可用）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`、`enable_unified_memory`（启用 `allocate_unified_memory` 等统一内存 API，CUDA 后端需要 `EXECUTOR_ENABLE_CUDA` 且硬件支持 managed memory）。`backend` 默认是 `GpuBackend::CUDA`；需要自动选择时可先调用 `gpu::get_recommended_backend()`，推荐逻辑会优先可用 CUDA 设备，其次 OpenCL，最后回到 CUDA 默认值。`device_id` 必须非负；`ExecutorManager::create_gpu_executor` 会拒绝负值，直接构造 `OpenCLExecutor` 时也会记录无效配置并在 `start()` 阶段拒绝负 `device_id`，不会用负下标访问设备数组。
