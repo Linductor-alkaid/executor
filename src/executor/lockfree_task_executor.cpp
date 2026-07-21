@@ -41,14 +41,33 @@ bool LockFreeTaskExecutor::start() {
 }
 
 void LockFreeTaskExecutor::stop() {
-    stopped_.store(true, std::memory_order_release);
-    while (active_pushes_.load(std::memory_order_acquire) != 0) {
-        std::this_thread::yield();
+    (void)stop_and_join();
+}
+
+bool LockFreeTaskExecutor::stop_and_join() {
+    std::thread joiner;
+    {
+        std::lock_guard<std::mutex> lock(stop_mutex_);
+        stopped_.store(true, std::memory_order_release);
+        if (std::this_thread::get_id() == worker_id_) {
+            self_stop_requested_.store(true, std::memory_order_release);
+            running_.store(false, std::memory_order_release);
+            return false;
+        }
+
+        while (active_pushes_.load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
+        running_.store(false, std::memory_order_release);
+        if (worker_.joinable()) {
+            joiner = std::move(worker_);
+        }
     }
 
-    if (running_.exchange(false, std::memory_order_acq_rel) && worker_.joinable()) {
-        worker_.join();
+    if (joiner.joinable()) {
+        joiner.join();
     }
+    return true;
 }
 
 bool LockFreeTaskExecutor::is_running() const {
@@ -221,6 +240,11 @@ void LockFreeTaskExecutor::leave_push() {
 }
 
 void LockFreeTaskExecutor::worker_thread() {
+    {
+        std::lock_guard<std::mutex> lock(stop_mutex_);
+        worker_id_ = std::this_thread::get_id();
+    }
+
     constexpr size_t BATCH_SIZE = 32;
     std::vector<TaskWrapper*> batch(BATCH_SIZE);
 
@@ -228,6 +252,7 @@ void LockFreeTaskExecutor::worker_thread() {
         size_t popped = queue_->pop_batch(batch.data(), BATCH_SIZE);
 
         if (popped > 0) {
+            bool self_stop_interrupted_batch = false;
             for (size_t i = 0; i < popped; ++i) {
                 try {
                     batch[i]->func();
@@ -252,8 +277,19 @@ void LockFreeTaskExecutor::worker_thread() {
                     }
                 }
                 task_pool_->release(batch[i]);
+                if (!running_.load(std::memory_order_acquire) &&
+                    self_stop_requested_.load(std::memory_order_acquire)) {
+                    for (size_t remaining = i + 1; remaining < popped; ++remaining) {
+                        task_pool_->release(batch[remaining]);
+                    }
+                    processed_count_.fetch_add(i + 1, std::memory_order_relaxed);
+                    self_stop_interrupted_batch = true;
+                    break;
+                }
             }
-            processed_count_.fetch_add(popped, std::memory_order_relaxed);
+            if (!self_stop_interrupted_batch) {
+                processed_count_.fetch_add(popped, std::memory_order_relaxed);
+            }
         } else {
             if (!running_.load(std::memory_order_acquire)) {
                 break;
@@ -273,6 +309,10 @@ void LockFreeTaskExecutor::worker_thread() {
             continue;
         }
         idle_count_ = 0;
+    }
+
+    if (self_stop_requested_.load(std::memory_order_acquire)) {
+        return;
     }
 
     // 处理剩余任务

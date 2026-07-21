@@ -79,6 +79,12 @@ public:
     void stop() override;
 
     /**
+     * @brief 请求停止并在外部线程中等待实时线程结束
+     * @return 外部调用返回 true；实时线程内调用返回 false
+     */
+    bool stop_and_join();
+
+    /**
      * @brief 推送任务到无锁队列（在周期回调中处理）
      *
      * 任务通过无锁队列传递，在实时线程的下一个周期回调中执行。
@@ -169,7 +175,9 @@ private:
         }
     };
     std::atomic<bool> running_{false};              // 运行状态标志
-    std::mutex drain_mutex_;                        // 串行化 stop() join/drain
+    std::thread::id worker_id_;
+    std::mutex stop_mutex_;                         // 串行化 stop() join/drain
+    std::atomic<bool> self_stop_requested_{false};
     std::atomic<uint32_t> in_flight_pushes_{0};      // 正在进入队列的 push_task_ex 调用
 
     // 无锁队列（直接传递任务指针）

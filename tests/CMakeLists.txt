@@ -153,6 +153,11 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "unit;concurrency;lockfree"
             TIMEOUT 60
         )
+    elseif(TEST_NAME STREQUAL "test_self_stop_handoff")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit;concurrency"
+            TIMEOUT 30
+        )
     elseif(TEST_NAME MATCHES "^test_(dispatcher_resize_under_load|thread_pool_resize_uaf|thread_pool_resize_status|concurrent_stop_submit)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "integration;concurrency;thread_pool"
