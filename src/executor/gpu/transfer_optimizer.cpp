@@ -214,7 +214,8 @@ TransferStats TransferOptimizer::get_stats() const {
     stats.pipeline_stages_executed = pipeline_stages_;
     stats.total_bytes_transferred = total_bytes_;
     if (total_transfers_ > 0) {
-        stats.avg_transfer_latency_us = total_latency_us_ / total_transfers_;
+        stats.avg_transfer_latency_us = total_latency_us_
+            / static_cast<double>(total_transfers_);
         // bandwidth = total_bytes / total_time_seconds / 1e9 (GB/s)
         double total_time_s = total_latency_us_ / 1e6;
         if (total_time_s > 0.0) {

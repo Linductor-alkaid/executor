@@ -50,9 +50,9 @@ bool test_throughput() {
     for (int i = 0; i < num_tasks; ++i) {
         auto future = executor.submit([&completed_tasks]() {
             // 简单计算任务
-            volatile int sum = 0;
+            std::atomic<int> sum{0};
             for (int j = 0; j < 100; ++j) {
-                sum += j;
+                sum.fetch_add(j, std::memory_order_relaxed);
             }
             completed_tasks.fetch_add(1);
         });

@@ -177,7 +177,9 @@ KernelLaunchStats KernelLaunchOptimizer::get_stats() const {
     stats.batched_launches = batched_launches_;
     stats.min_launch_latency_us = (total_launches_ > 0) ? min_latency_us_ : 0.0;
     stats.max_launch_latency_us = max_latency_us_;
-    stats.avg_launch_latency_us = (total_launches_ > 0) ? total_latency_us_ / total_launches_ : 0.0;
+    stats.avg_launch_latency_us = (total_launches_ > 0)
+        ? total_latency_us_ / static_cast<double>(total_launches_)
+        : 0.0;
     return stats;
 }
 

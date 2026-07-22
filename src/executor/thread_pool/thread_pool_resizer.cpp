@@ -28,8 +28,6 @@ void ThreadPoolResizer::check_and_resize() {
     }
     
     size_t current_threads = total_threads_.load();
-    size_t queue_size = queue_size_.load();
-    double avg_wait_time = avg_wait_time_ms_.load();
     
     // 检查是否需要扩容
     if (should_expand()) {
@@ -64,7 +62,11 @@ bool ThreadPoolResizer::should_expand() const {
     // 2. 平均任务等待时间 > 100ms
     // 3. 当前线程数 < max_threads
     
-    bool queue_high = (queue_size > config_.queue_capacity * 0.8);
+    const size_t queue_capacity_fifth = config_.queue_capacity / 5;
+    const size_t queue_capacity_fifth_ceiling = queue_capacity_fifth
+        + static_cast<size_t>(config_.queue_capacity % 5 != 0);
+    bool queue_high = queue_size
+        > config_.queue_capacity - queue_capacity_fifth_ceiling;
     bool wait_time_high = (avg_wait_time > 100.0);
     bool can_expand = (current_threads < max_threads);
     
@@ -89,8 +91,8 @@ bool ThreadPoolResizer::should_shrink() {
     size_t idle_threads = (active_threads <= total_threads)
                               ? (total_threads - active_threads)
                               : 0;
-    bool idle_high = (idle_threads > total_threads * 0.5);
-    bool queue_low = (queue_size < config_.queue_capacity * 0.2);
+    bool idle_high = idle_threads > total_threads / 2;
+    bool queue_low = queue_size < config_.queue_capacity / 5;
     bool can_shrink = (total_threads > min_threads);
     
     // 检查持续空闲时间
@@ -117,6 +119,7 @@ bool ThreadPoolResizer::expand(size_t num_threads) {
     // 实际扩容逻辑在 ThreadPool 中实现
     // 这里只是接口，ThreadPool 需要提供 expand_threads 方法
     // 暂时返回 true，实际实现需要在 ThreadPool 中完成
+    (void)num_threads;
     return true;
 }
 
@@ -124,6 +127,7 @@ bool ThreadPoolResizer::shrink(size_t num_threads) {
     // 实际缩容逻辑在 ThreadPool 中实现
     // 这里只是接口，ThreadPool 需要提供 shrink_threads 方法
     // 暂时返回 true，实际实现需要在 ThreadPool 中完成
+    (void)num_threads;
     return true;
 }
 

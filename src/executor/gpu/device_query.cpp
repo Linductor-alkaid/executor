@@ -33,10 +33,10 @@ std::vector<GpuDeviceInfo> enumerate_cuda_devices() {
         info.vendor = "NVIDIA";
         info.compute_capability_major = prop.major;
         info.compute_capability_minor = prop.minor;
-        info.max_threads_per_block = prop.maxThreadsPerBlock;
-        info.max_blocks_per_grid[0] = prop.maxGridSize[0];
-        info.max_blocks_per_grid[1] = prop.maxGridSize[1];
-        info.max_blocks_per_grid[2] = prop.maxGridSize[2];
+        info.max_threads_per_block = static_cast<size_t>(prop.maxThreadsPerBlock);
+        info.max_blocks_per_grid[0] = static_cast<size_t>(prop.maxGridSize[0]);
+        info.max_blocks_per_grid[1] = static_cast<size_t>(prop.maxGridSize[1]);
+        info.max_blocks_per_grid[2] = static_cast<size_t>(prop.maxGridSize[2]);
 
         // 获取内存信息
         size_t free_mem = 0, total_mem = 0;

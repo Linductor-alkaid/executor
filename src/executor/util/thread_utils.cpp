@@ -193,7 +193,7 @@ bool set_cpu_affinity(std::thread::native_handle_type handle,
         if (cpu_id < 0 || cpu_id >= CPU_SETSIZE) {
             return false;
         }
-        CPU_SET(cpu_id, &cpuset);
+        CPU_SET(static_cast<size_t>(cpu_id), &cpuset);
     }
     
     return pthread_setaffinity_np(handle, sizeof(cpu_set_t), &cpuset) == 0;
@@ -233,7 +233,7 @@ std::vector<int> get_current_thread_affinity() {
     
     std::vector<int> cpu_ids;
     for (int i = 0; i < CPU_SETSIZE; ++i) {
-        if (CPU_ISSET(i, &cpuset)) {
+        if (CPU_ISSET(static_cast<size_t>(i), &cpuset)) {
             cpu_ids.push_back(i);
         }
     }

@@ -57,7 +57,7 @@ bool test_high_concurrency() {
                 try {
                     auto future = executor.submit([i, t]() noexcept {
                         // 模拟一些计算
-                        volatile int sum = 0;
+                        std::atomic<int> sum{0};
                         for (int j = 0; j < 50; ++j) {
                             sum += j * i;
                         }

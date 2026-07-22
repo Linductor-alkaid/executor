@@ -140,7 +140,7 @@ bool CudaExecutor::check_cuda_available() {
 
     try {
         // 尝试初始化 CUDA 运行时（通过调用 cudaFree(0)）
-        cudaError_t error = funcs.cudaFree(0);
+        cudaError_t error = funcs.cudaFree(nullptr);
         if (!check_cuda_error(error, "cudaFree(0)")) {
             return false;
         }
@@ -1140,8 +1140,9 @@ void CudaExecutor::destroy_stream(int stream_id) {
     {
         std::lock_guard<std::mutex> lock(streams_mutex_);
         if (static_cast<size_t>(stream_id) <= streams_.size()) {
-            stream_wrapper = std::move(streams_[stream_id - 1]);
-            streams_[stream_id - 1].reset();
+            const auto stream_index = static_cast<size_t>(stream_id - 1);
+            stream_wrapper = std::move(streams_[stream_index]);
+            streams_[stream_index].reset();
         }
     }
 
@@ -1169,10 +1170,10 @@ GpuDeviceInfo CudaExecutor::get_device_info() const {
     info.name = device_prop_.name;
     info.compute_capability_major = device_prop_.major;
     info.compute_capability_minor = device_prop_.minor;
-    info.max_threads_per_block = device_prop_.maxThreadsPerBlock;
-    info.max_blocks_per_grid[0] = device_prop_.maxGridSize[0];
-    info.max_blocks_per_grid[1] = device_prop_.maxGridSize[1];
-    info.max_blocks_per_grid[2] = device_prop_.maxGridSize[2];
+    info.max_threads_per_block = static_cast<size_t>(device_prop_.maxThreadsPerBlock);
+    info.max_blocks_per_grid[0] = static_cast<size_t>(device_prop_.maxGridSize[0]);
+    info.max_blocks_per_grid[1] = static_cast<size_t>(device_prop_.maxGridSize[1]);
+    info.max_blocks_per_grid[2] = static_cast<size_t>(device_prop_.maxGridSize[2]);
 
     // 获取内存信息
     if (loader_->is_available() && ensure_device_context()) {
@@ -1239,7 +1240,8 @@ GpuExecutorStatus CudaExecutor::get_status() const {
 
                 if (total_mem > 0) {
                     status.memory_usage_percent = 
-                        (static_cast<double>(status.memory_used_bytes) / total_mem) * 100.0;
+                        (static_cast<double>(status.memory_used_bytes)
+                            / static_cast<double>(total_mem)) * 100.0;
                 }
             }
         }
@@ -1248,7 +1250,8 @@ GpuExecutorStatus CudaExecutor::get_status() const {
         size_t completed = completed_kernels_.load();
         if (completed > 0) {
             int64_t total_time = total_kernel_time_ns_.load();
-            status.avg_kernel_time_ms = (static_cast<double>(total_time) / completed) / 1000000.0;
+            status.avg_kernel_time_ms = (static_cast<double>(total_time)
+                / static_cast<double>(completed)) / 1000000.0;
         }
     }
 #endif

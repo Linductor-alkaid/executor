@@ -190,7 +190,9 @@ TaskSchedulingStats TaskSchedulerOptimizer::get_stats() const {
     stats.priority_promotions = priority_promotions_;
     stats.dependency_waits = dependency_waits_;
     stats.load_balance_moves = load_balance_moves_;
-    stats.avg_wait_time_us = (total_scheduled_ > 0) ? total_wait_us_ / total_scheduled_ : 0.0;
+    stats.avg_wait_time_us = (total_scheduled_ > 0)
+        ? total_wait_us_ / static_cast<double>(total_scheduled_)
+        : 0.0;
     return stats;
 }
 

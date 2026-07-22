@@ -56,6 +56,7 @@ add_library(executor ${LIBRARY_TYPE}
     ${EXECUTOR_HEADERS}
 )
 add_library(executor::executor ALIAS executor)
+executor_enable_warnings(executor)
 
 # 设置包含目录
 # PUBLIC: 使用此库的项目也会获得这些包含目录
@@ -79,12 +80,12 @@ if(EXECUTOR_CUDA_ENABLED)
     # 添加 CUDA 包含目录（仅用于类型定义，不链接库）
     if(CUDA_INCLUDE_DIRS)
         target_include_directories(executor
-            PRIVATE
+            SYSTEM PRIVATE
                 ${CUDA_INCLUDE_DIRS}
         )
     elseif(CUDAToolkit_INCLUDE_DIRS)
         target_include_directories(executor
-            PRIVATE
+            SYSTEM PRIVATE
                 ${CUDAToolkit_INCLUDE_DIRS}
         )
     endif()
@@ -99,7 +100,7 @@ if(EXECUTOR_OPENCL_ENABLED)
     # 添加 OpenCL 包含目录（仅用于类型定义，不链接库）
     if(OpenCL_INCLUDE_DIRS)
         target_include_directories(executor
-            PRIVATE
+            SYSTEM PRIVATE
                 ${OpenCL_INCLUDE_DIRS}
         )
     endif()

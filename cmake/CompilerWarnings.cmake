@@ -4,11 +4,12 @@
 # 选项：是否将警告视为错误
 option(EXECUTOR_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
+function(executor_enable_warnings target)
 if(MSVC)
     # MSVC 警告配置
-    add_compile_options(/W4)
+    target_compile_options(${target} PRIVATE /W4)
     if(EXECUTOR_WARNINGS_AS_ERRORS)
-        add_compile_options(/WX)
+        target_compile_options(${target} PRIVATE /WX)
     endif()
     
     # 禁用一些常见的 MSVC 警告
@@ -16,10 +17,10 @@ if(MSVC)
     
 elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # GCC/Clang 警告配置
-    add_compile_options(-Wall -Wextra -Wpedantic)
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     
     # 额外的有用警告
-    add_compile_options(
+    target_compile_options(${target} PRIVATE
         -Wcast-align
         -Wcast-qual
         -Wconversion
@@ -37,7 +38,10 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wshadow
         -Wsign-conversion
         -Wstrict-null-sentinel
-        -Wstrict-overflow=5
+        # -Wall already enables the actionable level-1 strict-overflow checks.
+        # Level 5 diagnoses optimizer transformations inside standard-library
+        # templates without pointing to a source expression to correct.
+        -Wstrict-overflow=1
         -Wswitch-default
         -Wundef
         -Wunused
@@ -46,7 +50,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     
     # Clang 特定警告
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        add_compile_options(
+        target_compile_options(${target} PRIVATE
             -Wdocumentation
             -Wno-documentation-unknown-command
         )
@@ -54,6 +58,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     
     # 如果启用警告为错误
     if(EXECUTOR_WARNINGS_AS_ERRORS)
-        add_compile_options(-Werror)
+        target_compile_options(${target} PRIVATE -Werror)
     endif()
 endif()
+endfunction()
