@@ -247,7 +247,7 @@ auto fused = executor.submit_after(both, [] {
 - `submit_after_with_handle(...)`：同时返回 dependent task 的 handle 和 future，适合继续构造任务链。
 - `when_all(dependencies)`：返回逻辑 handle；所有依赖成功后该 handle 成功，任一依赖失败后该 handle 失败，可继续传给 `submit_after()`。
 
-依赖失败时，dependent task 默认不执行；dependent future 进入异常状态，`future.get()` 会重新抛出依赖异常或依赖图错误。无效 handle、跨 `Executor` 实例 handle 或 cycle 会记录 `SubmitRejected`，并返回 ready exceptional future 或失败的逻辑 handle。第一版内部复用 `TaskDependencyManager`，并在任务完成/失败后裁剪不再被依赖的依赖管理状态；`submit_after()` 的等待任务当前会占用一个 worker 等待条件变量，超大规模任务图后续可演进为纯调度侧唤醒。
+依赖失败时，dependent task 默认不执行；dependent future 进入异常状态，`future.get()` 会重新抛出依赖异常或依赖图错误。无效 handle、跨 `Executor` 实例 handle 或 cycle 会记录 `SubmitRejected`，并返回 ready exceptional future 或失败的逻辑 handle。已完成 handle 仍可用于后续建图，因此当前版本不自动删除任务图节点；长生命周期服务应控制依赖图规模，带有明确 handle 保留/过期语义的状态裁剪仍待实现。`submit_after()` 的等待任务当前会占用一个 worker 等待条件变量，超大规模任务图后续可演进为纯调度侧唤醒。
 
 ### 3.5 软超时
 
@@ -1046,7 +1046,7 @@ if (config_box.try_load_newer_than(seen, config, seen)) {
 - `try_load_newer_than(last_seen, out, new_sequence)`：仅在 sequence 更新时返回 `true`，未更新时增加 `stale_read_count`。
 - `sequence()` / `stats()` / `set_event_callback(...)`：观察当前版本、统计和低频诊断事件。
 
-`RealtimeChannel<T>` 适合实时周期内 drain 一批消息但不能无限处理的场景。`drain_for_cycle(handler, max_items)` 不等待 condition variable；`max_items == 0` 时使用 `RealtimeChannelOptions::max_items_per_cycle`。这与 `RealtimeThreadConfig::max_tasks_per_cycle` 的语义保持一致：`0` 表示不限，非 0 表示本周期预算上限；生产环境建议保留明确上限以维持周期确定性。
+`RealtimeChannel<T>` 适合周期线程内 drain 一批消息但不能无限处理的场景。`drain_for_cycle(handler, max_items)` 不等待 condition variable；`max_items == 0` 时使用 `RealtimeChannelOptions::max_items_per_cycle`。这与 `RealtimeThreadConfig::max_tasks_per_cycle` 的语义保持一致：`0` 表示不限，非 0 表示本周期预算上限；生产环境建议保留明确上限以维持周期确定性。当前实现通过 mutex 保护队列，因此该 API 不应被视为硬实时或无锁保证；有这类要求时使用经验证的专用无锁通道。
 
 ```cpp
 executor::comm::RealtimeChannelOptions options;
@@ -1128,7 +1128,7 @@ waiter.join();
 
 ### 7.8 Snapshot / DoubleBuffer
 
-`Snapshot<T>` / `DoubleBuffer<T>` 适合把共享 mutable state 改成“发布完整快照、读者按值读取”的模式。读者不会拿到可变引用，也不会看到 writer 更新到一半的对象。
+`Snapshot<T>` / `DoubleBuffer<T>` 适合把共享 mutable state 改成“发布完整快照、读者按值读取”的模式。读者不会拿到可变引用，也不会看到 writer 更新到一半的对象。当前版本以 mutex 保证完整快照，不承诺无锁读取。
 
 ```cpp
 struct SystemState {

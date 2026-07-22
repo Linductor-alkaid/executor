@@ -226,7 +226,7 @@
   - 默认不执行 dependent task。
   - dependent future 返回可诊断异常。
   - 依赖图 cycle 或无效 handle 返回 ready future 异常或失败逻辑 handle，并记录 `SubmitRejected`。
-- [x] 增加依赖状态裁剪，避免长生命周期服务中任务 ID 无限增长。
+- [ ] 增加具有明确 `TaskHandle` 保留/过期语义的依赖状态裁剪，避免长生命周期服务中任务 ID 无限增长。
 
 ### 测试
 
@@ -240,6 +240,7 @@
 ### 验收
 
 - [x] 用户可通过 facade 表达任务时序，而不是手写 promise/future 链或轮询 `TaskDependencyManager`。
+- [ ] 长生命周期任务图状态有界；当前实现保留已完成 handle，以支持完成后再创建 dependent task。
 
 ---
 

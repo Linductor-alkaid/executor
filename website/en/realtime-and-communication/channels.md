@@ -61,6 +61,8 @@ commands.drain_for_cycle([](const ControlCommand& command) {
 
 `max_items == 0` uses configured `max_items_per_cycle`; only a configuration value of `0` means unlimited. Preserve a production bound so backlog cannot consume the entire control period. A handler exception stops this drain, increments `handler_exception_count`, emits `HandlerException`, and continues propagating the exception.
 
+`drain_for_cycle()` does not wait on a condition variable, but the current `RealtimeChannel` implementation protects its queue with a mutex. It is a bounded cycle-consumption helper, not a lock-free or hard-real-time guarantee; use a validated specialized lock-free transport where that guarantee is required.
+
 The handler receives `const T&` valid only for that call. Copy or transfer it to an owned object before retaining it asynchronously. Keep the handler bounded and nonblocking because it runs inside the real-time cycle.
 
 | Policy | Meaning | Typical use |

@@ -11,7 +11,7 @@ Ask how data may be lost or overwritten before asking which queue is faster. The
 | --- | --- | --- |
 | Only the latest configuration or target matters | `LatestMailbox<T>` | Sequence, new-value reads, overwrites, stale reads |
 | Every message must be consumed FIFO | `MpscChannel<T>` | Capacity, drop policy, close, timeout |
-| A real-time cycle consumes only a bounded number of messages | `RealtimeChannel<T>` | Nonblocking drain, per-cycle budget, drops, handler exceptions |
+| A cycle consumes only a bounded number of messages | `RealtimeChannel<T>` | No condition-variable wait, per-cycle budget, drops, handler exceptions; mutex-backed |
 | Several readers need complete consistent state | `DoubleBuffer<T>` | Sequence, old/new values, single-writer/multi-reader boundary |
 | Setup, calibration, and run phases advance in order | `PhaseGate` | Timeout, close, phase regression, missed phase |
 | Publication must have strict ticket order | `Sequencer` | Wait timeout, close, missing sequence |
@@ -40,5 +40,7 @@ Capacity is a pressure-relief contract, not an implementation detail. For `MpscC
 ## Observation boundary
 
 `CommStats` and `CommEventCallback` report drops, overwrites, stale reads, latency, lag, and missed phases. They do not automatically contribute to `ExecutorFailureStatus` or invoke `Executor::set_failure_callback()`. Bridge component events to your monitoring system if alerts must be unified.
+
+`RealtimeChannel` and `DoubleBuffer` currently use mutexes internally. Their APIs express bounded cycle consumption and complete value snapshots, respectively; neither is a lock-free or hard-real-time guarantee.
 
 See the [complete robot pipeline](/en/tutorial/complete-robot-pipeline) for a connected example. Detailed capacity and alerting guidance currently remains in Chinese; ordinary background-work selection is covered by [choose a submission API](/en/guides/choosing-submit-api).

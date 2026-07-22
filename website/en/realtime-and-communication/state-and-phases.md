@@ -39,6 +39,8 @@ Overwriting a prior configuration increments `overwritten_count`; no higher sequ
 
 `DoubleBuffer<T>` is for a single writer and multiple readers. `publish()` or `update()` builds the inactive buffer completely then releases it at once; `load()` or `load_newer_than()` returns a value-copy `Snapshot<T>`, never a partially updated object. Funnel multiple writers through an `MpscChannel` to one state owner, and assess copying cost for large state.
 
+The current implementation uses a mutex to preserve complete snapshots; it does not promise lock-free reads. Choose it for its value-snapshot and ownership semantics, not as a hard-real-time primitive.
+
 `update()` modifies the inactive buffer synchronously on the writer path; it is not an asynchronous Executor submission. Its references need only cover that immediate call, but it still obeys the one-writer constraint. A reader's snapshot remains its own copy after later publication.
 
 ## Phases and strict order

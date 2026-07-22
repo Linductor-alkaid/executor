@@ -16,7 +16,7 @@
 
 - 采集线程到规划线程的有界数据流：从“共享 vector + mutex”或直接使用底层队列，迁移到 `MpscChannel<T>` / `SpscChannel<T>`。满队列、关闭、超时通过返回值和 `CommStats` 可见。
 - 配置线程到实时控制线程的“只要最新值”：从共享配置对象和原子 flag，迁移到 `LatestMailbox<T>`。实时线程用 sequence 避免重复消费旧配置。
-- 实时周期内处理有限条命令：从实时线程里阻塞等待队列，迁移到 `RealtimeChannel<T>::drain_for_cycle()`，并设置每周期预算。
+- 实时周期内处理有限条命令：从实时线程里阻塞等待队列，迁移到 `RealtimeChannel<T>::drain_for_cycle()`，并设置每周期预算。该 facade 当前提供有界、非等待的调用语义，但其内部仍使用 mutex；硬实时或无锁要求需使用经验证的专用实现。
 - 监控线程读取系统状态：从共享 mutable state，迁移到 `DoubleBuffer<T>` / `Snapshot<T>`，读者只看到完整发布后的快照。
 - 启动、初始化、阶段顺序：从手写 condition variable predicate，迁移到 `PhaseGate` / `Sequencer`。
 - 任务级依赖：从手写 promise/future 链或轮询 `TaskDependencyManager`，迁移到 `TaskHandle`、`submit_with_handle()`、`submit_after()` 和 `when_all()`。

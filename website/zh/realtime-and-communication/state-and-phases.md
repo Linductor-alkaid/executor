@@ -47,6 +47,8 @@ if (mailbox.try_load_newer_than(seen, config, seen)) {
 
 `DoubleBuffer<T>` 适合单写多读。writer 用 `publish()` 或 `update()` 完整构造非活动缓冲后一次发布；reader 的 `load()` 或 `load_newer_than()` 得到按值复制的 `Snapshot<T>`，不会看到半更新对象。多写者先用 `MpscChannel` 汇聚到一个状态 owner；大型对象还要评估复制成本。
 
+当前实现通过 mutex 保证快照完整性，不承诺无锁读取。应因其按值快照与所有权语义选用它，而不要把它当作硬实时原语。
+
 `update()` 的函数是在 writer 路径中修改非活动缓冲，不是提交给 Executor 的异步任务；它捕获的引用只需覆盖这次同步调用，但仍要遵守 DoubleBuffer 的单 writer 约束。reader 得到的 snapshot 是自己的值副本，可以在下一次发布后继续使用。
 
 ## 阶段与精确顺序

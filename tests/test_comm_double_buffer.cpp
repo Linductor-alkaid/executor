@@ -107,11 +107,13 @@ TEST(CommDoubleBufferTest, LoadNewerThanAvoidsDuplicateConsumption) {
 TEST(CommDoubleBufferTest, MultipleReadersSeeConsistentSnapshots) {
     DoubleBuffer<State> buffer(make_state(0));
     std::atomic<bool> stop{false};
+    std::atomic<int> readers_started{0};
     std::atomic<int> checked{0};
     std::vector<std::thread> readers;
 
     for (int i = 0; i < 4; ++i) {
         readers.emplace_back([&] {
+            readers_started.fetch_add(1, std::memory_order_release);
             while (!stop.load(std::memory_order_acquire)) {
                 const auto snapshot = buffer.load();
                 EXPECT_EQ(snapshot.value.checksum, snapshot.value.version * 17);
@@ -120,6 +122,13 @@ TEST(CommDoubleBufferTest, MultipleReadersSeeConsistentSnapshots) {
                 checked.fetch_add(1, std::memory_order_acq_rel);
             }
         });
+    }
+
+    while (readers_started.load(std::memory_order_acquire) < 4) {
+        std::this_thread::yield();
+    }
+    while (checked.load(std::memory_order_acquire) == 0) {
+        std::this_thread::yield();
     }
 
     for (int version = 1; version <= 200; ++version) {

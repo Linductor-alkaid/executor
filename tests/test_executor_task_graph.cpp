@@ -117,6 +117,64 @@ TEST(ExecutorTaskGraphTest, DependencyFailureSkipsDependentTask) {
     executor.shutdown();
 }
 
+TEST(ExecutorTaskGraphTest, WhenAllFailureSkipsDependentTask) {
+    executor::Executor executor;
+    ASSERT_TRUE(executor.initialize(config()));
+
+    auto successful = executor.submit_with_handle([] { return 1; });
+    auto failing = executor.submit_with_handle([]() -> int {
+        throw std::runtime_error("precondition failed");
+    });
+    const auto all = executor.when_all({successful.handle, failing.handle});
+
+    std::atomic<bool> ran{false};
+    auto dependent = executor.submit_after(all, [&] {
+        ran.store(true, std::memory_order_release);
+        return 3;
+    });
+
+    EXPECT_EQ(successful.future.get(), 1);
+    EXPECT_THROW(failing.future.get(), std::runtime_error);
+    EXPECT_THROW(dependent.get(), std::runtime_error);
+    EXPECT_FALSE(ran.load(std::memory_order_acquire));
+
+    executor.shutdown();
+}
+
+TEST(ExecutorTaskGraphTest, RejectsHandleFromAnotherExecutor) {
+    executor::Executor first_executor;
+    executor::Executor second_executor;
+    ASSERT_TRUE(first_executor.initialize(config()));
+    ASSERT_TRUE(second_executor.initialize(config()));
+
+    auto foreign = first_executor.submit_with_handle([] { return 1; });
+    std::atomic<bool> ran{false};
+    auto dependent = second_executor.submit_after(foreign.handle, [&] {
+        ran.store(true, std::memory_order_release);
+    });
+
+    EXPECT_EQ(foreign.future.get(), 1);
+    EXPECT_THROW(dependent.get(), std::runtime_error);
+    EXPECT_FALSE(ran.load(std::memory_order_acquire));
+    EXPECT_GE(second_executor.get_failure_status().submit_rejected_count, 1U);
+
+    first_executor.shutdown();
+    second_executor.shutdown();
+}
+
+TEST(ExecutorTaskGraphTest, CompletedHandleCanStillCreateDependentTask) {
+    executor::Executor executor;
+    ASSERT_TRUE(executor.initialize(config()));
+
+    auto completed = executor.submit_with_handle([] { return 7; });
+    EXPECT_EQ(completed.future.get(), 7);
+
+    auto dependent = executor.submit_after(completed.handle, [] { return 8; });
+    EXPECT_EQ(dependent.get(), 8);
+
+    executor.shutdown();
+}
+
 TEST(ExecutorTaskGraphTest, InvalidHandleReturnsReadyExceptionalFuture) {
     executor::Executor executor;
     ASSERT_TRUE(executor.initialize(config()));

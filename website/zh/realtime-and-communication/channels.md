@@ -61,6 +61,8 @@ commands.drain_for_cycle([](const ControlCommand& command) {
 
 `max_items == 0` 时使用配置中的 `max_items_per_cycle`；配置为 `0` 才表示不限。生产环境应保留明确上限，防止突发积压侵占整个控制周期。handler 抛异常时，本轮 drain 停止、统计记录 `handler_exception_count`、组件发出 `HandlerException`，异常仍会继续传播。
 
+`drain_for_cycle()` 不会等待 condition variable，但当前 `RealtimeChannel` 实现使用 mutex 保护队列。它是有界的周期消费辅助，不构成无锁或硬实时保证；有这类要求时应使用经过验证的专用无锁传输实现。
+
 `drain_for_cycle()` 的 handler 在调用期间接收 `const T&`；这个引用只在当前 handler 调用内有效。需要异步保留消息时应复制或转移到另一个所有权对象，不能保存该引用供周期结束后使用。handler 本身也在实时周期内执行，应保持有界并避免阻塞。
 
 ## 满队列时的业务选择
