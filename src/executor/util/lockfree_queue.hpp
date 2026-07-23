@@ -197,7 +197,23 @@ public:
                 for (size_t i = 0; i < count; ++i) {
                     const size_t index = (pos + i) & mask_;
                     SlotState state = states_[index].load(std::memory_order_acquire);
-                    if (!begin_write(index, state)) return false;
+                    // Reserve the complete claimed range before any slot can
+                    // enter the cancellable debug-hook window.  A consumer
+                    // may then cancel stalled slots, but it can never advance
+                    // into an unreserved Free slot in this batch.
+                    if (!reserve_slot(index, state)) {
+                        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                        record_contention_rejection();
+                        return false;
+                    }
+                }
+                for (size_t i = 0; i < count; ++i) {
+                    const size_t index = (pos + i) & mask_;
+                    if (!finish_write_reservation(index)) {
+                        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                        record_contention_rejection();
+                        return false;
+                    }
                     buffer_[index] = items[i];
                     sequences_[index].store(pos + i + 1, std::memory_order_release);
                     states_[index].store(SlotState::Published, std::memory_order_release);
@@ -340,12 +356,18 @@ private:
         return state == SlotState::Free || state == SlotState::Cancelled;
     }
 
-    bool begin_write(size_t index, SlotState previous_state) {
-        if (!states_[index].compare_exchange_strong(previous_state, SlotState::Reserved,
-                                                    std::memory_order_acq_rel,
-                                                    std::memory_order_acquire)) {
-            return false;
+    bool reserve_slot(size_t index, SlotState previous_state) {
+        while (slot_can_be_reserved(previous_state)) {
+            if (states_[index].compare_exchange_weak(previous_state, SlotState::Reserved,
+                                                     std::memory_order_acq_rel,
+                                                     std::memory_order_acquire)) {
+                return true;
+            }
         }
+        return false;
+    }
+
+    bool finish_write_reservation(size_t index) {
 #ifdef LOCKFREE_QUEUE_DEBUG_HOOKS
         if (before_publish_hook_ != nullptr) before_publish_hook_(before_publish_hook_context_);
 #endif
@@ -353,6 +375,13 @@ private:
         return states_[index].compare_exchange_strong(expected, SlotState::Writing,
                                                        std::memory_order_acq_rel,
                                                        std::memory_order_acquire);
+    }
+
+    bool begin_write(size_t index, SlotState previous_state) {
+        if (!reserve_slot(index, previous_state)) {
+            return false;
+        }
+        return finish_write_reservation(index);
     }
 
     bool cancel_reservation(size_t index) {

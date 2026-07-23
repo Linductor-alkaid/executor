@@ -69,6 +69,42 @@ static int test_reserved_head_is_skipped() {
     return 0;
 }
 
+static int test_exact_batch_cancelled_head_does_not_block_later_items() {
+    std::cout << "[P-001] exact batch cancelled head regression test ...\n";
+    util::LockFreeQueue<int> q(16, 1, true);
+    ProducerStallHook hook;
+    q.set_before_publish_hook(stall_before_publish, &hook);
+
+    const int batch[] = {1, 2};
+    std::atomic<bool> batch_result{true};
+    std::thread stalled([&]() {
+        batch_result.store(q.push_batch_exact(batch, 2), std::memory_order_release);
+    });
+    while (!hook.entered.load(std::memory_order_acquire)) std::this_thread::yield();
+
+    int discarded[2] = {};
+    const size_t popped = q.pop_batch(discarded, 2);
+    hook.release.store(true, std::memory_order_release);
+    stalled.join();
+
+    q.set_before_publish_hook(nullptr, nullptr);
+    if (!q.push(3) || !q.push(4)) {
+        std::cout << "  FAIL: later producers could not publish\n";
+        return 1;
+    }
+
+    int values[2] = {};
+    const size_t recovered = q.pop_batch(values, 2);
+    const auto stats = q.get_stats();
+    if (popped != 0 || batch_result.load(std::memory_order_acquire) || recovered != 2 ||
+        values[0] != 3 || values[1] != 4 || stats.ready_count != 0) {
+        std::cout << "  FAIL: cancelled exact batch left a queue hole\n";
+        return 1;
+    }
+    std::cout << "  PASS: cancelled exact batch does not block later items\n";
+    return 0;
+}
+
 static void test_basic_multithread_submit() {
     std::cout << "测试: 多线程提交任务\n";
 
@@ -310,7 +346,8 @@ int main() {
     test_basic_multithread_submit();
     int rc2 = test_push_batch_cas_retry_consistency();
     int rc3 = test_reserved_head_is_skipped();
+    int rc4 = test_exact_batch_cancelled_head_does_not_block_later_items();
     std::cout << "\n=== P-260626-003 test result: "
-              << (rc2 == 0 && rc3 == 0 ? "PASS" : "FAIL") << " ===\n";
-    return rc2 || rc3;
+              << (rc2 == 0 && rc3 == 0 && rc4 == 0 ? "PASS" : "FAIL") << " ===\n";
+    return rc2 || rc3 || rc4;
 }
