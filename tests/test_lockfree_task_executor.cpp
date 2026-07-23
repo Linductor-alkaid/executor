@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 using namespace executor;
@@ -38,6 +39,27 @@ bool wait_until(Predicate predicate,
 
 } // namespace
 
+class ThreadCreationFailingLockFreeTaskExecutor : public LockFreeTaskExecutor {
+public:
+    using LockFreeTaskExecutor::LockFreeTaskExecutor;
+
+    void fail_next_start() {
+        fail_next_start_ = true;
+    }
+
+protected:
+    std::thread create_worker_thread() override {
+        if (fail_next_start_) {
+            fail_next_start_ = false;
+            throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
+        }
+        return LockFreeTaskExecutor::create_worker_thread();
+    }
+
+private:
+    bool fail_next_start_{false};
+};
+
 TEST(LockFreeTaskExecutorTest, BasicStartStop) {
     LockFreeTaskExecutor exec(128);
 
@@ -47,6 +69,18 @@ TEST(LockFreeTaskExecutorTest, BasicStartStop) {
 
     exec.stop();
     EXPECT_FALSE(exec.is_running());
+}
+
+TEST(LockFreeTaskExecutorTest, StartThreadCreationFailureRollsBack) {
+    ThreadCreationFailingLockFreeTaskExecutor exec(128);
+    exec.fail_next_start();
+
+    EXPECT_FALSE(exec.start());
+    EXPECT_FALSE(exec.is_running());
+
+    EXPECT_TRUE(exec.start());
+    EXPECT_TRUE(exec.is_running());
+    exec.stop();
 }
 
 TEST(LockFreeTaskExecutorTest, DoubleStart) {
