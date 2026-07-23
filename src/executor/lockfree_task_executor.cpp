@@ -36,8 +36,18 @@ bool LockFreeTaskExecutor::start() {
         return false;
     }
 
-    worker_ = std::thread(&LockFreeTaskExecutor::worker_thread, this);
+    try {
+        worker_ = create_worker_thread();
+    } catch (...) {
+        running_.store(false, std::memory_order_release);
+        worker_id_ = std::thread::id{};
+        return false;
+    }
     return true;
+}
+
+std::thread LockFreeTaskExecutor::create_worker_thread() {
+    return std::thread(&LockFreeTaskExecutor::worker_thread, this);
 }
 
 void LockFreeTaskExecutor::stop() {

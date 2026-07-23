@@ -149,6 +149,9 @@ public:
     };
     QueueStats get_queue_stats() const;
 
+protected:
+    virtual std::thread create_worker_thread();
+
 private:
     struct TaskWrapper {
         std::function<void()> func;
