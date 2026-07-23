@@ -127,11 +127,14 @@ bool OpenCLExecutor::start() {
         return false;
     }
 
+    // Reopen dependency-waiter admission only after startup succeeds.
+    start_waiter_generation();
     return true;
 }
 
 void OpenCLExecutor::stop() {
     if (!running_.exchange(false, std::memory_order_acq_rel)) {
+        join_pending_waiters();
         return;
     }
 

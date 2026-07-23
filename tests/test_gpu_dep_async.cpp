@@ -15,6 +15,8 @@
 #include <cstring>
 #include <future>
 #include <iostream>
+#include <memory>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -46,6 +48,141 @@ namespace {
 inline int64_t now_ns() {
     return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch())
         .count();
+}
+
+// Exercises the common IGpuExecutor waiter lifecycle without GPU hardware.
+class MockGpuDependencyExecutor : public IGpuExecutor {
+public:
+    explicit MockGpuDependencyExecutor(gpu::GpuBackend backend)
+        : backend_(backend) {}
+
+    ~MockGpuDependencyExecutor() override { stop(); }
+
+    bool start() override {
+        bool expected = false;
+        if (!running_.compare_exchange_strong(expected, true)) {
+            return false;
+        }
+        start_waiter_generation();
+        return true;
+    }
+
+    void stop() override {
+        running_.store(false);
+        join_pending_waiters();
+    }
+
+    void wait_for_completion() override {}
+    void synchronize() override {}
+    void synchronize_stream(int) override {}
+    int create_stream() override { return 0; }
+    void destroy_stream(int) override {}
+    bool add_stream_callback(int, std::function<void()> callback) override {
+        if (callback) {
+            callback();
+        }
+        return true;
+    }
+    void* allocate_device_memory(size_t) override { return nullptr; }
+    void free_device_memory(void*) override {}
+    bool copy_to_device(void*, const void*, size_t, bool, int) override { return true; }
+    bool copy_to_host(void*, const void*, size_t, bool, int) override { return true; }
+    bool copy_device_to_device(void*, const void*, size_t, bool, int) override { return true; }
+    std::string get_name() const override { return "mock_gpu_dependency"; }
+    gpu::GpuDeviceInfo get_device_info() const override {
+        gpu::GpuDeviceInfo info;
+        info.backend = backend_;
+        return info;
+    }
+    gpu::GpuExecutorStatus get_status() const override {
+        gpu::GpuExecutorStatus status;
+        status.is_running = running_.load();
+        status.backend = backend_;
+        return status;
+    }
+
+protected:
+    std::future<void> submit_kernel_impl(
+        std::function<void(void*)> kernel_func,
+        const gpu::GpuTaskConfig&) override {
+        std::promise<void> promise;
+        auto future = promise.get_future();
+        try {
+            if (!running_.load()) {
+                throw std::runtime_error("mock executor is not running");
+            }
+            kernel_func(nullptr);
+            promise.set_value();
+        } catch (...) {
+            promise.set_exception(std::current_exception());
+        }
+        return future;
+    }
+
+private:
+    gpu::GpuBackend backend_;
+    std::atomic<bool> running_{false};
+};
+
+bool test_gpu_dependency_after_restart_runs() {
+    std::cout << "P-002: dependency waiters run after restart" << std::endl;
+    const gpu::GpuBackend backends[] = {
+        gpu::GpuBackend::CUDA, gpu::GpuBackend::OPENCL};
+
+    for (const auto backend : backends) {
+        MockGpuDependencyExecutor exec(backend);
+        GpuTaskConfig config;
+        std::atomic<int> runs{0};
+
+        GPU_DEP_TEST_ASSERT(exec.start(), "mock executor must start");
+        std::promise<void> first_ready;
+        auto first = exec.submit_kernel_after(first_ready.get_future().share(),
+            [&runs](void*) { ++runs; }, config);
+        first_ready.set_value();
+        first.get();
+        exec.stop();
+
+        GPU_DEP_TEST_ASSERT(exec.start(), "mock executor must restart");
+        std::promise<void> second_ready;
+        auto second = exec.submit_kernel_after(second_ready.get_future().share(),
+            [&runs](void*) { ++runs; }, config);
+        second_ready.set_value();
+        second.get();
+        exec.stop();
+
+        GPU_DEP_TEST_ASSERT(runs.load() == 2,
+                            "both dependency kernels must run across restart");
+    }
+    return true;
+}
+
+bool test_concurrent_stop_and_dependency_registration_leaves_no_joinable_waiter() {
+    std::cout << "P-002: concurrent stop and dependency registration" << std::endl;
+    MockGpuDependencyExecutor exec(gpu::GpuBackend::CUDA);
+    GPU_DEP_TEST_ASSERT(exec.start(), "mock executor must start");
+
+    std::promise<void> never_ready;
+    const auto dependency = never_ready.get_future().share();
+    GpuTaskConfig config;
+    std::vector<std::future<void>> futures;
+    futures.reserve(100);
+
+    std::thread stopper([&exec] { exec.stop(); });
+    for (int i = 0; i < 100; ++i) {
+        futures.push_back(exec.submit_kernel_after(dependency, [](void*) {}, config));
+    }
+    stopper.join();
+
+    for (auto& future : futures) {
+        GPU_DEP_TEST_ASSERT(future.wait_for(seconds(2)) == std::future_status::ready,
+                            "every raced submission must complete or fail");
+        try {
+            future.get();
+        } catch (const std::exception&) {
+            // Stopped submissions are expected to fail.
+        }
+    }
+    return true;
 }
 
 bool test_gpu_dependency_does_not_starve_worker() {
@@ -271,6 +408,8 @@ int main() {
     bool ok = true;
     ok &= test_gpu_dependency_does_not_starve_worker();
     ok &= test_gpu_dep_async_destroy_race();
+    ok &= test_gpu_dependency_after_restart_runs();
+    ok &= test_concurrent_stop_and_dependency_registration_leaves_no_joinable_waiter();
 
     if (ok) {
         std::cout << "All GPU dep-async tests PASSED" << std::endl;
