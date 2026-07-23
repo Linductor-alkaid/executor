@@ -397,6 +397,8 @@ bool CudaExecutor::start() {
 #endif
 
     clear_last_error();
+    // Reopen dependency-waiter admission only after startup succeeds.
+    start_waiter_generation();
     return true;
 }
 
@@ -411,6 +413,7 @@ bool CudaExecutor::stop_and_join() {
         if (std::this_thread::get_id() == worker_id_) {
             self_stop_requested_.store(true, std::memory_order_release);
             is_running_.store(false, std::memory_order_release);
+            close_waiter_admission();
             queue_not_empty_cv_.notify_all();
             queue_not_full_cv_.notify_all();
             return false;
