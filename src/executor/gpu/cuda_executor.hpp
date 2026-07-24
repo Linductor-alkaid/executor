@@ -216,14 +216,14 @@ private:
     bool ensure_device_context() const;
 
     /**
-     * @brief 底层设备内存分配（不经过内存池，不写入 allocated_memory_）
+     * @brief 底层设备内存分配（不经过内存池,不写入 transfer_allocations_ 跟踪表）
      * @param size 字节数
-     * @return 设备指针，失败返回 nullptr
+     * @return 设备指针,失败返回 nullptr
      */
     void* raw_allocate_device_memory(size_t size);
 
     /**
-     * @brief 底层设备内存释放（不操作 allocated_memory_）
+     * @brief 底层设备内存释放（不操作 transfer_allocations_ 跟踪表）
      * @param ptr 设备指针
      */
     void raw_free_device_memory(void* ptr);
@@ -257,8 +257,9 @@ private:
 
     // 内存管理
     std::unique_ptr<GpuMemoryManager> memory_manager_;    // 内存池（memory_pool_size > 0 时使用）
-    std::unordered_map<void*, size_t> allocated_memory_;  // 已分配内存映射（仅未使用池时）
-    std::unordered_map<void*, size_t> transfer_allocations_;  // 所有由本执行器管理的可传输 allocation
+    // 所有由本执行器管理的 allocation(pool + non-pool)用于 transfer 校验与析构 free。
+    // pool 分配由 memory_manager_.reset() 在析构前释放;non-pool 分配由析构遍历 cudaFree。
+    std::unordered_map<void*, size_t> transfer_allocations_;
     mutable std::mutex memory_mutex_;                     // 内存映射互斥锁（mutable用于const方法）
 
     // 统计信息

@@ -7,86 +7,70 @@
 
 namespace {
 
-class MockDriver {
-public:
-    bool submit(bool valid) {
-        if (!valid) {
-            return false;
-        }
-        ++calls;
-        return true;
-    }
+using executor::gpu::validate_host_transfer_buffer;
+using executor::gpu::validate_device_transfer_allocation;
 
-    int calls = 0;
-};
+// Direct unit tests for the two transfer_validation helpers. The integration
+// with the real CudaExecutor::copy_to_device / OpenCLExecutor::copy_to_device
+// entry points is covered indirectly by tests/test_cuda_executor.cpp and
+// tests/test_opencl_executor.cpp (those run the real copy paths in this
+// repository's CI). Running the helpers directly here keeps the boundary
+// contract pinned without depending on a CUDA runtime in the build env.
 
-bool validate_h2d(const void* host_source, bool destination_registered,
-                  size_t destination_capacity, size_t size, std::string* error) {
-    using namespace executor::gpu;
-    return validate_host_transfer_buffer("H2D", "source", host_source, size, error) &&
-           validate_device_transfer_allocation("H2D", "destination", destination_registered,
-                                               destination_capacity, size, error);
+TEST(GpuTransferValidationTest, HostBufferNullRejectedForNonZeroSize) {
+    std::string error;
+    EXPECT_FALSE(validate_host_transfer_buffer("op", "source", nullptr, 16, &error));
+    EXPECT_NE(error.find("source host buffer is null"), std::string::npos);
+    EXPECT_NE(error.find("16"), std::string::npos);
 }
 
-bool validate_d2h(void* host_destination, bool source_registered,
-                  size_t source_capacity, size_t size, std::string* error) {
-    using namespace executor::gpu;
-    return validate_host_transfer_buffer("D2H", "destination", host_destination, size, error) &&
-           validate_device_transfer_allocation("D2H", "source", source_registered,
-                                               source_capacity, size, error);
+TEST(GpuTransferValidationTest, HostBufferNullAllowedForZeroSize) {
+    std::string error;
+    EXPECT_TRUE(validate_host_transfer_buffer("op", "source", nullptr, 0, &error));
+    EXPECT_TRUE(error.empty());
 }
 
-bool validate_d2d(bool source_registered, size_t source_capacity,
-                  bool destination_registered, size_t destination_capacity,
-                  size_t size, std::string* error) {
-    using namespace executor::gpu;
-    return validate_device_transfer_allocation("D2D", "source", source_registered,
-                                               source_capacity, size, error) &&
-           validate_device_transfer_allocation("D2D", "destination", destination_registered,
-                                               destination_capacity, size, error);
+TEST(GpuTransferValidationTest, HostBufferNonNullAlwaysAllowed) {
+    int buffer = 0;
+    std::string error;
+    EXPECT_TRUE(validate_host_transfer_buffer("op", "source", &buffer, 16, &error));
+    EXPECT_TRUE(validate_host_transfer_buffer("op", "source", &buffer, 0, &error));
+}
+
+TEST(GpuTransferValidationTest, DeviceAllocationUnregisteredRejected) {
+    std::string error;
+    EXPECT_FALSE(validate_device_transfer_allocation("op", "destination",
+                                                    /*is_registered=*/false,
+                                                    /*capacity=*/0, 16, &error));
+    EXPECT_NE(error.find("not managed"), std::string::npos);
+    EXPECT_NE(error.find("16"), std::string::npos);
+}
+
+TEST(GpuTransferValidationTest, DeviceAllocationOversizeRejected) {
+    std::string error;
+    EXPECT_FALSE(validate_device_transfer_allocation("op", "destination",
+                                                    /*is_registered=*/true,
+                                                    /*capacity=*/16, 17, &error));
+    EXPECT_NE(error.find("17"), std::string::npos);
+    EXPECT_NE(error.find("16"), std::string::npos);
+}
+
+TEST(GpuTransferValidationTest, DeviceAllocationExactCapacityAllowed) {
+    std::string error;
+    EXPECT_TRUE(validate_device_transfer_allocation("op", "destination",
+                                                   /*is_registered=*/true,
+                                                   /*capacity=*/16, 16, &error));
+    EXPECT_TRUE(error.empty());
+}
+
+TEST(GpuTransferValidationTest, DeviceAllocationZeroSizeAlwaysAllowed) {
+    std::string error;
+    EXPECT_TRUE(validate_device_transfer_allocation("op", "destination",
+                                                   /*is_registered=*/false,
+                                                   /*capacity=*/0, 0, &error));
+    EXPECT_TRUE(validate_device_transfer_allocation("op", "destination",
+                                                   /*is_registered=*/true,
+                                                   /*capacity=*/16, 0, &error));
 }
 
 }  // namespace
-
-TEST(GpuTransferValidationTest, RejectsOversizeAndNullHostBuffers) {
-    constexpr size_t kCapacity = 16;
-    int host_buffer[4] = {};
-    std::string error;
-    MockDriver driver;
-
-    EXPECT_FALSE(driver.submit(validate_h2d(host_buffer, true, kCapacity, kCapacity + 1, &error)));
-    EXPECT_NE(error.find("H2D"), std::string::npos);
-    EXPECT_NE(error.find("17"), std::string::npos);
-    EXPECT_NE(error.find("16"), std::string::npos);
-
-    EXPECT_FALSE(driver.submit(validate_h2d(nullptr, true, kCapacity, kCapacity, &error)));
-    EXPECT_NE(error.find("source host buffer is null"), std::string::npos);
-
-    EXPECT_FALSE(driver.submit(validate_d2h(host_buffer, true, kCapacity - 1, kCapacity, &error)));
-    EXPECT_NE(error.find("D2H"), std::string::npos);
-
-    EXPECT_FALSE(driver.submit(validate_d2h(nullptr, true, kCapacity, kCapacity, &error)));
-    EXPECT_NE(error.find("destination host buffer is null"), std::string::npos);
-
-    EXPECT_FALSE(driver.submit(validate_d2d(true, kCapacity - 1, true, kCapacity,
-                                             kCapacity, &error)));
-    EXPECT_NE(error.find("source"), std::string::npos);
-
-    EXPECT_FALSE(driver.submit(validate_d2d(true, kCapacity, true, kCapacity - 1,
-                                             kCapacity, &error)));
-    EXPECT_NE(error.find("destination"), std::string::npos);
-    EXPECT_EQ(driver.calls, 0);
-}
-
-TEST(GpuTransferValidationTest, AllowsExactCapacityAndZeroByteNoOp) {
-    constexpr size_t kCapacity = 16;
-    int host_buffer[4] = {};
-    std::string error;
-    MockDriver driver;
-
-    EXPECT_TRUE(driver.submit(validate_h2d(host_buffer, true, kCapacity, kCapacity, &error)));
-    EXPECT_TRUE(driver.submit(validate_d2h(host_buffer, true, kCapacity, kCapacity, &error)));
-    EXPECT_TRUE(driver.submit(validate_d2d(true, kCapacity, true, kCapacity, kCapacity, &error)));
-    EXPECT_TRUE(validate_h2d(nullptr, false, 0, 0, &error));
-    EXPECT_EQ(driver.calls, 3);
-}

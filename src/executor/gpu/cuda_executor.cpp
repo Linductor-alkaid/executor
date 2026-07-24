@@ -101,16 +101,19 @@ CudaExecutor::~CudaExecutor() {
     if (is_available_ && loader_->is_available()) {
         (void)ensure_device_context();  // 多 GPU 场景下确保操作本设备
         auto funcs = loader_->get_functions();
-        
-        // 释放所有已分配的内存（仅未使用内存池时 allocated_memory_ 非空）
+
+        // 释放所有由本执行器管理的 non-pool 分配(池分配已由 memory_manager_.reset() 释放)。
+        // transfer_allocations_ 同时记录 pool + non-pool;这里用 memory_manager_ 区分。
         {
             std::lock_guard<std::mutex> lock(memory_mutex_);
-            for (auto& [ptr, size] : allocated_memory_) {
-                if (ptr != nullptr && funcs.cudaFree != nullptr) {
-                    funcs.cudaFree(ptr);
+            if (memory_manager_ == nullptr) {
+                for (auto& [ptr, size] : transfer_allocations_) {
+                    if (ptr != nullptr && funcs.cudaFree != nullptr) {
+                        funcs.cudaFree(ptr);
+                    }
                 }
             }
-            allocated_memory_.clear();
+            transfer_allocations_.clear();
         }
 
         // 销毁所有流（除了默认流）
@@ -567,7 +570,6 @@ void* CudaExecutor::allocate_device_memory(size_t size) {
 
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        allocated_memory_[ptr] = size;
         transfer_allocations_[ptr] = size;
     }
 
@@ -604,10 +606,9 @@ void CudaExecutor::free_device_memory(void* ptr) {
 
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        if (allocated_memory_.find(ptr) == allocated_memory_.end()) {
+        if (transfer_allocations_.find(ptr) == transfer_allocations_.end()) {
             return;
         }
-        allocated_memory_.erase(ptr);
         transfer_allocations_.erase(ptr);
     }
 
@@ -646,7 +647,6 @@ void* CudaExecutor::allocate_unified_memory(size_t size) {
 
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        allocated_memory_[ptr] = size;
         transfer_allocations_[ptr] = size;
     }
 
@@ -674,10 +674,9 @@ void CudaExecutor::free_unified_memory(void* ptr) {
 
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        if (allocated_memory_.find(ptr) == allocated_memory_.end()) {
+        if (transfer_allocations_.find(ptr) == transfer_allocations_.end()) {
             return;
         }
-        allocated_memory_.erase(ptr);
         transfer_allocations_.erase(ptr);
     }
 
@@ -1317,14 +1316,14 @@ GpuExecutorStatus CudaExecutor::get_status() const {
             if (error == cudaSuccess) {
                 status.memory_total_bytes = total_mem;
                 
-                // 计算已使用内存。启用内存池时 allocated_memory_ 不记录池分配。
+                // 计算已使用内存。启用内存池时由 memory_manager_ 统计;否则遍历 transfer_allocations_ 求和。
                 if (memory_manager_) {
                     auto memory_stats = memory_manager_->get_stats();
                     status.memory_used_bytes = memory_stats.total_allocated;
                 } else {
                     std::lock_guard<std::mutex> lock(memory_mutex_);
                     size_t allocated = 0;
-                    for (const auto& [ptr, size] : allocated_memory_) {
+                    for (const auto& [ptr, size] : transfer_allocations_) {
                         allocated += size;
                     }
                     status.memory_used_bytes = allocated;
