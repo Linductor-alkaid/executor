@@ -167,7 +167,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "integration;concurrency;thread_pool"
             TIMEOUT 120
         )
-    elseif(TEST_NAME MATCHES "^test_(util|task|thread_pool|thread_pool_empty_task_rejection|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager|push_task_ex_default)$")
+    elseif(TEST_NAME MATCHES "^test_(util|task|thread_pool|thread_pool_empty_task_rejection|statistics_collector|task_monitor|cuda_executor|gpu_memory_manager|gpu_transfer_validation|push_task_ex_default)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "unit"
             TIMEOUT 30
@@ -228,7 +228,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         )
     endif()
 
-    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|thread_pool_monitor_concurrent_set|dispatcher_resize_under_load|concurrent_stop_submit)$")
+    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|thread_pool_monitor_concurrent_set|dispatcher_resize_under_load|concurrent_stop_submit|load_balancer_concurrent_resize|opencl_lifecycle)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             TIMEOUT 180
         )

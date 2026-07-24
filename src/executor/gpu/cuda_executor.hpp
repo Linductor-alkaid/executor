@@ -258,6 +258,7 @@ private:
     // 内存管理
     std::unique_ptr<GpuMemoryManager> memory_manager_;    // 内存池（memory_pool_size > 0 时使用）
     std::unordered_map<void*, size_t> allocated_memory_;  // 已分配内存映射（仅未使用池时）
+    std::unordered_map<void*, size_t> transfer_allocations_;  // 所有由本执行器管理的可传输 allocation
     mutable std::mutex memory_mutex_;                     // 内存映射互斥锁（mutable用于const方法）
 
     // 统计信息

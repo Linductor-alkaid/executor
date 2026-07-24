@@ -1,5 +1,6 @@
 #include "cuda_executor.hpp"
 #include "gpu_memory_manager.hpp"
+#include "executor/gpu/transfer_validation.hpp"
 #include <chrono>
 #include <cstdio>
 #include <exception>
@@ -540,7 +541,12 @@ void* CudaExecutor::allocate_device_memory(size_t size) {
     }
 
     if (memory_manager_) {
-        return memory_manager_->allocate(size);
+        void* ptr = memory_manager_->allocate(size);
+        if (ptr != nullptr) {
+            std::lock_guard<std::mutex> lock(memory_mutex_);
+            transfer_allocations_[ptr] = size;
+        }
+        return ptr;
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
@@ -562,6 +568,7 @@ void* CudaExecutor::allocate_device_memory(size_t size) {
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
         allocated_memory_[ptr] = size;
+        transfer_allocations_[ptr] = size;
     }
 
     return ptr;
@@ -577,6 +584,10 @@ void CudaExecutor::free_device_memory(void* ptr) {
     }
 
     if (memory_manager_) {
+        {
+            std::lock_guard<std::mutex> lock(memory_mutex_);
+            transfer_allocations_.erase(ptr);
+        }
         memory_manager_->free(ptr);
         return;
     }
@@ -597,6 +608,7 @@ void CudaExecutor::free_device_memory(void* ptr) {
             return;
         }
         allocated_memory_.erase(ptr);
+        transfer_allocations_.erase(ptr);
     }
 
     cudaError_t error = funcs.cudaFree(ptr);
@@ -635,6 +647,7 @@ void* CudaExecutor::allocate_unified_memory(size_t size) {
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
         allocated_memory_[ptr] = size;
+        transfer_allocations_[ptr] = size;
     }
 
     return ptr;
@@ -665,6 +678,7 @@ void CudaExecutor::free_unified_memory(void* ptr) {
             return;
         }
         allocated_memory_.erase(ptr);
+        transfer_allocations_.erase(ptr);
     }
 
     cudaError_t error = funcs.cudaFree(ptr);
@@ -718,8 +732,30 @@ bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, 
 }
 
 bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
+    if (!is_available_ || !is_running_.load() || !loader_->is_available()) {
         return false;
+    }
+
+    std::string validation_error;
+    size_t destination_capacity = 0;
+    bool destination_registered = false;
+    {
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        const auto it = transfer_allocations_.find(dst);
+        destination_registered = it != transfer_allocations_.end();
+        if (destination_registered) {
+            destination_capacity = it->second;
+        }
+    }
+    if (!validate_host_transfer_buffer("CUDA copy_to_device", "source", src, size, &validation_error) ||
+        !validate_device_transfer_allocation("CUDA copy_to_device", "destination",
+                                             destination_registered, destination_capacity, size,
+                                             &validation_error)) {
+        set_last_error(validation_error);
+        return false;
+    }
+    if (size == 0) {
+        return true;
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
@@ -768,8 +804,30 @@ bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool 
 }
 
 bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
+    if (!is_available_ || !is_running_.load() || !loader_->is_available()) {
         return false;
+    }
+
+    std::string validation_error;
+    size_t source_capacity = 0;
+    bool source_registered = false;
+    {
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        const auto it = transfer_allocations_.find(const_cast<void*>(src));
+        source_registered = it != transfer_allocations_.end();
+        if (source_registered) {
+            source_capacity = it->second;
+        }
+    }
+    if (!validate_host_transfer_buffer("CUDA copy_to_host", "destination", dst, size, &validation_error) ||
+        !validate_device_transfer_allocation("CUDA copy_to_host", "source",
+                                             source_registered, source_capacity, size,
+                                             &validation_error)) {
+        set_last_error(validation_error);
+        return false;
+    }
+    if (size == 0) {
+        return true;
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
@@ -818,8 +876,39 @@ bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool as
 }
 
 bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
+    if (!is_available_ || !is_running_.load() || !loader_->is_available()) {
         return false;
+    }
+
+    std::string validation_error;
+    size_t source_capacity = 0;
+    size_t destination_capacity = 0;
+    bool source_registered = false;
+    bool destination_registered = false;
+    {
+        std::lock_guard<std::mutex> lock(memory_mutex_);
+        const auto source_it = transfer_allocations_.find(const_cast<void*>(src));
+        source_registered = source_it != transfer_allocations_.end();
+        if (source_registered) {
+            source_capacity = source_it->second;
+        }
+        const auto destination_it = transfer_allocations_.find(dst);
+        destination_registered = destination_it != transfer_allocations_.end();
+        if (destination_registered) {
+            destination_capacity = destination_it->second;
+        }
+    }
+    if (!validate_device_transfer_allocation("CUDA copy_device_to_device", "source",
+                                             source_registered, source_capacity, size,
+                                             &validation_error) ||
+        !validate_device_transfer_allocation("CUDA copy_device_to_device", "destination",
+                                             destination_registered, destination_capacity, size,
+                                             &validation_error)) {
+        set_last_error(validation_error);
+        return false;
+    }
+    if (size == 0) {
+        return true;
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
