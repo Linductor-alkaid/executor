@@ -288,6 +288,32 @@ struct RealtimeExecutorStatus {
     uint64_t queue_full_count = 0;                // 队列满拒绝累计数
 };
 
+enum class BlockingIoStopReason {
+    None,
+    Requested,
+    WorkerReturned,
+    WorkerException,
+    StartFailed
+};
+
+/**
+ * @brief 专属阻塞 I/O worker 的生命周期状态。
+ *
+ * transport 的收包、解码、背压与延迟统计仍属于对应 adapter 和
+ * executor::comm::CommStats；本结构只描述 executor 能可靠拥有的线程状态。
+ */
+struct BlockingIoExecutorStatus {
+    std::string name;
+    bool is_running = false;
+    bool stop_requested = false;
+    bool ready = false;
+    bool cpu_affinity_applied = false;
+    bool memory_locked = false;
+    uint64_t wakeup_count = 0;
+    BlockingIoStopReason stop_reason = BlockingIoStopReason::None;
+    std::string last_error_message;
+};
+
 /**
  * @brief 任务统计信息（用于监控）
  */

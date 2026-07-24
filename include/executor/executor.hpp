@@ -4,6 +4,7 @@
 #include "types.hpp"
 #include "interfaces.hpp"
 #include "executor_manager.hpp"
+#include "blocking_io.hpp"
 #include "gpu/gpu_scheduler.hpp"
 #include <future>
 #include <functional>
@@ -298,6 +299,21 @@ public:
      * @param name 任务名称
      */
     void stop_realtime_task(const std::string& name);
+
+    bool register_blocking_io_worker(const std::string& name,
+                                     const BlockingIoConfig& config,
+                                     std::unique_ptr<IBlockingIoWorker> worker);
+
+    ExecutorResult register_blocking_io_worker_ex(
+        const std::string& name,
+        const BlockingIoConfig& config,
+        std::unique_ptr<IBlockingIoWorker> worker);
+
+    bool start_blocking_io_worker(const std::string& name);
+    ExecutorResult start_blocking_io_worker_ex(const std::string& name);
+    void stop_blocking_io_worker(const std::string& name);
+    BlockingIoExecutorStatus get_blocking_io_worker_status(const std::string& name) const;
+    std::vector<std::string> get_blocking_io_worker_list() const;
 
     /**
      * @brief 通过 facade 推送任务到指定实时执行器

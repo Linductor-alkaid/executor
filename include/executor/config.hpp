@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <chrono>
 #include <string>
 #include <vector>
 #include <functional>
@@ -42,6 +43,19 @@ struct RealtimeThreadConfig {
     // (cycle_time 爆涨 / cycle_timeout_count 尖刺). 剩余任务自然滚到后续周期处理
     // (MPSC 无锁队列, 无需额外锁). 0 = 不限 (保留旧行为, 向后兼容); 默认 64.
     uint64_t max_tasks_per_cycle = 64;
+};
+
+/**
+ * @brief 专属阻塞 I/O worker 配置
+ *
+ * 用于 LCM、socket、串口或 CAN 等可中断等待循环。该 worker 默认使用普通
+ * OS 调度，不会自动申请 SCHED_FIFO；阻塞等待必须由 worker::wakeup() 解除。
+ */
+struct BlockingIoConfig {
+    std::string thread_name;
+    std::vector<int> cpu_affinity;                // 空 = 由 OS 自由调度
+    bool enable_memory_lock = false;              // 默认关闭，避免 I/O worker 误占锁定内存
+    std::chrono::milliseconds startup_timeout{1000}; // 0 = 不等待 ready，正值为启动上限
 };
 
 /**

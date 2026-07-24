@@ -1,6 +1,7 @@
 #pragma once
 
 #include "interfaces.hpp"
+#include "blocking_io.hpp"
 #include "config.hpp"
 #include "types.hpp"
 #include <memory>
@@ -118,6 +119,19 @@ public:
      */
     std::vector<std::string> get_realtime_executor_names() const;
 
+    bool register_blocking_io_executor(
+        const std::string& name,
+        std::unique_ptr<IBlockingIoExecutor> executor);
+
+    IBlockingIoExecutor* get_blocking_io_executor(const std::string& name);
+
+    std::unique_ptr<IBlockingIoExecutor> create_blocking_io_executor(
+        const std::string& name,
+        const BlockingIoConfig& config,
+        std::unique_ptr<IBlockingIoWorker> worker);
+
+    std::vector<std::string> get_blocking_io_executor_names() const;
+
     /**
      * @brief 注册 GPU 执行器
      * 
@@ -207,6 +221,9 @@ private:
 
     // 读写锁（保护实时执行器注册表）
     mutable std::shared_mutex mutex_;
+
+    std::unordered_map<std::string, std::unique_ptr<IBlockingIoExecutor>> blocking_io_executors_;
+    mutable std::shared_mutex blocking_io_mutex_;
 
     // GPU 执行器注册表
     std::unordered_map<std::string, std::unique_ptr<IGpuExecutor>> gpu_executors_;

@@ -1,6 +1,7 @@
 #include "executor/executor_manager.hpp"
 #include "thread_pool_executor.hpp"
 #include "realtime_thread_executor.hpp"
+#include "blocking_io_executor.hpp"
 #include "executor/monitor/statistics_collector.hpp"
 #include "executor/interfaces.hpp"
 #include "executor/config.hpp"
@@ -219,6 +220,51 @@ std::vector<std::string> ExecutorManager::get_realtime_executor_names() const {
     return names;
 }
 
+bool ExecutorManager::register_blocking_io_executor(
+    const std::string& name,
+    std::unique_ptr<IBlockingIoExecutor> executor) {
+    if (name.empty() || !executor) {
+        return false;
+    }
+
+    std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
+    if (blocking_io_executors_.find(name) != blocking_io_executors_.end()) {
+        return false;
+    }
+    blocking_io_executors_[name] = std::move(executor);
+    return true;
+}
+
+IBlockingIoExecutor* ExecutorManager::get_blocking_io_executor(const std::string& name) {
+    std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
+    const auto it = blocking_io_executors_.find(name);
+    return it == blocking_io_executors_.end() ? nullptr : it->second.get();
+}
+
+std::unique_ptr<IBlockingIoExecutor> ExecutorManager::create_blocking_io_executor(
+    const std::string& name,
+    const BlockingIoConfig& config,
+    std::unique_ptr<IBlockingIoWorker> worker) {
+    if (name.empty() || config.thread_name.empty() || !worker) {
+        return nullptr;
+    }
+    try {
+        return std::make_unique<BlockingIoExecutor>(name, config, std::move(worker));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+std::vector<std::string> ExecutorManager::get_blocking_io_executor_names() const {
+    std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
+    std::vector<std::string> names;
+    names.reserve(blocking_io_executors_.size());
+    for (const auto& pair : blocking_io_executors_) {
+        names.push_back(pair.first);
+    }
+    return names;
+}
+
 // 注册 GPU 执行器
 bool ExecutorManager::register_gpu_executor(const std::string& name,
                                              std::unique_ptr<IGpuExecutor> executor) {
@@ -341,6 +387,26 @@ ExecutorManager::get_all_task_statistics() const {
 
 // 关闭所有执行器
 void ExecutorManager::shutdown(bool wait_for_tasks) {
+    std::vector<std::unique_ptr<IBlockingIoExecutor>> blocking_io_executors;
+    {
+        std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
+        blocking_io_executors.reserve(blocking_io_executors_.size());
+        for (auto& pair : blocking_io_executors_) {
+            blocking_io_executors.push_back(std::move(pair.second));
+        }
+        blocking_io_executors_.clear();
+    }
+    for (auto& executor : blocking_io_executors) {
+        if (executor) {
+            executor->request_stop();
+        }
+    }
+    for (auto& executor : blocking_io_executors) {
+        if (executor) {
+            executor->stop();
+        }
+    }
+
     // 停止所有实时执行器
     {
         std::unique_lock<std::shared_mutex> lock(mutex_);

@@ -47,6 +47,28 @@ ExecutorResult validate_realtime_config(const std::string& name,
     return ExecutorResult::success();
 }
 
+ExecutorResult validate_blocking_io_config(const std::string& name,
+                                           const BlockingIoConfig& config,
+                                           const IBlockingIoWorker* worker) {
+    if (name.empty()) {
+        return make_failure(ExecutorErrorCode::InvalidConfig,
+                            "Blocking I/O executor name must not be empty");
+    }
+    if (config.thread_name.empty()) {
+        return make_failure(ExecutorErrorCode::InvalidConfig,
+                            "BlockingIoConfig invalid: thread_name must not be empty");
+    }
+    if (config.startup_timeout.count() < 0) {
+        return make_failure(ExecutorErrorCode::InvalidConfig,
+                            "BlockingIoConfig invalid: startup_timeout must not be negative");
+    }
+    if (!worker) {
+        return make_failure(ExecutorErrorCode::InvalidConfig,
+                            "Blocking I/O worker must not be null");
+    }
+    return ExecutorResult::success();
+}
+
 ExecutorResult validate_gpu_config_for_facade(
     const std::string& name,
     const gpu::GpuExecutorConfig& config) {
@@ -530,10 +552,12 @@ ExecutorResult Executor::register_realtime_task_ex(
         return validation;
     }
 
-    if (manager_->get_realtime_executor(name)) {
+    if (manager_->get_realtime_executor(name) ||
+        manager_->get_blocking_io_executor(name) ||
+        manager_->get_gpu_executor(name)) {
         auto result = make_failure(
             ExecutorErrorCode::DuplicateName,
-            "Realtime executor '" + name + "' is already registered");
+            "Executor '" + name + "' is already registered");
         record_result_failure(
             result, FailureKind::SubmitRejected, name, "facade_register_realtime_task");
         return result;
@@ -610,6 +634,104 @@ void Executor::stop_realtime_task(const std::string& name) {
     if (executor) {
         executor->stop();
     }
+}
+
+bool Executor::register_blocking_io_worker(
+    const std::string& name,
+    const BlockingIoConfig& config,
+    std::unique_ptr<IBlockingIoWorker> worker) {
+    return register_blocking_io_worker_ex(name, config, std::move(worker)).ok;
+}
+
+ExecutorResult Executor::register_blocking_io_worker_ex(
+    const std::string& name,
+    const BlockingIoConfig& config,
+    std::unique_ptr<IBlockingIoWorker> worker) {
+    if (auto validation = validate_blocking_io_config(name, config, worker.get()); !validation.ok) {
+        record_result_failure(
+            validation, FailureKind::SubmitRejected, name, "facade_register_blocking_io_worker");
+        return validation;
+    }
+    if (manager_->get_blocking_io_executor(name) ||
+        manager_->get_realtime_executor(name) ||
+        manager_->get_gpu_executor(name)) {
+        auto result = make_failure(ExecutorErrorCode::DuplicateName,
+                                   "Executor '" + name + "' is already registered");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_register_blocking_io_worker");
+        return result;
+    }
+
+    auto executor = manager_->create_blocking_io_executor(name, config, std::move(worker));
+    if (!executor) {
+        auto result = make_failure(ExecutorErrorCode::StartFailed,
+                                   "Blocking I/O executor creation failed");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_register_blocking_io_worker");
+        return result;
+    }
+    if (!manager_->register_blocking_io_executor(name, std::move(executor))) {
+        auto result = make_failure(ExecutorErrorCode::DuplicateName,
+                                   "Blocking I/O executor registration failed or duplicate name");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_register_blocking_io_worker");
+        return result;
+    }
+    return ExecutorResult::success("Blocking I/O executor registered");
+}
+
+bool Executor::start_blocking_io_worker(const std::string& name) {
+    return start_blocking_io_worker_ex(name).ok;
+}
+
+ExecutorResult Executor::start_blocking_io_worker_ex(const std::string& name) {
+    if (name.empty()) {
+        auto result = make_failure(ExecutorErrorCode::InvalidConfig,
+                                   "Blocking I/O executor name must not be empty");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_start_blocking_io_worker");
+        return result;
+    }
+    auto* executor = manager_->get_blocking_io_executor(name);
+    if (!executor) {
+        auto result = make_failure(ExecutorErrorCode::NotFound,
+                                   "Blocking I/O executor '" + name + "' not found");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_start_blocking_io_worker");
+        return result;
+    }
+    if (!executor->start()) {
+        const auto status = executor->get_status();
+        const auto code = status.is_running ? ExecutorErrorCode::AlreadyInitialized
+                                            : ExecutorErrorCode::StartFailed;
+        auto result = make_failure(
+            code,
+            status.is_running ? "Blocking I/O executor '" + name + "' is already running"
+                              : "Blocking I/O executor '" + name + "' start failed");
+        record_result_failure(
+            result, FailureKind::SubmitRejected, name, "facade_start_blocking_io_worker");
+        return result;
+    }
+    return ExecutorResult::success("Blocking I/O executor started");
+}
+
+void Executor::stop_blocking_io_worker(const std::string& name) {
+    if (auto* executor = manager_->get_blocking_io_executor(name)) {
+        executor->stop();
+    }
+}
+
+BlockingIoExecutorStatus Executor::get_blocking_io_worker_status(const std::string& name) const {
+    if (auto* executor = manager_->get_blocking_io_executor(name)) {
+        return executor->get_status();
+    }
+    BlockingIoExecutorStatus status;
+    status.name = name;
+    return status;
+}
+
+std::vector<std::string> Executor::get_blocking_io_worker_list() const {
+    return manager_->get_blocking_io_executor_names();
 }
 
 bool Executor::push_realtime_task(const std::string& name, std::function<void()> task) {
@@ -1013,10 +1135,12 @@ ExecutorResult Executor::register_gpu_executor_ex(
         return validation;
     }
 
-    if (manager_->get_gpu_executor(name)) {
+    if (manager_->get_gpu_executor(name) ||
+        manager_->get_realtime_executor(name) ||
+        manager_->get_blocking_io_executor(name)) {
         auto result = make_failure(
             ExecutorErrorCode::DuplicateName,
-            "GPU executor '" + name + "' is already registered");
+            "Executor '" + name + "' is already registered");
         record_result_failure(
             result, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
         return result;
