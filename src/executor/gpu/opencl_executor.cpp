@@ -75,14 +75,21 @@ OpenCLExecutor::~OpenCLExecutor() {
 }
 
 bool OpenCLExecutor::start() {
+    std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+
+    if (stopping_) {
+        set_last_error("OpenCLExecutor is stopping");
+        return false;
+    }
+
     if (!validate_config()) {
         return false;
     }
 
-    bool expected = false;
-    if (!running_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+    if (running_.load(std::memory_order_acquire)) {
         return true;
     }
+    running_.store(true, std::memory_order_release);
 
     clear_last_error();
 
@@ -97,16 +104,16 @@ bool OpenCLExecutor::start() {
             if (error.empty()) {
                 error = "OpenCL initialization failed";
             }
-            cleanup();
+            cleanup_locked();
             rollback_start_failure(error);
             return false;
         }
     } catch (const std::exception& ex) {
-        cleanup();
+        cleanup_locked();
         rollback_start_failure(std::string("OpenCL initialization failed: ") + ex.what());
         return false;
     } catch (...) {
-        cleanup();
+        cleanup_locked();
         rollback_start_failure("OpenCL initialization failed: unknown exception");
         return false;
     }
@@ -118,11 +125,11 @@ bool OpenCLExecutor::start() {
             worker_ = std::thread(&OpenCLExecutor::worker_thread, this);
         }
     } catch (const std::exception& ex) {
-        cleanup();
+        cleanup_locked();
         rollback_start_failure(std::string("OpenCL worker thread creation failed: ") + ex.what());
         return false;
     } catch (...) {
-        cleanup();
+        cleanup_locked();
         rollback_start_failure("OpenCL worker thread creation failed: unknown exception");
         return false;
     }
@@ -133,13 +140,36 @@ bool OpenCLExecutor::start() {
 }
 
 void OpenCLExecutor::stop() {
+    std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+
+    if (stopping_) {
+        return;
+    }
+
     if (!running_.exchange(false, std::memory_order_acq_rel)) {
         join_pending_waiters();
         return;
     }
 
+    stopping_ = true;
+
     queue_cv_.notify_all();
     queue_not_full_cv_.notify_all();
+
+    // Cancel queued tasks so the worker cannot block trying to enter the
+    // lifecycle shared gate while stop() is waiting to join it.
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        std::queue<std::packaged_task<void()>> empty;
+        task_queue_.swap(empty);
+        if (active_kernels_.load() == 0) {
+            queue_drained_cv_.notify_all();
+        }
+    }
+
+    // Let a worker that already dequeued a task acquire the shared gate and
+    // finish it before waiting for its thread to exit.
+    lifecycle_lock.unlock();
 
     // P-260625-002 fix: signal + join all submit_kernel_after waiter threads
     // before tearing down internal state. Mirrors the same P-002 fix on
@@ -151,6 +181,9 @@ void OpenCLExecutor::stop() {
     if (worker_.joinable()) {
         worker_.join();
     }
+
+    lifecycle_lock.lock();
+    stopping_ = false;
 }
 
 void OpenCLExecutor::wait_for_completion() {
@@ -226,14 +259,14 @@ bool OpenCLExecutor::initialize_opencl() {
         auto queue_wrapper = std::make_shared<CommandQueueWrapper>();
         queue_wrapper->queue = funcs.clCreateCommandQueue(context_, device_, 0, &err);
         if (err != CL_SUCCESS) {
-            cleanup();
+            cleanup_locked();
             set_last_error("OpenCL command queue creation failed");
             return false;
         }
         queues_.push_back(std::move(queue_wrapper));
     }
 
-    is_available_ = true;
+    is_available_.store(true, std::memory_order_release);
     clear_last_error();
     return true;
 }
@@ -271,6 +304,11 @@ void OpenCLExecutor::rollback_start_failure(const std::string& message) {
 }
 
 void OpenCLExecutor::cleanup() {
+    std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    cleanup_locked();
+}
+
+void OpenCLExecutor::cleanup_locked() {
     auto funcs = loader_->get_functions();
     std::vector<std::shared_ptr<CommandQueueWrapper>> detached_queues;
 
@@ -310,11 +348,15 @@ void OpenCLExecutor::cleanup() {
 
     device_ = nullptr;
     platform_ = nullptr;
-    is_available_ = false;
+    is_available_.store(false, std::memory_order_release);
 }
 
 void* OpenCLExecutor::allocate_device_memory(size_t size) {
-    if (!is_available_) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return nullptr;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
         return nullptr;
     }
 
@@ -335,7 +377,11 @@ void* OpenCLExecutor::allocate_device_memory(size_t size) {
 }
 
 void OpenCLExecutor::free_device_memory(void* ptr) {
-    if (!ptr || !is_available_) {
+    if (!ptr || !is_available_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
         return;
     }
 
@@ -349,7 +395,11 @@ void OpenCLExecutor::free_device_memory(void* ptr) {
 }
 
 bool OpenCLExecutor::copy_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
         return false;
     }
 
@@ -377,7 +427,11 @@ bool OpenCLExecutor::copy_to_device(void* dst, const void* src, size_t size, boo
 }
 
 bool OpenCLExecutor::copy_to_host(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
         return false;
     }
 
@@ -405,7 +459,11 @@ bool OpenCLExecutor::copy_to_host(void* dst, const void* src, size_t size, bool 
 }
 
 bool OpenCLExecutor::copy_device_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
         return false;
     }
 
@@ -441,7 +499,11 @@ bool OpenCLExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_
 }
 
 void OpenCLExecutor::synchronize() {
-    if (!is_available_) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
         return;
     }
 
@@ -465,6 +527,13 @@ void OpenCLExecutor::synchronize() {
 }
 
 void OpenCLExecutor::synchronize_stream(int stream_id) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return;
+    }
     auto queue_wrapper = get_queue(stream_id);
     if (!queue_wrapper) {
         return;
@@ -479,7 +548,11 @@ void OpenCLExecutor::synchronize_stream(int stream_id) {
 }
 
 int OpenCLExecutor::create_stream() {
-    if (!is_available_) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return -1;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
         return -1;
     }
 
@@ -501,6 +574,13 @@ int OpenCLExecutor::create_stream() {
 }
 
 void OpenCLExecutor::destroy_stream(int stream_id) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return;
+    }
     if (stream_id < static_cast<int>(config_.default_stream_count)) {
         return;
     }
@@ -540,7 +620,11 @@ GpuDeviceInfo OpenCLExecutor::get_device_info() const {
     info.backend = GpuBackend::OPENCL;
     info.device_id = config_.device_id;
 
-    if (is_available_ && device_) {
+    if (!is_available_.load(std::memory_order_acquire)) {
+        return info;
+    }
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    if (is_available_.load(std::memory_order_acquire) && device_) {
         auto funcs = loader_->get_functions();
         char device_name[256] = {0};
         funcs.clGetDeviceInfo(device_, 0x102B, sizeof(device_name), device_name, nullptr); // CL_DEVICE_NAME
@@ -564,6 +648,7 @@ GpuExecutorStatus OpenCLExecutor::get_status() const {
     status.active_kernels = active_kernels_.load();
     status.completed_kernels = completed_kernels_.load();
     status.failed_kernels = failed_kernels_.load();
+    std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
         status.queue_size = task_queue_.size();
@@ -576,7 +661,7 @@ GpuExecutorStatus OpenCLExecutor::get_status() const {
         }
     }
 
-    if (is_available_ && device_) {
+    if (is_available_.load(std::memory_order_acquire) && device_) {
         auto funcs = loader_->get_functions();
         cl_ulong mem_size = 0;
         cl_int err = funcs.clGetDeviceInfo(
@@ -616,6 +701,10 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
         bool kernel_func_started = false;
 
         try {
+            std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+            if (!is_available_.load(std::memory_order_acquire)) {
+                throw std::runtime_error("OpenCLExecutor is unavailable");
+            }
             auto queue_wrapper = get_queue(config.stream_id);
             if (!queue_wrapper) {
                 std::ostringstream oss;
