@@ -8,6 +8,7 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <vector>
 #include <future>
@@ -65,6 +66,7 @@ private:
 
     bool initialize_opencl();
     void cleanup();
+    void cleanup_locked();
     bool check_opencl_error(cl_int error, const char* operation);
     std::shared_ptr<CommandQueueWrapper> get_queue(int stream_id);
     void worker_thread();
@@ -76,12 +78,13 @@ private:
 
     std::string name_;
     GpuExecutorConfig config_;
-    bool is_available_;
+    std::atomic<bool> is_available_{false};
     OpenCLLoader* loader_;
 
     cl_platform_id platform_;
     cl_device_id device_;
     cl_context context_;
+    mutable std::shared_mutex lifecycle_mutex_;
     std::vector<std::shared_ptr<CommandQueueWrapper>> queues_;
     mutable std::mutex queues_mutex_;
 
@@ -94,6 +97,7 @@ private:
     std::atomic<int64_t> total_kernel_time_ns_{0};
 
     std::atomic<bool> running_{false};
+    bool stopping_ = false;
     mutable std::mutex error_mutex_;
     std::string last_error_message_;
     std::thread worker_;
