@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <memory>
 #include <stdexcept>
+#include <thread>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
 #include <emmintrin.h>
@@ -389,6 +390,13 @@ private:
             SlotState state = states_[index].load(std::memory_order_acquire);
             if (state == SlotState::Published) return false;
             if (state == SlotState::Writing) return false;
+            // A reserved slot normally belongs to a producer that is ready to
+            // publish.  Pure CPU pauses can repeatedly run the consumer on a
+            // saturated or single-core host and cancel that valid producer
+            // before it receives a time slice.  Yielding keeps the recovery
+            // path for genuinely stalled producers without rejecting normal
+            // submissions due to scheduler timing.
+            std::this_thread::yield();
             PAUSE_INSTRUCTION();
         }
         SlotState expected = states_[index].load(std::memory_order_acquire);
