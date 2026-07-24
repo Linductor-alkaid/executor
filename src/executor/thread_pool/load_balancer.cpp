@@ -28,12 +28,13 @@ size_t LoadBalancer::select_worker() {
 }
 
 size_t LoadBalancer::select_round_robin() {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     size_t num_workers = worker_loads_.size();
     if (num_workers == 0) {
         return 0;
     }
     
-    // 使用原子操作进行轮询，避免加锁
+    // 轮询索引本身仍使用原子操作；共享锁保护 worker_loads_ 的生命周期。
     size_t index = round_robin_index_.fetch_add(1, std::memory_order_relaxed);
     return index % num_workers;
 }
@@ -84,11 +85,11 @@ size_t LoadBalancer::select_least_load() {
 }
 
 void LoadBalancer::update_load(size_t worker_id, size_t queue_size, size_t active_tasks) {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     if (worker_id >= worker_loads_.size()) {
         return;
     }
-    
-    std::unique_lock<std::shared_mutex> lock(mutex_);
+
     worker_loads_[worker_id].queue_size = queue_size;
     worker_loads_[worker_id].active_tasks = active_tasks;
     worker_loads_[worker_id].last_update = std::chrono::steady_clock::now();

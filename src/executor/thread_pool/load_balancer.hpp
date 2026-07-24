@@ -142,7 +142,10 @@ private:
     // 260610P010: std::atomic<Strategy> 替换裸 Strategy 字段
     // 解决 set_strategy() 与 select_worker() 之间无锁并发读写引发的 data race (UB)
     std::atomic<Strategy> strategy_{Strategy::ROUND_ROBIN}; // 当前策略
-    mutable std::shared_mutex mutex_;          // 保护负载信息的读写锁
+    // Protects every access to worker_loads_, including size(). LoadBalancer
+    // never acquires ThreadPool::local_queues_mutex_: callers may hold that
+    // lock before entering here, so this prevents a reverse lock order.
+    mutable std::shared_mutex mutex_;
 };
 
 } // namespace executor
