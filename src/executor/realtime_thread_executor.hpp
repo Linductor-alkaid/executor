@@ -88,7 +88,7 @@ public:
      * @brief 推送任务到无锁队列（在周期回调中处理）
      *
      * 任务通过无锁队列传递，在实时线程的下一个周期回调中执行。
-     * P-001 (260615): 未运行、队列满 或 对象池耗尽 时静默丢弃,
+     * P-001 (260615): 未运行、空任务、队列满或对象池耗尽时静默丢弃,
      * dropped_task_count_++ (始终累计, 不依赖 enable_stats). 调用方必须
      * 通过 get_status() 观察 dropped_task_count 与 failed_pushes.
      *

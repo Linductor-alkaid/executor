@@ -183,6 +183,30 @@ TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
     }
 }
 
+TEST(ApiDocStatusFields, RealtimeDropCounterDocumentationMatchesImplementation) {
+    std::string api_path;
+    const std::string api_md = read_doc_from_candidates(
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+    ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
+
+    const std::string entry = extract_status_entry(api_md);
+    ASSERT_FALSE(entry.empty())
+        << "RealtimeExecutorStatus entry not found in docs/API.md §7.3";
+
+    const auto dropped_pos = entry.find("`dropped_task_count`");
+    ASSERT_NE(dropped_pos, std::string::npos);
+    const auto dropped_description = entry.substr(dropped_pos);
+
+    EXPECT_NE(dropped_description.find("空任务"), std::string::npos);
+    EXPECT_NE(dropped_description.find("未运行/已停止"), std::string::npos);
+    EXPECT_NE(dropped_description.find("对象池耗尽"), std::string::npos);
+    EXPECT_NE(dropped_description.find("队列满"), std::string::npos);
+    EXPECT_NE(dropped_description.find("pool_exhausted_count"), std::string::npos);
+    EXPECT_NE(dropped_description.find("queue_full_count"), std::string::npos);
+    EXPECT_NE(dropped_description.find("rejected_not_running_count"), std::string::npos);
+    EXPECT_NE(dropped_description.find("rejected_empty_task_count"), std::string::npos);
+}
+
 TEST(ApiDocStatusFields, ThreadPoolStatusDocsMatchCurrentUsage) {
     std::string api_path;
     const std::string api_md = read_doc_from_candidates(
