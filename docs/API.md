@@ -281,9 +281,13 @@ if (!ex.try_push_realtime_task("can_rx", []() {
 }
 
 auto status = ex.get_realtime_executor_status("can_rx");
-if (status.dropped_task_count > 0) {
-    // 可用于告警、扩容或降级
+const auto backpressure_drops =
+    status.pool_exhausted_count + status.queue_full_count;
+if (backpressure_drops > 0) {
+    // 对象池或队列容量不足：可告警、扩容或降级
 }
+// dropped_task_count 还包括空任务和未运行/已停止时的拒绝；
+// 分别查看 rejected_empty_task_count 与 rejected_not_running_count。
 ```
 
 | API / 字段 | 说明 |
@@ -291,9 +295,9 @@ if (status.dropped_task_count > 0) {
 | `Executor::push_realtime_task(name, task)` / `try_push_realtime_task(name, task)` | 推荐 facade 入口；失败同时通过返回值、failure event 和状态计数可见 |
 | `push_task(std::function<void()>)` | 兼容旧接口，不返回入队结果；失败会累计到状态计数 |
 | `push_task_ex(std::function<void()>) -> bool` | 底层逃生口，`true` 表示成功入队，`false` 表示任务被丢弃 |
-| `dropped_task_count` | 累计丢任务数，覆盖未运行、空任务、对象池耗尽、队列满；不受 `enable_stats` 影响 |
-| `rejected_not_running_count` / `rejected_empty_task_count` | 按未运行和空任务拆分的拒绝计数 |
-| `pool_exhausted_count` / `queue_full_count` | 按对象池耗尽和队列满拆分的拒绝计数 |
+| `dropped_task_count` | 总拒绝/丢弃量，覆盖未运行/已停止、空任务、对象池耗尽和队列满；不受 `enable_stats` 影响，不能单独作为背压指标 |
+| `rejected_not_running_count` / `rejected_empty_task_count` | 分别分析生命周期状态拒绝和调用方传入空任务的输入错误 |
+| `pool_exhausted_count` / `queue_full_count` | 背压子集：分别表示对象池耗尽和队列满；用于背压告警、容量规划与降级决策 |
 | `failed_pushes` | 底层队列失败入队数，仅 `enable_stats=true` 时统计 |
 | `peak_queue_size` / `queue_capacity` | 用于分析实时任务队列水位与背压比例 |
 
@@ -929,10 +933,10 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `avg_cycle_time_ns` (double)：平均周期执行时间（纳秒）。
   - `max_cycle_time_ns` (double)：最大周期执行时间（纳秒）。
   - `priority_applied` / `cpu_affinity_applied` / `memory_locked` / `timer_slack_applied` (bool)：请求的实时优先级、CPU 亲和性、内存锁定和 timer slack 是否成功应用；未请求或平台不支持/权限不足时为 `false`，用于将调优降级显式上报。
-  - `dropped_task_count` (uint64_t)：累计丢任务数（队列满 + 对象池耗尽，**始终累计**，不受 `enable_stats` 影响；P-001 260615 引入的背压可见性核心指标，应作为告警依据）。
+  - `dropped_task_count` (uint64_t)：总拒绝/丢弃量，覆盖空任务、未运行/已停止、对象池耗尽和队列满四类来源；**始终累计**，不受 `enable_stats` 影响。它不等同于背压：背压仅由 `pool_exhausted_count` 和 `queue_full_count` 构成；应单独分析 `rejected_not_running_count` 与 `rejected_empty_task_count`，以区分生命周期状态拒绝和无效输入。
   - `failed_pushes` (uint64_t)：LockFreeQueue 失败入队数（仅 `enable_stats=true` 时由底层队列统计；与 `dropped_task_count` 的子集：仅含"队列满"那一部分）。
   - `peak_queue_size` (uint64_t)：队列峰值长度（仅 `enable_stats=true`）。
-  - `queue_capacity` (uint64_t)：RT 无锁队列固定容量（用于 `dropped/queue_capacity` 比率分析）。
+  - `queue_capacity` (uint64_t)：RT 无锁队列固定容量（结合 `queue_full_count` 分析队列背压比例）。
   - `rejected_not_running_count` (uint64_t)：未运行/已停止时拒绝的累计数。
   - `rejected_empty_task_count` (uint64_t)：空任务拒绝累计数。
   - `pool_exhausted_count` (uint64_t)：对象池耗尽拒绝累计数。
