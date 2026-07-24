@@ -180,6 +180,7 @@ int main() {
 | [BUILD.md](docs/BUILD.md) | 构建、安装、`find_package`、选项与发布包 |
 | [API.md](docs/API.md) | API 使用说明与主要类型 |
 | [MIGRATION.md](docs/MIGRATION.md) | 迁移指南（版本升级说明） |
+| [阻塞 I/O worker 教程](website/zh/realtime-and-communication/blocking-io-workers.md) | 管理长期、可中断 worker 的所有权与停止，不引入协议依赖 |
 | [executor.md](docs/design/executor.md) | 架构与设计 |
 | [gpu_executor.md](docs/design/gpu_executor.md) | GPU 执行器扩展设计（CUDA 等） |
 | [cpp-project-design.md](docs/design/cpp-project-design.md) | 项目结构与实现 |

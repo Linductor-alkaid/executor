@@ -98,6 +98,7 @@ export default defineConfig({
               text: 'Real-Time & Communication',
               items: [
                 { text: 'Overview and Boundaries', link: '/en/realtime-and-communication/' },
+                { text: 'Blocking I/O Workers', link: '/en/realtime-and-communication/blocking-io-workers' },
                 { text: 'Dedicated Real-Time Control Loop', link: '/en/realtime-and-communication/realtime-control' },
                 { text: 'Deliver Every Message', link: '/en/realtime-and-communication/channels' },
                 { text: 'Latest Values, Snapshots, and Phases', link: '/en/realtime-and-communication/state-and-phases' },
@@ -261,6 +262,7 @@ export default defineConfig({
           text: '实时与通信',
           items: [
             { text: '概览与边界', link: '/zh/realtime-and-communication/' },
+            { text: '阻塞 I/O worker', link: '/zh/realtime-and-communication/blocking-io-workers' },
             { text: '启动专用实时控制循环', link: '/zh/realtime-and-communication/realtime-control' },
             { text: '传递每一条消息', link: '/zh/realtime-and-communication/channels' },
             { text: '传递最新值、快照和阶段', link: '/zh/realtime-and-communication/state-and-phases' },

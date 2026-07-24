@@ -7,6 +7,8 @@ description: Gradually migrate std::thread, std::async, and a hand-written queue
 
 Migration does not mean eliminating every `std::thread`. Move short, queueable work to shared execution resources and make results, failure, overload, and shutdown observable. Permanent loops, blocking device reads, and work with a strict period can still require a dedicated thread or real-time task.
 
+For a permanent blocking loop that needs Facade ownership and join semantics, implement `IBlockingIoWorker` and follow [blocking I/O workers](/en/realtime-and-communication/blocking-io-workers). That library path owns lifecycle only; protocol and device behavior remain with the consumer.
+
 This guide follows a frame-parsing service: it accepts `Frame`, parses in parallel, returns results to the caller, stops taking frames during exit, drains accepted work, and reports anything unfinished.
 
 ## Assign responsibility before changing code

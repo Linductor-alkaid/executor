@@ -4,6 +4,25 @@
 
 ---
 
+## 当前开发快照：Blocking I/O worker
+
+`BlockingIoExecutor` 是向后兼容的库级扩展，用于替代由调用方手写、长期阻塞且需要有序停止的 `std::thread` / `std::jthread`。它不提供协议、设备或业务流程迁移：调用方保留自己的 worker 实现、消息数据面和安全策略。
+
+### 推荐迁移路径
+
+1. 将长期循环封装为 `IBlockingIoWorker`：把主体放入 `run(std::stop_token)`，实现不抛异常且可重复调用的 `wakeup()`。
+2. 保证停止可达：`wakeup()` 要直接解除等待；不能直接唤醒时使用有限 timeout，并在每次返回后检查 `stop_token`。不要依赖 stop token 自动中断外部库调用。
+3. 用 `register_blocking_io_worker_ex()` 注册，再用 `start_blocking_io_worker_ex()` 启动；将 `ExecutorResult` 的拒绝原因写入调用方日志或诊断。
+4. 用 `stop_blocking_io_worker()` 或 `Executor::shutdown()` 收敛生命周期。不要 detach worker，也不要在 `shutdown(false)` 时假定 I/O worker 会继续运行。
+
+### 不适用的迁移
+
+- 有限、可排队的工作仍应使用线程池；不要为短任务创建 I/O worker。
+- 固定周期控制回调仍应使用 `RealtimeThreadExecutor`；不要在 `cycle_callback` 内等待长期 I/O。
+- 协议解析、设备重连、数据新鲜度、命令语义和安全动作不属于 `executor`，由调用方独立设计和验证。
+
+---
+
 ## 从 0.2.3 升级到 0.3.0
 
 0.3.0 重点新增通信与并发辅助 facade，把常见跨线程通信、实时周期消费、快照读取和任务时序控制提升到 `Executor` / `executor::comm` 公开层。已有手写同步代码可以继续工作；新代码建议优先迁移到下列组件，以获得统一生命周期、背压和诊断统计。

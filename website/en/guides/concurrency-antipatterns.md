@@ -29,7 +29,7 @@ executor.submit([&] {
 });
 ```
 
-It occupies a worker indefinitely, and blocking I/O may ignore application stop. Active stays full and queued rises even when CPU is low; `shutdown(true)` can wait but cannot safely kill arbitrary C++ code. Use a stoppable `std::jthread` for blocking I/O, `submit_periodic()` for soft maintenance, and a real-time task for jitter-budgeted loops. Verify that active count falls within budget after producers stop.
+It occupies a worker indefinitely, and blocking I/O may ignore application stop. Active stays full and queued rises even when CPU is low; `shutdown(true)` can wait but cannot safely kill arbitrary C++ code. Use a [blocking I/O worker](/en/realtime-and-communication/blocking-io-workers) when the loop needs Executor-owned stop/wake/join lifecycle, `submit_periodic()` for soft maintenance, and a real-time task for jitter-budgeted loops. Verify that active count falls within budget after producers stop.
 
 ## 2. Synchronous pool wait inside a worker
 

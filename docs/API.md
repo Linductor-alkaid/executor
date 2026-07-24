@@ -371,6 +371,65 @@ Linux 上请求 `SCHED_FIFO`、CPU 亲和性和 `mlockall` 可能因 `CAP_SYS_NI
 
 ---
 
+### 4.5 阻塞 I/O worker API
+
+`BlockingIoExecutor` 管理一个长期、可中断阻塞的 `IBlockingIoWorker`。它不提供 `push_task()`，不实现协议 adapter，也不定义 worker 的输入、输出或设备状态；调用方负责 `run()` 中的实际工作及其线程安全。
+
+#### 4.5.1 公开类型
+
+```cpp
+#include <executor/blocking_io.hpp>
+#include <executor/executor.hpp>
+
+class IBlockingIoWorker {
+public:
+    virtual ~IBlockingIoWorker() = default;
+    virtual void run(std::stop_token stop_token) = 0;
+    virtual void wakeup() noexcept = 0;
+};
+```
+
+`wakeup()` 必须解除 `run()` 当前的等待，且可重复调用、不抛异常。仅请求 `stop_token` 不会中断第三方库或操作系统的无限阻塞调用；若等待原语不能直接唤醒，worker 必须使用有限 timeout 并在返回后检查 stop token。
+
+#### 4.5.2 注册与生命周期
+
+```cpp
+bool register_blocking_io_worker(const std::string& name,
+                                 const BlockingIoConfig& config,
+                                 std::unique_ptr<IBlockingIoWorker> worker);
+ExecutorResult register_blocking_io_worker_ex(
+    const std::string& name,
+    const BlockingIoConfig& config,
+    std::unique_ptr<IBlockingIoWorker> worker);
+bool start_blocking_io_worker(const std::string& name);
+ExecutorResult start_blocking_io_worker_ex(const std::string& name);
+void stop_blocking_io_worker(const std::string& name);
+BlockingIoExecutorStatus get_blocking_io_worker_status(const std::string& name) const;
+std::vector<std::string> get_blocking_io_worker_list() const;
+```
+
+- `name` 必须在同一 `Executor` 中与 async、RT、GPU 和其他 I/O executor 名称唯一。
+- `BlockingIoConfig::thread_name` 不可为空；`startup_timeout` 不可为负，`0` 表示不等待 ready。
+- `_ex` 入口以 `InvalidConfig`、`DuplicateName`、`NotFound`、`AlreadyInitialized` 或 `StartFailed` 说明拒绝原因；普通 `bool` 入口保留兼容风格。
+- `stop_blocking_io_worker()` 执行 stop request、`wakeup()` 和 join；不 detach worker。重复停止安全。
+- `Executor::shutdown()` 也会请求停止、唤醒并 join 所有已注册 I/O worker，即使传入 `shutdown(false)`。
+
+#### 4.5.3 配置与状态
+
+| 类型/字段 | 含义 |
+| --- | --- |
+| `BlockingIoConfig::thread_name` | 必填的线程名称 |
+| `cpu_affinity` | 可选 affinity；空值保持 OS 调度 |
+| `enable_memory_lock` | 默认 `false`；仅在显式请求时尝试锁定内存 |
+| `startup_timeout` | 默认 1000 ms；`0` 不等待 ready，正值限制启动等待 |
+| `BlockingIoExecutorStatus::ready` | executor 线程已建立并完成线程属性设置；不表示协议、设备或业务数据已就绪 |
+| `wakeup_count` | executor 调用 worker `wakeup()` 的累计次数 |
+| `stop_reason` | `Requested`、`WorkerReturned`、`WorkerException` 或 `StartFailed` 等生命周期结果 |
+
+运行期协议错误、队列背压、数据年龄和设备安全动作不属于该状态；由使用方的数据面和应用逻辑定义。
+
+---
+
 ## 5. 无锁任务执行器 API
 
 ### 5.1 概述

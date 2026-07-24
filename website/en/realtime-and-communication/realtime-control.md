@@ -13,6 +13,8 @@ Starting from a fixed-period CAN or control-loop requirement, use `register_real
 
 `submit_periodic()` fits health checks, refresh work, and background work that tolerates jitter. A control loop needing a fixed period, cycle budget, priority, or CPU affinity needs a dedicated real-time thread. It remains constrained by OS scheduling, permissions, and hardware; it is not an absolute deadline guarantee.
 
+A long-lived blocking wait is neither of these paths. Keep it out of `cycle_callback` and use a [blocking I/O worker](/en/realtime-and-communication/blocking-io-workers) with an explicit wakeup contract.
+
 ## Recommended path
 
 The tutorial disables memory-lock and timer-slack requests so a non-privileged environment can validate the basic path:

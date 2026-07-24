@@ -41,7 +41,7 @@ This guide is complete when users can finish work and handle failure, not merely
 | --- | --- | --- | --- |
 | Quick Start and ordinary work | Home, `zh/quick-start/`, `zh/tutorial/` | `include/executor/executor.hpp`, tutorials `01`–`06` | Facade, future, waiting, or lifecycle changes |
 | Reliability | `zh/reliability/` | Failure/status types, relevant tests, tutorial `06` | Event type, counter, or monitoring semantics change |
-| Real-time and communication | `zh/realtime-and-communication/` | Realtime Facade, `include/executor/comm/`, tutorials `07`–`08` | Period, backpressure, drop, or platform behavior changes |
+| Real-time and communication | `zh/realtime-and-communication/` | Realtime and blocking-I/O Facades, `include/executor/comm/`, tutorials `07`–`08`, `12` | Period, worker lifecycle, backpressure, drop, or platform behavior changes |
 | GPU | `zh/gpu/` | Public GPU API, tutorial `09`, hardware report | Backend, fallback, device, or performance conclusion changes |
 | Advanced and reference | `zh/advanced/`, `zh/reference/` | Public headers, `docs/API.md`, design, tests | Stability boundary, execution path, migration policy changes |
 | Site delivery | Theme, navigation, 404, deployment | `website/`, docs workflow, site checker | Route, base URL, dependency, or Pages flow changes |

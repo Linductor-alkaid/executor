@@ -39,7 +39,7 @@ executor.submit([&] {
 
 ### 修正
 
-- 长期阻塞 I/O owner 使用有停止协议的 `std::jthread`；读取后只提交短计算。
+- 需要 Executor 管理 stop/wake/join 生命周期的长期阻塞循环，使用[阻塞 I/O worker](/zh/realtime-and-communication/blocking-io-workers)；读取后只提交短计算。
 - 软周期维护使用 `submit_periodic()`，保存并取消 task ID。
 - 有 jitter 预算的循环使用实时任务 Facade。
 - 所有阻塞 I/O 设置超时或可唤醒停止机制。

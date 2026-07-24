@@ -1,0 +1,85 @@
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <stop_token>
+
+#include <executor/executor.hpp>
+
+namespace {
+
+class MockBlockingWorker final : public executor::IBlockingIoWorker {
+public:
+    void run(std::stop_token stop_token) override {
+        std::unique_lock<std::mutex> lock(mutex_);
+        started_.store(true, std::memory_order_release);
+        condition_.notify_all();
+        condition_.wait(lock, [this, stop_token] {
+            return woken_ || stop_token.stop_requested();
+        });
+        stopped_.store(true, std::memory_order_release);
+    }
+
+    void wakeup() noexcept override {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            woken_ = true;
+        }
+        condition_.notify_all();
+    }
+
+    bool wait_until_started() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return condition_.wait_for(lock, std::chrono::seconds(1), [this] {
+            return started_.load(std::memory_order_acquire);
+        });
+    }
+
+    bool stopped() const {
+        return stopped_.load(std::memory_order_acquire);
+    }
+
+private:
+    std::atomic<bool> started_{false};
+    std::atomic<bool> stopped_{false};
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    bool woken_ = false;
+};
+
+} // namespace
+
+int main() {
+    executor::Executor executor;
+    executor::BlockingIoConfig config;
+    config.thread_name = "tutorial_io";
+
+    auto worker = std::make_unique<MockBlockingWorker>();
+    MockBlockingWorker* worker_view = worker.get();
+    const auto registered = executor.register_blocking_io_worker_ex(
+        "tutorial_io", config, std::move(worker));
+    const auto started = registered ? executor.start_blocking_io_worker_ex("tutorial_io")
+                                  : executor::ExecutorResult{};
+    if (!registered || !started || !worker_view->wait_until_started()) {
+        std::cerr << "blocking I/O worker start failed\n";
+        executor.shutdown();
+        return 1;
+    }
+
+    const auto running = executor.get_blocking_io_worker_status("tutorial_io");
+    executor.stop_blocking_io_worker("tutorial_io");
+    const auto stopped = executor.get_blocking_io_worker_status("tutorial_io");
+    const bool worker_stopped = worker_view->stopped();
+
+    const bool passed = running.is_running && worker_stopped &&
+                        !stopped.is_running &&
+                        stopped.stop_reason == executor::BlockingIoStopReason::Requested &&
+                        stopped.wakeup_count == 1;
+    std::cout << "blocking worker started=" << (running.is_running ? "yes" : "no")
+              << ", stopped=" << (worker_stopped ? "yes" : "no")
+              << ", wakeups=" << stopped.wakeup_count << '\n';
+    executor.shutdown();
+    return passed ? 0 : 1;
+}

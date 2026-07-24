@@ -180,6 +180,7 @@ int main() {
 | [BUILD.md](docs/BUILD.md) | Build, install, `find_package`, options, and release packages |
 | [API.md](docs/API.md) | API usage and primary types |
 | [MIGRATION.md](docs/MIGRATION.md) | Migration guide (version upgrade notes) |
+| [Blocking I/O worker tutorial](website/en/realtime-and-communication/blocking-io-workers.md) | Own and stop a long-lived, interruptible worker without adding a protocol dependency |
 | [executor.md](docs/design/executor.md) | Architecture and design |
 | [gpu_executor.md](docs/design/gpu_executor.md) | GPU executor extension design (CUDA, etc.) |
 | [cpp-project-design.md](docs/design/cpp-project-design.md) | Project structure and implementation |

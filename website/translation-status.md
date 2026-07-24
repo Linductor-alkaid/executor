@@ -21,7 +21,8 @@ English pages use the same repository examples and commands as Chinese pages; no
 | `/zh/quick-start/lifecycle` | `/en/quick-start/lifecycle` | Published | Public lifecycle API and `docs/API.md` |
 | `/zh/tutorial/` | `/en/tutorial/` | Published | `examples/tutorial/02`–`05`, `10`, and `comm_robot_pipeline` |
 | `/zh/guides/` | `/en/guides/` | Published | Public Facade/communication APIs, tutorials, and production guidance |
-| `/zh/realtime-and-communication/` | `/en/realtime-and-communication/` | Published | Realtime and communication public APIs; tutorial examples `07`–`08` |
+| `/zh/realtime-and-communication/` | `/en/realtime-and-communication/` | Published | Realtime, communication, and blocking-I/O public APIs; tutorial examples `07`–`08`, `12` |
+| `/zh/realtime-and-communication/blocking-io-workers` | `/en/realtime-and-communication/blocking-io-workers` | Published | `IBlockingIoWorker`, Facade lifecycle API, and tutorial example `12` |
 | `/zh/reliability/` | `/en/reliability/` | Published | Failure/status APIs, monitoring, deployment checks, and tutorial example `06` |
 | `/zh/advanced/` | `/en/advanced/` | Published | Public advanced APIs, current source architecture, and benchmark protocol |
 | `/zh/gpu/` | `/en/gpu/` | Published | GPU public APIs, backend diagnostics, and tutorial example `09` |
@@ -36,7 +37,7 @@ English pages use the same repository examples and commands as Chinese pages; no
 | `/zh/quick-start/` | Complete | All six Chinese quick-start pages have an English counterpart. |
 | `/zh/tutorial/` | Complete | All eight Chinese tutorial pages have English counterparts using the same C++ examples and commands. |
 | `/zh/guides/` | Complete | All five Chinese scenario and production guides have English counterparts. |
-| `/zh/realtime-and-communication/` | Complete | All six Chinese real-time and communication pages have English counterparts. |
+| `/zh/realtime-and-communication/` | Complete | All seven Chinese real-time and communication pages have English counterparts. |
 | `/zh/reliability/` | Complete | All five Chinese reliability pages have English counterparts. |
 | `/zh/advanced/` | Complete | All seven Chinese advanced and internal-behavior pages have English counterparts. |
 | `/zh/gpu/` | Complete | All four Chinese GPU pages have English counterparts. |

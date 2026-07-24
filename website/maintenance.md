@@ -41,7 +41,7 @@ aside: false
 | --- | --- | --- | --- |
 | 快速开始与普通任务 | 首页、`zh/quick-start/`、`zh/tutorial/` | `include/executor/executor.hpp`、`examples/tutorial/01`–`06` | Facade、future、等待或生命周期变化 |
 | 可靠性 | `zh/reliability/` | failure/status 类型、相关测试与教程 `06` | 事件类型、计数器、监控语义变化 |
-| 实时与通信 | `zh/realtime-and-communication/` | realtime Facade、`include/executor/comm/`、教程 `07`–`08` | 周期、背压、drop 或平台行为变化 |
+| 实时与通信 | `zh/realtime-and-communication/` | realtime 与 blocking-I/O Facade、`include/executor/comm/`、教程 `07`–`08`、`12` | 周期、worker 生命周期、背压、drop 或平台行为变化 |
 | GPU | `zh/gpu/` | GPU public API、教程 `09`、硬件报告 | 后端、降级、设备或性能结论变化 |
 | 高级与参考 | `zh/advanced/`、`zh/reference/` | 公开头文件、`docs/API.md`、设计与测试 | 稳定边界、内部执行路径或迁移策略变化 |
 | 站点交付 | 主题、导航、404、部署 | `website/`、docs workflow、站点检查脚本 | 路由、base URL、依赖或 Pages 流程变化 |
