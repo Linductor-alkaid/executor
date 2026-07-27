@@ -675,6 +675,8 @@ bool test_cuda_executor_stream_callback() {
     config.default_stream_count = 1;
 
     CudaExecutor executor(config.name, config);
+    TEST_ASSERT(executor.supports_stream_callback(),
+                "CUDA should report stream callback capability");
 
     if (!executor.start()) {
         std::cout << "  CUDA not available, skipping stream callback test" << std::endl;

@@ -768,12 +768,26 @@ public:
      * @brief 在指定流上注册主机回调
      *
      * 当该流上此前排队的操作（包括异步 copy）都完成后，在适当时机调用 callback。
+     * 当前仅 CUDA 后端支持此操作；调用前可用 supports_stream_callback() 查询。
+     * 返回 false 时，通过 get_status().last_error_message 获取失败原因。
      *
      * @param stream_id 流ID（0=默认流）
      * @param callback 回调函数
      * @return 成功返回 true，无效 stream_id 或不可用时返回 false
      */
     virtual bool add_stream_callback(int stream_id, std::function<void()> callback) = 0;
+
+    /**
+     * @brief 查询后端是否支持流回调
+     *
+     * 此查询描述后端能力，而非设备或执行器当前是否可用。当前 CUDA 返回 true，
+     * OpenCL 返回 false；当操作失败时可通过 get_status().last_error_message 诊断原因。
+     *
+     * @return 后端支持 add_stream_callback 时返回 true
+     */
+    virtual bool supports_stream_callback() const noexcept {
+        return false;
+    }
 
     /**
      * @brief 从 peer 执行器所在设备拷贝到本执行器设备（P2P 设备间拷贝）

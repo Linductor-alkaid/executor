@@ -263,6 +263,24 @@ TEST(ApiDocStatusFields, GpuRegistrationDocsMatchSupportedBackends) {
         << "GPU docs must not contain stale English CUDA-only wording";
 }
 
+TEST(ApiDocStatusFields, StreamCallbackDocsStateCudaOnlyCapability) {
+    std::string api_path;
+    const std::string api_md = read_doc_from_candidates(
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+    ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
+
+    const std::string gpu_interface = extract_section(
+        api_md, "### 8.3 GPU 执行器接口（IGpuExecutor）", "### 8.4 配置与类型");
+    ASSERT_FALSE(gpu_interface.empty()) << "GPU interface section not found in " << api_path;
+
+    EXPECT_NE(gpu_interface.find("`add_stream_callback` 当前仅支持 CUDA"), std::string::npos)
+        << "GPU interface docs must state that stream callbacks are CUDA-only";
+    EXPECT_NE(gpu_interface.find("`supports_stream_callback()`"), std::string::npos)
+        << "GPU interface docs must describe the stream callback capability query";
+    EXPECT_NE(gpu_interface.find("`get_status().last_error_message`"), std::string::npos)
+        << "GPU interface docs must describe callback failure diagnostics";
+}
+
 TEST(ApiDocStatusFields, ApiDocPerformanceClaimsHaveSources) {
     std::string api_path;
     const std::string api_md = read_doc_from_candidates(

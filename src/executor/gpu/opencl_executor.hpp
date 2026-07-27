@@ -37,6 +37,7 @@ public:
     bool copy_from_peer(IGpuExecutor* src_executor, const void* src_ptr, void* dst_ptr,
                        size_t size, bool async = false, int stream_id = 0) override;
     bool add_stream_callback(int stream_id, std::function<void()> callback) override;
+    bool supports_stream_callback() const noexcept override;
     void synchronize() override;
     void synchronize_stream(int stream_id) override;
     int create_stream() override;
