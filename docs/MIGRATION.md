@@ -4,7 +4,7 @@
 
 ---
 
-## 当前开发快照：Blocking I/O worker
+## 0.3.0：Blocking I/O worker
 
 `BlockingIoExecutor` 是向后兼容的库级扩展，用于替代由调用方手写、长期阻塞且需要有序停止的 `std::thread` / `std::jthread`。它不提供协议、设备或业务流程迁移：调用方保留自己的 worker 实现、消息数据面和安全策略。
 

@@ -45,7 +45,7 @@ executor.shutdown();
 | Platform | Linux, Windows |
 | Language | C++20 |
 | Build system | CMake 3.16+ |
-| Version | Development snapshot based on `v0.2.3` |
+| Version | `v0.3.0` |
 | License | [MIT](https://github.com/Linductor-alkaid/executor/blob/master/LICENSE) |
 
-<div class="version-note">This guide follows the current development snapshot. Features not yet released in a stable tag are not promises for `v0.2.3`.</div>
+<div class="version-note">This guide corresponds to `v0.3.0`; later `master` capabilities become stable promises only after their release tag.</div>
