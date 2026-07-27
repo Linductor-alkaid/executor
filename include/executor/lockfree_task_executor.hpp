@@ -127,7 +127,11 @@ public:
     void set_exception_handler(std::function<void(std::exception_ptr)> handler);
 
     /**
-     * @brief 获取队列性能统计
+     * @brief 队列状态快照。
+     *
+     * 所有字段均为近似值：采样期间生产者和消费者可继续推进，字段之间
+     * 不保证来自同一个原子时刻。仅用于监控、容量规划和背压诊断，不能
+     * 用作同步或正确性判定。
      */
     struct QueueStats {
         uint64_t total_pushes;
@@ -138,6 +142,19 @@ public:
         uint64_t batch_pops;
         uint64_t current_size;
         uint64_t peak_size;
+        uint64_t queue_capacity;
+        // 已预留但尚未发布的槽位数。
+        uint64_t reserved_count;
+        // 已发布、可被消费者读取的槽位数。
+        uint64_t ready_count;
+        // 底层 CAS/队列争用导致的拒绝次数（需 enable_stats=true）。
+        uint64_t contention_rejection;
+        // 消费者取消停滞预留的次数（需 enable_stats=true）。
+        uint64_t cancelled_reservation_count;
+        // 执行器入口处的非队列提交拒绝次数，包括空任务、停止后提交和
+        // 对象池耗尽；底层队列/CAS 拒绝请查看 contention_rejection。
+        // 不受 enable_stats 影响。
+        uint64_t submission_rejection;
         // P-260618-006: 暴露异常计数, 与 processed_count() 一起是任务执行
         // 端到端可观测性的两个核心指标.
         uint64_t exception_count;
@@ -148,6 +165,14 @@ public:
         double success_rate;
     };
     QueueStats get_queue_stats() const;
+
+    /**
+     * @brief 非阻塞地获取当前队列状态快照。
+     *
+     * 返回值为值类型，字段的近似性与 QueueStats 相同；此方法不等待
+     * 生产者或消费者，也不会锁定执行器。
+     */
+    QueueStats get_status_snapshot() const;
 
 protected:
     virtual std::thread create_worker_thread();
@@ -176,6 +201,7 @@ private:
     std::atomic<uint64_t> exception_count_{0};
     // 空任务属于提交拒绝，而不是 worker 执行异常。
     std::atomic<uint64_t> rejected_empty_count_{0};
+    std::atomic<uint64_t> submission_rejection_{0};
     // P-260618-006: 可选异常回调. 在 worker 线程中调用, 需自行保证线程安全.
     std::mutex exception_handler_mutex_;
     std::function<void(std::exception_ptr)> exception_handler_;

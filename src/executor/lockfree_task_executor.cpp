@@ -87,15 +87,18 @@ bool LockFreeTaskExecutor::is_running() const {
 bool LockFreeTaskExecutor::push_task(std::function<void()> task) {
     if (!task) {
         rejected_empty_count_.fetch_add(1, std::memory_order_relaxed);
+        submission_rejection_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
     if (!enter_push()) {
+        submission_rejection_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
     auto* wrapper = task_pool_->acquire();
     if (!wrapper) {
+        submission_rejection_.fetch_add(1, std::memory_order_relaxed);
         leave_push();
         return false;
     }
@@ -116,6 +119,7 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
     pushed = 0;
     if (!tasks) {
         rejected_empty_count_.fetch_add(1, std::memory_order_relaxed);
+        submission_rejection_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     if (count == 0) {
@@ -124,11 +128,13 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
     for (size_t i = 0; i < count; ++i) {
         if (!tasks[i]) {
             rejected_empty_count_.fetch_add(1, std::memory_order_relaxed);
+            submission_rejection_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
     }
 
     if (!enter_push()) {
+        submission_rejection_.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
@@ -145,6 +151,7 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
     for (size_t i = 0; i < count; ++i) {
         auto* wrapper = task_pool_->acquire();
         if (!wrapper) {
+            submission_rejection_.fetch_add(1, std::memory_order_relaxed);
             for (size_t j = 0; j < acquired; ++j) {
                 task_pool_->release(ptrs[j]);
             }
@@ -162,6 +169,7 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
         try {
             ptrs[i]->func = tasks[i];
         } catch (...) {
+            submission_rejection_.fetch_add(1, std::memory_order_relaxed);
             for (size_t j = 0; j < count; ++j) {
                 task_pool_->release(ptrs[j]);
             }
@@ -219,6 +227,12 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     result.batch_pops = raw.batch_pops;
     result.current_size = raw.current_size;
     result.peak_size = raw.peak_size;
+    result.queue_capacity = queue_->capacity();
+    result.reserved_count = raw.reserved_count;
+    result.ready_count = raw.ready_count;
+    result.contention_rejection = raw.contention_rejection;
+    result.cancelled_reservation_count = raw.cancelled_reservation_count;
+    result.submission_rejection = submission_rejection_.load(std::memory_order_relaxed);
     // P-260618-006: expose the exception count alongside the existing queue
     // stats so monitoring code can correlate exceptions with queue state.
     result.exception_count = exception_count_.load(std::memory_order_relaxed);
@@ -229,6 +243,10 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
         ? static_cast<double>(raw.total_pushes) / total_attempts
         : 0.0;
     return result;
+}
+
+LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_status_snapshot() const {
+    return get_queue_stats();
 }
 
 bool LockFreeTaskExecutor::enter_push() {

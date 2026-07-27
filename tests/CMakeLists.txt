@@ -102,7 +102,9 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         target_compile_definitions(${TEST_NAME} PRIVATE EXECUTOR_THREAD_POOL_TEST_HOOKS)
     endif()
 
-    if(TEST_NAME STREQUAL "test_multithread_mpsc")
+    if(TEST_NAME STREQUAL "test_multithread_mpsc" OR
+       TEST_NAME STREQUAL "test_monitoring_sampling" OR
+       TEST_NAME STREQUAL "test_lockfree_queue_status")
         target_compile_definitions(${TEST_NAME} PRIVATE LOCKFREE_QUEUE_DEBUG_HOOKS)
     endif()
     

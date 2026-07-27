@@ -1,11 +1,30 @@
 #include <gtest/gtest.h>
 #include "executor/monitor/task_monitor.hpp"
 #include "executor/lockfree_task_executor.hpp"
+#include "executor/util/lockfree_queue.hpp"
 #include <thread>
 #include <chrono>
+#include <atomic>
 
 using namespace executor;
 using namespace executor::monitor;
+
+namespace {
+
+struct ReservationPause {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+};
+
+void pause_before_publish(void* context) {
+    auto* pause = static_cast<ReservationPause*>(context);
+    pause->entered.store(true, std::memory_order_release);
+    while (!pause->release.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+
+} // namespace
 
 TEST(MonitoringSamplingTest, DefaultFullSampling) {
     TaskMonitor monitor;
@@ -96,4 +115,31 @@ TEST(LockFreeQueueStatsTest, BatchStats) {
     EXPECT_GE(stats.batch_pops, 1);
 
     executor.stop();
+}
+
+TEST(LockFreeQueueStatsTest, ReportsContentionReservationsAndSnapshot) {
+    util::LockFreeQueue<int> queue(4, 1, true);
+    ASSERT_TRUE(queue.push(1));
+    ASSERT_TRUE(queue.push(2));
+    ASSERT_TRUE(queue.push(3));
+    EXPECT_FALSE(queue.push(4));
+    EXPECT_GT(queue.get_stats().contention_rejection, 0u);
+
+    util::LockFreeQueue<int> stalled_queue(8, 1, true);
+    ReservationPause pause;
+    stalled_queue.set_before_publish_hook(pause_before_publish, &pause);
+    std::thread producer([&]() { EXPECT_TRUE(stalled_queue.push(1)); });
+    while (!pause.entered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(stalled_queue.get_stats().reserved_count, 1u);
+    pause.release.store(true, std::memory_order_release);
+    producer.join();
+
+    LockFreeTaskExecutor executor(8, 1, true);
+    ASSERT_TRUE(executor.push_task([] {}));
+    const auto snapshot = executor.get_status_snapshot();
+    EXPECT_EQ(snapshot.queue_capacity, 8u);
+    EXPECT_GT(snapshot.current_size, 0u);
+    EXPECT_GT(snapshot.total_pushes, 0u);
 }

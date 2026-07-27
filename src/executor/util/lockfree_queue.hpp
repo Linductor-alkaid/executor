@@ -37,6 +37,7 @@ struct LockFreeQueueStats {
     uint64_t reserved_count = 0;
     uint64_t ready_count = 0;
     uint64_t contention_rejection = 0;
+    uint64_t cancelled_reservation_count = 0;
 };
 
 /**
@@ -303,18 +304,20 @@ public:
     }
 
     LockFreeQueueStats get_stats() const {
-        // 260610P013: relaxed load
-        if (!stats_enabled_.load(std::memory_order_relaxed)) return {};
         LockFreeQueueStats result;
-        result.total_pushes = stats_.total_pushes.load(std::memory_order_relaxed);
-        result.failed_pushes = stats_.failed_pushes.load(std::memory_order_relaxed);
-        result.total_pops = stats_.total_pops.load(std::memory_order_relaxed);
-        result.empty_pops = stats_.empty_pops.load(std::memory_order_relaxed);
-        result.batch_pushes = stats_.batch_pushes.load(std::memory_order_relaxed);
-        result.batch_pops = stats_.batch_pops.load(std::memory_order_relaxed);
+        if (stats_enabled_.load(std::memory_order_relaxed)) {
+            result.total_pushes = stats_.total_pushes.load(std::memory_order_relaxed);
+            result.failed_pushes = stats_.failed_pushes.load(std::memory_order_relaxed);
+            result.total_pops = stats_.total_pops.load(std::memory_order_relaxed);
+            result.empty_pops = stats_.empty_pops.load(std::memory_order_relaxed);
+            result.batch_pushes = stats_.batch_pushes.load(std::memory_order_relaxed);
+            result.batch_pops = stats_.batch_pops.load(std::memory_order_relaxed);
+            result.peak_size = stats_.peak_size.load(std::memory_order_relaxed);
+            result.contention_rejection = stats_.contention_rejection.load(std::memory_order_relaxed);
+            result.cancelled_reservation_count =
+                stats_.cancelled_reservation_count.load(std::memory_order_relaxed);
+        }
         result.current_size = size();
-        result.peak_size = stats_.peak_size.load(std::memory_order_relaxed);
-        result.contention_rejection = stats_.contention_rejection.load(std::memory_order_relaxed);
         for (size_t i = 0; i < capacity_; ++i) {
             SlotState state = states_[i].load(std::memory_order_acquire);
             if (state == SlotState::Reserved || state == SlotState::Writing) {
@@ -404,6 +407,9 @@ private:
             if (states_[index].compare_exchange_weak(expected, SlotState::Cancelled,
                                                      std::memory_order_acq_rel,
                                                      std::memory_order_acquire)) {
+                if (stats_enabled_.load(std::memory_order_relaxed)) {
+                    stats_.cancelled_reservation_count.fetch_add(1, std::memory_order_relaxed);
+                }
                 return true;
             }
         }
@@ -535,6 +541,7 @@ private:
         alignas(64) std::atomic<uint64_t> batch_pops{0};
         alignas(64) std::atomic<uint64_t> peak_size{0};
         alignas(64) std::atomic<uint64_t> contention_rejection{0};
+        alignas(64) std::atomic<uint64_t> cancelled_reservation_count{0};
     };
     Stats stats_;
 };
