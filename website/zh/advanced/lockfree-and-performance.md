@@ -29,6 +29,36 @@ queue.stop();
 
 调用 `start()` 启动唯一消费者，`stop()` 停止并等待线程。`push_task()` 失败必须由调用方处理；检查 `pending_count()`、`processed_count()`、`exception_count()`、`rejected_empty_count()` 与 `get_queue_stats()`。任务异常由 worker 捕获并累计；如需异常对象，注册 `set_exception_handler()`，且 handler 本身要短小、线程安全、不抛出。
 
+## 状态快照与背压诊断
+
+监控线程推荐使用 `get_status_snapshot()` 取得一份按值可复制的 `QueueStats`：
+
+```cpp
+executor::LockFreeTaskExecutor exec(4096, 2, /*enable_stats=*/true);
+exec.start();
+
+std::thread monitor([&] {
+    while (auto s = exec.get_status_snapshot(); s.processed_count < kDone) {
+        if (s.ready_count > s.queue_capacity / 2) {
+            // 消费者落后；考虑扩容、降采样或临时限流。
+        }
+        std::this_thread::sleep_for(100ms);
+    }
+});
+```
+
+快照由多个独立原子读取组成，**所有字段均为近似、非同步值**：不能用作同步原语或正确性判定依据，仅适合趋势与告警。
+
+新 `QueueStats` 把“拒绝”分成三种不同来源，分别对应不同的处置：
+
+| 字段 | 来源 | 典型处置 |
+| --- | --- | --- |
+| `contention_rejection` | 底层队列满或 CAS / 预留竞争 | 扩容、降低 producer 数或调高 backoff multiplier。 |
+| `cancelled_reservation_count` | 消费者在有界等待（默认 64 次 yield）后取消了 reservation | 检查生产者是否在 `Writing` 窗口被抢占或持有锁。 |
+| `submission_rejection` | 执行器入口拒绝：空任务、已停止、对象池耗尽 | 多为上游逻辑或 `stop()` 竞态，少量空任务是调用方 bug。 |
+
+持续 `reserved_count` 升高而 `ready_count` 不动说明生产者卡在预留窗口；持续 `cancelled_reservation_count` 升高说明消费者侧取消恢复频繁；`submission_rejection` 持续增长而 `contention_rejection` 为零则把注意力放在调用方与生命周期，而不是队列本身。完整字段表与默认 64 次 yield 预算见 [`docs/API.md` §5.5](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md)（“状态快照与背压诊断”章节）。新测试 `tests/test_lockfree_queue_status.cpp` 覆盖了按值复制与并发采样不阻塞生产者的契约。
+
 ## 当前内部结构
 
 ### 生产、消费与停止
