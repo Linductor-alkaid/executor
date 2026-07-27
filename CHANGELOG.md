@@ -4,6 +4,42 @@
 
 ---
 
+## [0.3.0] - 2026-07-27
+
+0.3.0 是面向跨线程通信、任务依赖编排和长期阻塞 I/O 生命周期管理的向后兼容功能版本。0.2.3 的公开 API 保持可用；新代码可逐步采用 `executor::comm`、任务图 facade 和 `BlockingIoExecutor`。
+
+### 新增
+
+- **通信与并发 facade**：新增安装头文件 `executor/comm.hpp` 及 `executor::comm` 命名空间，提供统一结果、错误码、统计与事件回调；公开 `MpscChannel<T>`、`SpscChannel<T>`、`LatestMailbox<T>`、`RealtimeChannel<T>`、`DoubleBuffer<T>` / `Snapshot<T>`、`PhaseGate` 和 `Sequencer`，覆盖有界消息流、最新值、实时周期 drain、一致快照和启动/顺序协调。
+- **通信背压与可观测性**：channel 支持容量、超时、关闭和丢弃策略；通信组件可查询 `CommStats`，并可通过 `set_event_callback()` 获取低频事件。实时 channel 明确为有界、非等待 facade，周期内可设置 drain 预算。
+- **任务图 facade**：`Executor` 新增 `TaskHandle`、`TaskSubmission<T>`、`submit_with_handle()`、`submit_after()`、`submit_after_with_handle()` 和 `when_all()`，用于在同一 `Executor` 实例内表达任务依赖与汇合；依赖失败、无效/跨实例 handle 与环路会以异常结果和 `SubmitRejected` 暴露。
+- **阻塞 I/O worker**：新增 `IBlockingIoWorker`、`IBlockingIoExecutor`、`BlockingIoConfig` 与 `BlockingIoExecutorStatus`，并通过 `Executor` / `ExecutorManager` 提供注册、启动、停止和状态查询。worker 以 `run(std::stop_token)` + `wakeup()` 协作停止，适用于调用方持有的长期可中断 I/O 循环。
+- **教程与用户网站**：新增中英文 VitePress 使用手册、完整教程示例和 GitHub Pages 部署/校验流程，覆盖任务提交、依赖、通信、实时控制、GPU、可观测性、部署和故障排查；新增阻塞 I/O worker 指南与教程示例。
+
+### 修复
+
+- **线程池和负载均衡并发安全**：修复 worker 队列丢失唤醒、完成排空、监控停止/异常生命周期、初始化失败回滚，以及动态扩缩容时 `LoadBalancer` 访问 worker 容器的数据竞争。
+- **安全停止与生命周期**：worker 内调用 `stop()` 时安全转交 join；CUDA 并发停止串行化并修复重启后的 stopping state / waiter 注册；OpenCL 启动 CAS、建线程失败回滚及 stop/cleanup 与公开操作的生命周期互斥得到加固。
+- **无锁执行器正确性**：修复 MPSC 槽位预留与发布导致的 head-of-line 阻塞、精确批量预留取消空洞、取消预留前的让步，以及 `LockFreeTaskExecutor::start()` 建线程失败后的回滚。
+- **输入与诊断边界**：线程池拒绝空任务；`LockFreeQueue::backoff_multiplier` 增加边界校验；OpenCL kernel 异常写入 `last_error_message`；`submit_gpu()` 找不到执行器时记录 facade failure；明确 `dropped_task_count` 语义。
+- **构建告警隔离**：CUDA/OpenCL 供应商头改为 `SYSTEM` include，严格告警仅应用于 executor 库目标，并修复 C++20 / 编译器告警问题。
+
+### 测试 / CI
+
+- **并发回归覆盖**：新增通信 facade、任务图、阻塞 I/O、线程池扩缩容、worker 自停止、CUDA 并发停止、OpenCL 生命周期和 MPSC 并发测试。
+- **持续集成加固**：TSAN 与无锁 CI 覆盖每次变更；coverage / 无锁工作流聚焦功能测试；修复线程池、实时和 CUDA 环境相关的 flaky 测试，并让全部教程示例参与构建检查。
+
+### 文档
+
+- **迁移与边界说明**：`MIGRATION.md` 新增 0.2.3 → 0.3.0 的通信、任务图与阻塞 I/O 迁移建议，明确这些 API 均为兼容扩展；API 文档补充通信 facade、任务图、I/O worker、实时丢弃计数与集成边界。
+- **性能记录**：更新批量提交 benchmark 基线数据；性能收益仍依赖任务规模、硬件、线程数与构建配置，应以本地测试结果为准。
+
+### 兼容性
+
+- **无破坏性变更**：0.3.0 保持 0.2.3 公开 API 兼容。通信 facade 不替代调用方的协议、设备重连、数据语义或安全策略；实时通信 facade 的内部实现不构成硬实时或无锁保证，存在此类要求时应使用经验证的专用实现。
+
+---
+
 ## [0.2.3] - 2026-07-08
 
 0.2.3 是面向 `Executor` facade 完整度与运行时失败可观察性的向后兼容版本。已有 0.2.2 代码可以继续编译使用；新代码建议优先使用 `_ex`、failure callback、facade 实时推送和可诊断等待 API。

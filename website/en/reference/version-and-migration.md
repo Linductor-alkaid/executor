@@ -7,7 +7,7 @@ description: Entry points for the development snapshot, releases, and API migrat
 
 ## Current scope
 
-The CMake project and latest release baseline are `v0.2.3`. This site describes the `master` development snapshot, including planned `0.3.0` communication and task-graph capabilities. Unless a stable tag has been published, do not treat those capabilities as available in the `v0.2.3` release. This first English edition does not maintain historical versioned sites.
+The CMake project and latest release are `v0.3.0`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
 
 | What to check | Source of truth |
 | --- | --- |
