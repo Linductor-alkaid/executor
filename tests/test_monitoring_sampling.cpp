@@ -3,9 +3,25 @@
 #include "executor/lockfree_task_executor.hpp"
 #include <thread>
 #include <chrono>
+#include <atomic>
 
 using namespace executor;
 using namespace executor::monitor;
+
+namespace {
+struct ReservationHook {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+};
+
+void pause_reservation(void* context) {
+    auto* hook = static_cast<ReservationHook*>(context);
+    hook->entered.store(true, std::memory_order_release);
+    while (!hook->release.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+} // namespace
 
 TEST(MonitoringSamplingTest, DefaultFullSampling) {
     TaskMonitor monitor;
@@ -94,6 +110,44 @@ TEST(LockFreeQueueStatsTest, BatchStats) {
     EXPECT_EQ(stats.batch_pushes, 1u);
     // worker_thread still uses pop_batch, so batch_pops > 0.
     EXPECT_GE(stats.batch_pops, 1);
+
+    executor.stop();
+}
+
+TEST(LockFreeQueueStatsTest, ReservationCancellationAccounting) {
+    LockFreeTaskExecutor executor(2, 2, true);
+    ReservationHook hook;
+    executor.set_before_publish_hook(pause_reservation, &hook);
+
+    std::atomic<bool> submitted{true};
+    std::thread producer([&]() {
+        submitted.store(executor.push_task([]() {}), std::memory_order_release);
+    });
+    while (!hook.entered.load(std::memory_order_acquire)) std::this_thread::yield();
+
+    auto reserved = executor.get_queue_stats();
+    EXPECT_EQ(reserved.reserved_count, 1u);
+    EXPECT_EQ(reserved.reservation_wait_yields, 64u);
+
+    EXPECT_FALSE(executor.push_task([]() {}));
+    auto rejected = executor.get_queue_stats();
+    EXPECT_GE(rejected.contention_rejection, 1u);
+    EXPECT_EQ(rejected.fail_reason, LockFreeTaskExecutor::QueueFailReason::QueueFull);
+
+    ASSERT_TRUE(executor.start());
+    while (executor.get_queue_stats().cancelled_reservation_count == 0) {
+        std::this_thread::yield();
+    }
+    hook.release.store(true, std::memory_order_release);
+    producer.join();
+
+    auto resolved = executor.get_queue_stats();
+    EXPECT_FALSE(submitted.load(std::memory_order_acquire));
+    EXPECT_EQ(resolved.cancelled_reservation_count, 1u);
+    EXPECT_EQ(resolved.reservation_count,
+              resolved.total_pushes + resolved.cancelled_reservation_count);
+    EXPECT_EQ(resolved.fail_reason,
+              LockFreeTaskExecutor::QueueFailReason::ReservationCancelled);
 
     executor.stop();
 }

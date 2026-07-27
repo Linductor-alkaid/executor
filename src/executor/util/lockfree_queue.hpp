@@ -22,6 +22,13 @@
 namespace executor {
 namespace util {
 
+enum class LockFreeQueueFailReason : uint8_t {
+    None,
+    QueueFull,
+    Contention,
+    ReservationCancelled,
+};
+
 /**
  * @brief 无锁队列性能统计
  */
@@ -34,9 +41,18 @@ struct LockFreeQueueStats {
     uint64_t batch_pops = 0;
     uint64_t current_size = 0;
     uint64_t peak_size = 0;
+    // Currently stalled reservations. This is an instantaneous sample.
     uint64_t reserved_count = 0;
+    // Cumulative successful slot reservations. Together with total_pushes and
+    // cancelled_reservation_count, this supports reservation conservation.
+    uint64_t reservation_count = 0;
     uint64_t ready_count = 0;
     uint64_t contention_rejection = 0;
+    uint64_t cancelled_reservation_count = 0;
+    // The configured number of consumer yields before cancellation recovery.
+    uint64_t reservation_wait_yields = 0;
+    // Classification of the most recent producer push failure.
+    LockFreeQueueFailReason fail_reason = LockFreeQueueFailReason::None;
 };
 
 /**
@@ -55,8 +71,10 @@ public:
     // Cap multiplier growth so the largest internal backoff window
     // (16 * kMaxBackoffMultiplier) remains bounded and cannot wrap size_t.
     static constexpr size_t kMaxBackoffMultiplier = 1u << 20;
+    static constexpr size_t kDefaultReservationWaitYields = 64;
 
-    explicit LockFreeQueue(size_t capacity, size_t backoff_multiplier = 1, bool enable_stats = false)
+    explicit LockFreeQueue(size_t capacity, size_t backoff_multiplier = 1, bool enable_stats = false,
+                           size_t reservation_wait_yields = kDefaultReservationWaitYields)
         : capacity_(round_to_power_of_two(capacity))
         , mask_(capacity_ - 1)
         , buffer_(capacity_)
@@ -65,6 +83,7 @@ public:
         , enqueue_pos_(0)
         , dequeue_pos_(0)
         , backoff_multiplier_(normalize_backoff_multiplier(backoff_multiplier))
+        , reservation_wait_yields_(reservation_wait_yields)
         , stats_enabled_(enable_stats) {
         // 初始化序列号
         for (size_t i = 0; i < capacity_; ++i) {
@@ -86,9 +105,7 @@ public:
             size_t deq = dequeue_pos_.load(std::memory_order_acquire);
             size_t in_flight = (pos >= deq) ? (pos - deq) : 0;
             if (in_flight >= capacity_ - 1) {
-                // 260610P013: relaxed load
-        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
-                record_contention_rejection();
+                record_push_failure(LockFreeQueueFailReason::QueueFull);
                 return false;
             }
 
@@ -101,10 +118,7 @@ public:
                 // 槽位可用，尝试预留
                 if (enqueue_pos_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
                     if (!begin_write(index, state)) {
-                        if (stats_enabled_.load(std::memory_order_relaxed)) {
-                            stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
-                        }
-                        record_contention_rejection();
+                        record_push_failure(reservation_failure_reason(index));
                         return false;
                     }
                     buffer_[index] = item;
@@ -124,16 +138,12 @@ public:
                 }
                 backoff = backoff < MAX_BACKOFF ? backoff * 2 : MAX_BACKOFF;
             } else if (diff < 0) {
-                // 队列满
-                // 260610P013: relaxed load
-        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
+                record_push_failure(LockFreeQueueFailReason::QueueFull);
                 return false;
             }
             // diff > 0: 其他线程正在操作，重试
         }
-        // 260610P013: relaxed load
-        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
-        record_contention_rejection();
+        record_push_failure(LockFreeQueueFailReason::Contention);
         return false;
     }
 
@@ -181,8 +191,7 @@ public:
             size_t pos = enqueue_pos_.load(std::memory_order_acquire);
             size_t deq = dequeue_pos_.load(std::memory_order_acquire);
             if (pos < deq || pos - deq > capacity_ - 1 || count > capacity_ - 1 - (pos - deq)) {
-                if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
-                record_contention_rejection();
+                record_push_failure(LockFreeQueueFailReason::QueueFull);
                 return false;
             }
             bool available = true;
@@ -203,16 +212,14 @@ public:
                     // may then cancel stalled slots, but it can never advance
                     // into an unreserved Free slot in this batch.
                     if (!reserve_slot(index, state)) {
-                        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
-                        record_contention_rejection();
+                        record_push_failure(reservation_failure_reason(index));
                         return false;
                     }
                 }
                 for (size_t i = 0; i < count; ++i) {
                     const size_t index = (pos + i) & mask_;
                     if (!finish_write_reservation(index)) {
-                        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
-                        record_contention_rejection();
+                        record_push_failure(reservation_failure_reason(index));
                         return false;
                     }
                     buffer_[index] = items[i];
@@ -229,8 +236,7 @@ public:
             for (size_t i = 0; i < backoff * backoff_multiplier_; ++i) PAUSE_INSTRUCTION();
             backoff = backoff < kMaxBackoff ? backoff * 2 : kMaxBackoff;
         }
-        if (stats_enabled_.load(std::memory_order_relaxed)) stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
-        record_contention_rejection();
+        record_push_failure(LockFreeQueueFailReason::Contention);
         return false;
     }
 
@@ -315,6 +321,12 @@ public:
         result.current_size = size();
         result.peak_size = stats_.peak_size.load(std::memory_order_relaxed);
         result.contention_rejection = stats_.contention_rejection.load(std::memory_order_relaxed);
+        result.reservation_count = stats_.reservation_count.load(std::memory_order_relaxed);
+        result.cancelled_reservation_count =
+            stats_.cancelled_reservation_count.load(std::memory_order_relaxed);
+        result.reservation_wait_yields = reservation_wait_yields_;
+        result.fail_reason = static_cast<LockFreeQueueFailReason>(
+            stats_.fail_reason.load(std::memory_order_relaxed));
         for (size_t i = 0; i < capacity_; ++i) {
             SlotState state = states_[i].load(std::memory_order_acquire);
             if (state == SlotState::Reserved || state == SlotState::Writing) {
@@ -351,7 +363,7 @@ private:
         Cancelled,
     };
 
-    static constexpr size_t kReservationGraceSpins = 64;
+private:
 
     static bool slot_can_be_reserved(SlotState state) {
         return state == SlotState::Free || state == SlotState::Cancelled;
@@ -362,6 +374,9 @@ private:
             if (states_[index].compare_exchange_weak(previous_state, SlotState::Reserved,
                                                      std::memory_order_acq_rel,
                                                      std::memory_order_acquire)) {
+                if (stats_enabled_.load(std::memory_order_relaxed)) {
+                    stats_.reservation_count.fetch_add(1, std::memory_order_relaxed);
+                }
                 return true;
             }
         }
@@ -369,9 +384,7 @@ private:
     }
 
     bool finish_write_reservation(size_t index) {
-#ifdef LOCKFREE_QUEUE_DEBUG_HOOKS
         if (before_publish_hook_ != nullptr) before_publish_hook_(before_publish_hook_context_);
-#endif
         SlotState expected = SlotState::Reserved;
         return states_[index].compare_exchange_strong(expected, SlotState::Writing,
                                                        std::memory_order_acq_rel,
@@ -385,8 +398,14 @@ private:
         return finish_write_reservation(index);
     }
 
+    LockFreeQueueFailReason reservation_failure_reason(size_t index) const {
+        return states_[index].load(std::memory_order_acquire) == SlotState::Cancelled
+            ? LockFreeQueueFailReason::ReservationCancelled
+            : LockFreeQueueFailReason::Contention;
+    }
+
     bool cancel_reservation(size_t index) {
-        for (size_t spin = 0; spin < kReservationGraceSpins; ++spin) {
+        for (size_t spin = 0; spin < reservation_wait_yields_; ++spin) {
             SlotState state = states_[index].load(std::memory_order_acquire);
             if (state == SlotState::Published) return false;
             if (state == SlotState::Writing) return false;
@@ -404,6 +423,9 @@ private:
             if (states_[index].compare_exchange_weak(expected, SlotState::Cancelled,
                                                      std::memory_order_acq_rel,
                                                      std::memory_order_acquire)) {
+                if (stats_enabled_.load(std::memory_order_relaxed)) {
+                    stats_.cancelled_reservation_count.fetch_add(1, std::memory_order_relaxed);
+                }
                 return true;
             }
         }
@@ -454,13 +476,14 @@ private:
         return popped;
     }
 
-    void record_contention_rejection() {
+    void record_push_failure(LockFreeQueueFailReason reason) {
         if (stats_enabled_.load(std::memory_order_relaxed)) {
+            stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
             stats_.contention_rejection.fetch_add(1, std::memory_order_relaxed);
+            stats_.fail_reason.store(static_cast<uint8_t>(reason), std::memory_order_relaxed);
         }
     }
 
-#ifdef LOCKFREE_QUEUE_DEBUG_HOOKS
 public:
     using BeforePublishHook = void (*)(void*);
     void set_before_publish_hook(BeforePublishHook hook, void* context) {
@@ -468,7 +491,6 @@ public:
         before_publish_hook_context_ = context;
     }
 private:
-#endif
     void update_peak_size() {
         size_t current = size();
         uint64_t peak = stats_.peak_size.load(std::memory_order_relaxed);
@@ -517,14 +539,15 @@ private:
     // Valid range: [1, kMaxBackoffMultiplier]. Constructor rejects 0 and
     // clamps larger values to keep scaled pause-loop arithmetic bounded.
     const size_t backoff_multiplier_;
+    // A bounded consumer wait keeps recovery from an indefinitely stalled
+    // producer explicit and observable through get_stats().
+    const size_t reservation_wait_yields_;
     // 260610P013: std::atomic<bool> 替换裸 bool 字段
     // enable_stats() 可从任意线程写入,热路径 (push/pop) 频繁读取 — C++ data race (UB)
     // relaxed ordering: 统计开关不与其它内存构成 happens-before 关系
     std::atomic<bool> stats_enabled_;
-#ifdef LOCKFREE_QUEUE_DEBUG_HOOKS
     BeforePublishHook before_publish_hook_ = nullptr;
     void* before_publish_hook_context_ = nullptr;
-#endif
 
     struct Stats {
         alignas(64) std::atomic<uint64_t> total_pushes{0};
@@ -535,6 +558,10 @@ private:
         alignas(64) std::atomic<uint64_t> batch_pops{0};
         alignas(64) std::atomic<uint64_t> peak_size{0};
         alignas(64) std::atomic<uint64_t> contention_rejection{0};
+        alignas(64) std::atomic<uint64_t> reservation_count{0};
+        alignas(64) std::atomic<uint64_t> cancelled_reservation_count{0};
+        alignas(64) std::atomic<uint8_t> fail_reason{
+            static_cast<uint8_t>(LockFreeQueueFailReason::None)};
     };
     Stats stats_;
 };

@@ -219,6 +219,27 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     result.batch_pops = raw.batch_pops;
     result.current_size = raw.current_size;
     result.peak_size = raw.peak_size;
+    result.reserved_count = raw.reserved_count;
+    result.reservation_count = raw.reservation_count;
+    result.ready_count = raw.ready_count;
+    result.contention_rejection = raw.contention_rejection;
+    result.cancelled_reservation_count = raw.cancelled_reservation_count;
+    result.reservation_wait_yields = raw.reservation_wait_yields;
+    switch (raw.fail_reason) {
+    case util::LockFreeQueueFailReason::QueueFull:
+        result.fail_reason = QueueFailReason::QueueFull;
+        break;
+    case util::LockFreeQueueFailReason::Contention:
+        result.fail_reason = QueueFailReason::Contention;
+        break;
+    case util::LockFreeQueueFailReason::ReservationCancelled:
+        result.fail_reason = QueueFailReason::ReservationCancelled;
+        break;
+    case util::LockFreeQueueFailReason::None:
+    default:
+        result.fail_reason = QueueFailReason::None;
+        break;
+    }
     // P-260618-006: expose the exception count alongside the existing queue
     // stats so monitoring code can correlate exceptions with queue state.
     result.exception_count = exception_count_.load(std::memory_order_relaxed);
@@ -229,6 +250,10 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
         ? static_cast<double>(raw.total_pushes) / total_attempts
         : 0.0;
     return result;
+}
+
+void LockFreeTaskExecutor::set_before_publish_hook(BeforePublishHook hook, void* context) {
+    queue_->set_before_publish_hook(hook, context);
 }
 
 bool LockFreeTaskExecutor::enter_push() {

@@ -30,6 +30,12 @@ template<typename T> class ObjectPool;
  */
 class LockFreeTaskExecutor {
 public:
+    enum class QueueFailReason : uint8_t {
+        None,
+        QueueFull,
+        Contention,
+        ReservationCancelled,
+    };
     /**
      * @brief 构造函数
      * @param queue_capacity 队列容量（必须是2的幂，如果不是会自动调整）
@@ -138,6 +144,13 @@ public:
         uint64_t batch_pops;
         uint64_t current_size;
         uint64_t peak_size;
+        uint64_t reserved_count;
+        uint64_t reservation_count;
+        uint64_t ready_count;
+        uint64_t contention_rejection;
+        uint64_t cancelled_reservation_count;
+        uint64_t reservation_wait_yields;
+        QueueFailReason fail_reason;
         // P-260618-006: 暴露异常计数, 与 processed_count() 一起是任务执行
         // 端到端可观测性的两个核心指标.
         uint64_t exception_count;
@@ -148,6 +161,11 @@ public:
         double success_rate;
     };
     QueueStats get_queue_stats() const;
+
+    // Test/debug hook: invoked after a producer reserves a slot and before it
+    // enters the non-interruptible write window.
+    using BeforePublishHook = void (*)(void*);
+    void set_before_publish_hook(BeforePublishHook hook, void* context);
 
 protected:
     virtual std::thread create_worker_thread();
