@@ -37,6 +37,36 @@ consumer release-stores sequence = p + capacity
 
 The queue reserves an empty slot and rejects when `enqueue_pos - dequeue_pos >= capacity - 1`. `empty()` and `size()` are instantaneous approximations under concurrency. Decide synchronization through `push()`/`pop()` results; never use approximate size/empty as a strict predicate, allocation amount, or safe-close proof.
 
+## Status snapshot and back-pressure diagnostics
+
+A monitoring thread should sample `get_status_snapshot()`, which returns a value-copyable `QueueStats`:
+
+```cpp
+executor::LockFreeTaskExecutor exec(4096, 2, /*enable_stats=*/true);
+exec.start();
+
+std::thread monitor([&] {
+    while (auto s = exec.get_status_snapshot(); s.processed_count < kDone) {
+        if (s.ready_count > s.queue_capacity / 2) {
+            // Consumer is lagging; consider scaling, lowering sample rate, or shedding.
+        }
+        std::this_thread::sleep_for(100ms);
+    }
+});
+```
+
+The snapshot is composed of independent atomic loads, so **every field is approximate and unsynchronized**: treat it as a trend/alerting signal, never as a synchronization primitive or a correctness oracle.
+
+The new `QueueStats` splits "rejection" into three different sources, each pointing to a different remediation:
+
+| Field | Source | Typical action |
+| --- | --- | --- |
+| `contention_rejection` | Queue full or CAS/reservation contention | Scale capacity, reduce producer count, or raise the backoff multiplier. |
+| `cancelled_reservation_count` | Consumer cancelled a reservation after the bounded wait (default 64 yields) | Check whether producers get preempted or hold a lock in the `Writing` window. |
+| `submission_rejection` | Executor entry-side reject: empty task, post-stop submit, or object-pool exhaustion | Usually upstream logic or `stop()` race; small empty-task counts are caller bugs. |
+
+A sustained rise in `reserved_count` while `ready_count` stays flat indicates a producer stuck in the reservation window. A sustained rise in `cancelled_reservation_count` indicates the consumer side is recovering reservations frequently. Rising `submission_rejection` with zero `contention_rejection` points the operator at call-site logic and lifecycle, not the queue itself. See the full field table and the default 64-yield budget in [`docs/API.md` §5.5](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md) under "状态快照与背压诊断". The new `tests/test_lockfree_queue_status.cpp` covers the by-value copy and concurrent-sampling-doesn't-block-producers contract.
+
 ## Backoff, batch, and lifecycle
 
 CAS failure uses bounded exponential PAUSE/yield-style backoff. It reduces contention pressure but increases one-push delay; it is not automatic waiting until success, and producers have no FIFO fairness. If every request needs acceptance, add an upper-layer bounded retry/deadline; infinite retry turns visible backpressure into starvation.
