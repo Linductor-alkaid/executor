@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <thread>
 #include <functional>
+#include <memory>
 
 #ifdef EXECUTOR_ENABLE_CUDA
 #include <cuda_runtime.h>
@@ -28,11 +29,19 @@ struct StreamCallbackContext {
 };
 
 void stream_host_callback(void* userData) {
-    StreamCallbackContext* ctx = static_cast<StreamCallbackContext*>(userData);
-    if (ctx && ctx->callback) {
-        ctx->callback();
+    std::unique_ptr<StreamCallbackContext> ctx(
+        static_cast<StreamCallbackContext*>(userData));
+    if (!ctx || !ctx->callback) {
+        return;
     }
-    delete ctx;
+
+    try {
+        ctx->callback();
+    } catch (const std::exception& exception) {
+        std::fprintf(stderr, "CudaExecutor stream host callback threw: %s\n", exception.what());
+    } catch (...) {
+        std::fputs("CudaExecutor stream host callback threw a non-standard exception\n", stderr);
+    }
 }
 
 }  // namespace
@@ -1009,7 +1018,8 @@ bool CudaExecutor::add_stream_callback(int stream_id, std::function<void()> call
         set_last_error("CUDA cudaLaunchHostFunc symbol is unavailable");
         return false;
     }
-    StreamCallbackContext* ctx = new (std::nothrow) StreamCallbackContext{std::move(callback)};
+    std::unique_ptr<StreamCallbackContext> ctx(
+        new (std::nothrow) StreamCallbackContext{std::move(callback)});
     if (ctx == nullptr) {
         return false;
     }
@@ -1017,27 +1027,26 @@ bool CudaExecutor::add_stream_callback(int stream_id, std::function<void()> call
     cudaError_t error;
     bool submitted = false;
     if (stream_id == 0) {
-        error = funcs.cudaLaunchHostFunc(get_default_stream(), &stream_host_callback, ctx);
+        error = funcs.cudaLaunchHostFunc(get_default_stream(), &stream_host_callback, ctx.get());
         submitted = true;
     } else {
         auto stream_wrapper = get_stream(stream_id);
         if (stream_wrapper) {
             submitted = call_stream(stream_wrapper, "cudaLaunchHostFunc",
                 [&](cudaStream_t stream) {
-                    error = funcs.cudaLaunchHostFunc(stream, &stream_host_callback, ctx);
+                    error = funcs.cudaLaunchHostFunc(stream, &stream_host_callback, ctx.get());
                     return error;
                 });
         }
     }
     if (!submitted) {
         set_last_error(invalid_stream_message(stream_id));
-        delete ctx;
         return false;
     }
     if (!check_cuda_error(error, "cudaLaunchHostFunc")) {
-        delete ctx;
         return false;
     }
+    ctx.release();
     return true;
 #else
     (void)stream_id;
