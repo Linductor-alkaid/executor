@@ -69,6 +69,35 @@ static int test_reserved_head_is_skipped() {
     return 0;
 }
 
+static int test_lockfree_queue_reservation_cancellation_accounting() {
+    std::cout << "[P-003] LockFreeQueueReservationCancellationAccounting ...\n";
+    util::LockFreeQueue<int> q(16, 1, true);
+    ProducerStallHook hook;
+    q.set_before_publish_hook(stall_before_publish, &hook);
+
+    std::atomic<bool> producer_result{true};
+    std::thread producer([&]() { producer_result.store(q.push(42), std::memory_order_release); });
+    while (!hook.entered.load(std::memory_order_acquire)) std::this_thread::yield();
+
+    const auto reserved = q.get_stats();
+    int item = 0;
+    const bool consumed = q.pop(item);
+    hook.release.store(true, std::memory_order_release);
+    producer.join();
+
+    const auto resolved = q.get_stats();
+    if (reserved.reserved_count != 1 || reserved.reservation_wait_yields != 64 ||
+        consumed || producer_result.load(std::memory_order_acquire) ||
+        resolved.reservation_count != resolved.total_pushes + resolved.cancelled_reservation_count ||
+        resolved.reservation_count != 1 || resolved.cancelled_reservation_count != 1 ||
+        resolved.fail_reason != util::LockFreeQueueFailReason::ReservationCancelled) {
+        std::cout << "  FAIL: reservation cancellation accounting is inconsistent\n";
+        return 1;
+    }
+    std::cout << "  PASS: published + cancelled equals reserved\n";
+    return 0;
+}
+
 static int test_exact_batch_cancelled_head_does_not_block_later_items() {
     std::cout << "[P-001] exact batch cancelled head regression test ...\n";
     util::LockFreeQueue<int> q(16, 1, true);
@@ -347,7 +376,8 @@ int main() {
     int rc2 = test_push_batch_cas_retry_consistency();
     int rc3 = test_reserved_head_is_skipped();
     int rc4 = test_exact_batch_cancelled_head_does_not_block_later_items();
+    int rc5 = test_lockfree_queue_reservation_cancellation_accounting();
     std::cout << "\n=== P-260626-003 test result: "
-              << (rc2 == 0 && rc3 == 0 && rc4 == 0 ? "PASS" : "FAIL") << " ===\n";
-    return rc2 || rc3 || rc4;
+              << (rc2 == 0 && rc3 == 0 && rc4 == 0 && rc5 == 0 ? "PASS" : "FAIL") << " ===\n";
+    return rc2 || rc3 || rc4 || rc5;
 }

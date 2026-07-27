@@ -573,6 +573,22 @@ public:
 - 最大值为 `LockFreeQueue::kMaxBackoffMultiplier`，当前为 `1u << 20`（`1048576`）。
 - 大于最大值的输入会被钳制到 `LockFreeQueue::kMaxBackoffMultiplier`，避免内部 `backoff * backoff_multiplier` 算术溢出并保持退避窗口有界。
 
+#### MPSC reservation back-pressure contract
+
+底层 MPSC 队列采用**策略 (b)：保留取消恢复**。生产者取得槽位后，消费者会在该槽位仍为 `Reserved` 时最多 `yield` 64 次（`LockFreeQueue::kDefaultReservationWaitYields`）；若生产者仍未进入不可中断的写入窗口，消费者会显式将该槽位标记为取消并继续推进队列。因而 `push_task()` / `push_tasks_batch()` 可以在这个窗口返回 `false`，即使调用方已经获得了任务 wrapper；调用方必须把 `false` 当作未接受提交并自行重试、回收或降级处理。
+
+启用统计后，`get_queue_stats()` 会提供：
+
+- `reserved_count`：当前仍处于 `Reserved` 或 `Writing` 的槽位数（瞬时快照）。
+- `reservation_count`：累计成功预留槽位数；解析后的守恒关系为 `reservation_count == total_pushes + cancelled_reservation_count`。
+- `ready_count`：当前已发布、可消费的槽位数（瞬时快照）。
+- `contention_rejection`：队列满或 CAS/预留竞争导致的提交拒绝数。
+- `cancelled_reservation_count`：消费者在有界等待后取消的预留数。
+- `reservation_wait_yields`：当前有界等待预算（默认 64）。
+- `fail_reason`：最近一次生产者入队失败的 `LockFreeTaskExecutor::QueueFailReason`：`None`、`QueueFull`、`Contention` 或 `ReservationCancelled`。它是最近值而非累计直方图，应结合上述计数使用。
+
+这些统计仅在构造执行器时传入 `enable_stats=true` 后有效；所有瞬时槽位计数均为并发采样，不能用作同步原语。
+
 #### 停止后的提交语义
 
 `LockFreeTaskExecutor` 区分“从未启动”和“已停止”状态：从未调用 `start()` 前仍允许 `push_task()` / `push_tasks_batch()` 预填充队列；一旦 `stop()` 开始，新的提交会被拒绝并返回 `false`。外部线程调用 `stop()` 或 `stop_and_join()` 会等待已经进入提交路径的生产者完成，再让消费者线程处理所有已接受任务并退出，因此返回后不会有静默接受但无人消费的任务残留在队列中。
