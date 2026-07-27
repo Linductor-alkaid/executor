@@ -144,11 +144,16 @@ public:
         uint64_t batch_pops;
         uint64_t current_size;
         uint64_t peak_size;
+        // The adjusted power-of-two capacity of the underlying queue.
+        uint64_t queue_capacity;
         uint64_t reserved_count;
         uint64_t reservation_count;
         uint64_t ready_count;
         uint64_t contention_rejection;
         uint64_t cancelled_reservation_count;
+        // Rejections before a task reaches the queue (empty input, stopped
+        // executor, or object-pool exhaustion).
+        uint64_t submission_rejection;
         uint64_t reservation_wait_yields;
         QueueFailReason fail_reason;
         // P-260618-006: 暴露异常计数, 与 processed_count() 一起是任务执行
@@ -161,6 +166,14 @@ public:
         double success_rate;
     };
     QueueStats get_queue_stats() const;
+
+    /**
+     * @brief Returns a non-synchronized, value-typed queue status snapshot.
+     *
+     * This is suitable for monitoring only: concurrent producers and the
+     * consumer may advance between individual field loads.
+     */
+    QueueStats get_status_snapshot() const;
 
     // Test/debug hook: invoked after a producer reserves a slot and before it
     // enters the non-interruptible write window.
@@ -194,6 +207,7 @@ private:
     std::atomic<uint64_t> exception_count_{0};
     // 空任务属于提交拒绝，而不是 worker 执行异常。
     std::atomic<uint64_t> rejected_empty_count_{0};
+    std::atomic<uint64_t> submission_rejection_{0};
     // P-260618-006: 可选异常回调. 在 worker 线程中调用, 需自行保证线程安全.
     std::mutex exception_handler_mutex_;
     std::function<void(std::exception_ptr)> exception_handler_;

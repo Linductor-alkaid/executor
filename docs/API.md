@@ -542,6 +542,7 @@ public:
     uint64_t processed_count() const;                // 已处理任务总数
 
     QueueStats get_queue_stats() const;              // 队列性能统计（需 enable_stats=true）
+    QueueStats get_status_snapshot() const;          // 可复制的非同步状态快照
 
     // 异常观测与自定义处理（require enable_stats=true）
     // exception_count() 返回 get_queue_stats() 期间累积的 task 异常次数
@@ -552,6 +553,32 @@ public:
     uint64_t rejected_empty_count() const;            // 空任务提交拒绝次数
     void set_exception_handler(std::function<void(std::exception_ptr)> handler);
 };
+```
+
+#### 状态快照与背压诊断
+
+`get_status_snapshot()` 返回一个可按值复制的 `QueueStats`，适合由监控线程采样；它不等待生产者或消费者。快照由多个独立原子读取组成，**所有字段均为近似、非同步值**：并发读写可在采样期间推进，字段不保证来自同一时刻，不能作为同步或正确性判定依据。`get_queue_stats()` 返回相同的值类型快照。
+
+| `QueueStats` 字段 | 含义与使用建议 |
+|---|---|
+| `queue_capacity` | 调整为 2 的幂后的实际队列容量。 |
+| `current_size` / `peak_size` | 当前近似积压 / 历史峰值；`peak_size` 需 `enable_stats=true`。 |
+| `reserved_count` / `ready_count` | 尚未发布的预留槽位 / 已发布可消费槽位；持续增长分别提示生产者停滞或消费者积压。 |
+| `contention_rejection` | 底层队列满或 CAS/预留竞争造成的拒绝，需 `enable_stats=true`。 |
+| `cancelled_reservation_count` | 消费者恢复停滞 reservation 时取消的次数，需 `enable_stats=true`。 |
+| `submission_rejection` | 进入队列前的拒绝：空任务、停止后提交或对象池耗尽；始终累计。 |
+| `total_pushes` / `failed_pushes` / `total_pops` / `empty_pops` | 底层队列累计操作计数，需 `enable_stats=true`。 |
+| `batch_pushes` / `batch_pops` / `reservation_count` / `reservation_wait_yields` / `fail_reason` | 批操作、reservation 及最近失败原因的辅助诊断字段。 |
+| `exception_count` / `rejected_empty_count` / `success_rate` | 执行异常、空任务拒绝及队列成功率。 |
+
+因此，竞争/容量压力（`contention_rejection`）、reservation 取消恢复（`cancelled_reservation_count`）和执行器入口拒绝（`submission_rejection`）可以分别观察。
+
+```cpp
+executor::LockFreeTaskExecutor exec(4096, 2, true);
+const auto status = exec.get_status_snapshot();
+if (status.ready_count > status.queue_capacity / 2) {
+    // 消费者可能落后；考虑扩容或限流。
+}
 ```
 
 #### `push_tasks_batch` 详解
