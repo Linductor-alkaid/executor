@@ -606,7 +606,21 @@ void OpenCLExecutor::destroy_stream(int stream_id) {
 }
 
 bool OpenCLExecutor::add_stream_callback(int stream_id, std::function<void()> callback) {
-    // OpenCL 1.x不直接支持回调，需要通过事件轮询实现
+    if (!callback) {
+        set_last_error("OpenCL stream callback failed: callback is null");
+        return false;
+    }
+    if (!get_queue(stream_id)) {
+        set_last_error("OpenCL stream callback failed: invalid stream_id " +
+                       std::to_string(stream_id));
+        return false;
+    }
+
+    set_last_error("OpenCL stream callbacks are not supported; cl_event polling is a follow-up");
+    return false;
+}
+
+bool OpenCLExecutor::supports_stream_callback() const noexcept {
     return false;
 }
 

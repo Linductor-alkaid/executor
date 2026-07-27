@@ -56,7 +56,7 @@
   `executor::comm` components expose local `CommStats` counters for drops, overwrites, stale reads, missed phases, timeouts, depth, lag, and latency. Optional `set_event_callback()` hooks are isolated from the data path: callback exceptions are swallowed and communication events are not counted as `ExecutorFailureStatus` task failures by default.
 
 - **Optional GPU (CUDA/OpenCL)**
-  GPU executor interface with CUDA/OpenCL implementations: kernel submission, device memory and stream management, multi-device, memory pool, monitoring. Runtime dynamic loading with safe graceful degradation when no GPU is available. Device query API automatically recommends the best backend.
+  GPU executor interface with CUDA/OpenCL implementations: kernel submission, device memory and stream management, multi-device, memory pool, monitoring. `add_stream_callback` is currently CUDA-only; check `supports_stream_callback()` before use, and inspect `get_status().last_error_message` when it returns `false`. OpenCL callback support via `cl_event` polling is a follow-up. Runtime dynamic loading with safe graceful degradation when no GPU is available. Device query API automatically recommends the best backend.
 
 - **Configurable**
   Thread count, queue capacity, priority, CPU affinity, work stealing, monitoring toggle, and more

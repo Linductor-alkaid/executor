@@ -1046,6 +1046,10 @@ bool CudaExecutor::add_stream_callback(int stream_id, std::function<void()> call
 #endif
 }
 
+bool CudaExecutor::supports_stream_callback() const noexcept {
+    return true;
+}
+
 void CudaExecutor::synchronize() {
     if (!is_available_ || !loader_->is_available()) {
         return;

@@ -133,6 +133,28 @@ TEST_F(OpenCLExecutorTest, StreamManagement) {
     executor_->destroy_stream(stream_id);
 }
 
+TEST_F(OpenCLExecutorTest, StreamCallbackCapability) {
+    if (!opencl_available_) {
+        GTEST_SKIP() << "OpenCL not available; cannot validate stream callback capability";
+    }
+
+    ASSERT_NE(executor_, nullptr);
+    if (!executor_->start()) {
+        GTEST_SKIP() << "OpenCL start failed; cannot validate stream callback capability";
+    }
+
+    EXPECT_FALSE(executor_->supports_stream_callback());
+    EXPECT_FALSE(executor_->add_stream_callback(0, [] {}));
+    EXPECT_NE(executor_->get_status().last_error_message.find("not supported"),
+              std::string::npos);
+    EXPECT_FALSE(executor_->add_stream_callback(0, {}));
+    EXPECT_NE(executor_->get_status().last_error_message.find("callback is null"),
+              std::string::npos);
+    EXPECT_FALSE(executor_->add_stream_callback(-1, [] {}));
+    EXPECT_NE(executor_->get_status().last_error_message.find("invalid stream_id"),
+              std::string::npos);
+}
+
 TEST_F(OpenCLExecutorTest, InvalidStreamIdDoesNotFallbackToDefault) {
     if (!opencl_available_) {
         GTEST_SKIP() << "OpenCL not available";
