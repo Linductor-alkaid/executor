@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -78,29 +79,35 @@ public:
 
         std::lock_guard<std::mutex> lock(mutex_);
 
-        // O(1) storage lookup via pointer arithmetic on the contiguous node
-        // array. reinterpret_cast to std::ptrdiff_t yields byte addresses
-        // (avoiding strict-aliasing and sign-comparison warnings); dividing the
-        // byte offset by sizeof(Node) gives the node index because data is the
-        // first member of Node and all nodes are equally spaced.
-        std::ptrdiff_t offset = reinterpret_cast<std::ptrdiff_t>(obj)
-                              - reinterpret_cast<std::ptrdiff_t>(&storage_[0].data);
-        std::ptrdiff_t index = offset / static_cast<std::ptrdiff_t>(sizeof(Node));
-
-        // Sanity-check the recovered index and that the data address actually
-        // matches obj (guards against foreign pointers, which produce an index
-        // that is out of range or does not round-trip to obj).
-        Node* node = nullptr;
-        if (index >= 0
-            && static_cast<size_t>(index) < capacity_
-            && &storage_[static_cast<size_t>(index)].data == obj) {
-            node = &storage_[static_cast<size_t>(index)];
-        }
-        if (!node) {
+        // Validate the integer address before subtracting it.  A foreign
+        // pointer can be farther than ptrdiff_t can represent from storage_,
+        // so signed address subtraction would be undefined behavior.
+        const std::uintptr_t address = reinterpret_cast<std::uintptr_t>(obj);
+        const std::uintptr_t storage_begin =
+            reinterpret_cast<std::uintptr_t>(&storage_[0].data);
+        const std::uintptr_t storage_size = capacity_ * sizeof(Node);
+        if (storage_size > std::numeric_limits<std::uintptr_t>::max() - storage_begin
+            || address < storage_begin
+            || address > storage_begin + storage_size) {
             throw std::logic_error(
                 std::string("ObjectPool: release of foreign pointer ")
-                + std::to_string(reinterpret_cast<std::uintptr_t>(obj)));
+                + std::to_string(address));
         }
+
+        const std::uintptr_t offset = address - storage_begin;
+        if (offset % sizeof(Node) != 0) {
+            throw std::logic_error(
+                std::string("ObjectPool: release of foreign pointer ")
+                + std::to_string(address));
+        }
+
+        const size_t index = static_cast<size_t>(offset / sizeof(Node));
+        if (index >= capacity_) {
+            throw std::logic_error(
+                std::string("ObjectPool: release of foreign pointer ")
+                + std::to_string(address));
+        }
+        Node* node = &storage_[index];
 
         // O(1) double-release detection via a per-node flag, set when the node
         // re-enters the free list and cleared when it is acquired.
