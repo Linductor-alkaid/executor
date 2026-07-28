@@ -298,7 +298,7 @@ if (backpressure_drops > 0) {
 | `dropped_task_count` | 总拒绝/丢弃量，覆盖未运行/已停止、空任务、对象池耗尽和队列满；不受 `enable_stats` 影响，不能单独作为背压指标 |
 | `rejected_not_running_count` / `rejected_empty_task_count` | 分别分析生命周期状态拒绝和调用方传入空任务的输入错误 |
 | `pool_exhausted_count` / `queue_full_count` | 背压子集：分别表示对象池耗尽和队列满；用于背压告警、容量规划与降级决策 |
-| `failed_pushes` | 底层队列失败入队数，仅 `enable_stats=true` 时统计 |
+| `failed_pushes` | 所有底层队列失败入队尝试数；静止快照中等于 `queue_full_rejections + contention_rejection + reservation_cancelled_rejections`。仅 `enable_stats=true` 时统计 |
 | `peak_queue_size` / `queue_capacity` | 用于分析实时任务队列水位与背压比例 |
 
 ### 3.6 延迟与周期任务
@@ -563,14 +563,14 @@ public:
 
 | `QueueStats` 字段 | 含义与使用建议 | 需要 `enable_stats=true` |
 |---|---|---|
-| `total_pushes` / `failed_pushes` / `total_pops` / `empty_pops` | 底层队列累计操作计数。 | 是 |
+| `total_pushes` / `failed_pushes` / `total_pops` / `empty_pops` | 底层队列累计操作计数。`failed_pushes` 是所有底层入队失败的总和，等于下三栏之和。 | 是 |
+| `queue_full_rejections` / `contention_rejection` / `reservation_cancelled_rejections` | 三类底层入队失败原因：队列满、CAS 竞争耗尽重试预算、消费者取消了 producer 的 reservation。 | 是 |
 | `batch_pushes` / `batch_pops` | 底层队列批操作计数。 | 是 |
 | `current_size` / `peak_size` | 当前近似积压 / 历史峰值。 | 是 |
 | `reserved_count` / `ready_count` | 尚未发布的预留槽位 / 已发布可消费槽位；持续增长分别提示生产者停滞或消费者积压。 | 是 |
 | `reservation_count` / `reservation_wait_yields` | reservation 操作及等待让出的辅助诊断计数。 | 是 |
-| `contention_rejection` | 底层队列满或 CAS/预留竞争造成的拒绝。 | 是 |
 | `cancelled_reservation_count` | 消费者恢复停滞 reservation 时取消的次数。 | 是 |
-| `fail_reason` | 最近一次底层队列失败原因。 | 是 |
+| `fail_reason` | 最近一次底层队列失败原因（`QueueFull` / `Contention` / `ReservationCancelled` / `None`）。 | 是 |
 
 **执行器生命周期、拒绝与异常统计（均不需 `enable_stats=true`）**：这些字段由执行器在读取底层队列统计后独立填充，始终可观察。
 
@@ -582,7 +582,7 @@ public:
 | `rejected_empty_count` | 因空 `std::function` 输入被拒绝的累计次数；也可由 `rejected_empty_count()` 读取。 | 否（始终可读） |
 | `success_rate` | `total_pushes / (total_pushes + failed_pushes)`；始终返回，但未启用统计时分子和分母均为零，结果为 `0.0`，不表示实际队列成功率。 | 否（始终可读；有效值需启用统计） |
 
-因此，即使未启用底层队列统计，也可以观察实际容量、执行器入口拒绝和任务异常；启用统计后还可诊断竞争/容量压力、reservation 取消恢复及队列操作结果。
+因此，即使未启用底层队列统计，也可以观察实际容量、执行器入口拒绝和任务异常；启用统计后还可诊断容量压力（`queue_full_rejections`）、CAS 竞争（`contention_rejection`）、reservation 取消恢复（`reservation_cancelled_rejections` / `cancelled_reservation_count`）及底层队列操作结果。
 
 ```cpp
 executor::LockFreeTaskExecutor exec(4096, 2, true);
@@ -620,7 +620,10 @@ if (status.ready_count > status.queue_capacity / 2) {
 - `reserved_count`：当前仍处于 `Reserved` 或 `Writing` 的槽位数（瞬时快照）。
 - `reservation_count`：累计成功预留槽位数；解析后的守恒关系为 `reservation_count == total_pushes + cancelled_reservation_count`。
 - `ready_count`：当前已发布、可消费的槽位数（瞬时快照）。
-- `contention_rejection`：队列满或 CAS/预留竞争导致的提交拒绝数。
+- `failed_pushes`：所有底层入队失败的累计数；静止快照中等于三个失败原因计数之和。
+- `queue_full_rejections`：队列满导致的提交拒绝数。
+- `contention_rejection`：CAS 竞争耗尽重试预算导致的提交拒绝数。
+- `reservation_cancelled_rejections`：已预留槽位被消费者取消导致的提交拒绝数。
 - `cancelled_reservation_count`：消费者在有界等待后取消的预留数。
 - `reservation_wait_yields`：当前有界等待预算（默认 64）。
 - `fail_reason`：最近一次生产者入队失败的 `LockFreeTaskExecutor::QueueFailReason`：`None`、`QueueFull`、`Contention` 或 `ReservationCancelled`。它是最近值而非累计直方图，应结合上述计数使用。
@@ -1047,7 +1050,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `max_cycle_time_ns` (double)：最大周期执行时间（纳秒）。
   - `priority_applied` / `cpu_affinity_applied` / `memory_locked` / `timer_slack_applied` (bool)：请求的实时优先级、CPU 亲和性、内存锁定和 timer slack 是否成功应用；未请求或平台不支持/权限不足时为 `false`，用于将调优降级显式上报。
   - `dropped_task_count` (uint64_t)：总拒绝/丢弃量，覆盖空任务、未运行/已停止、对象池耗尽和队列满四类来源；**始终累计**，不受 `enable_stats` 影响。它不等同于背压：背压仅由 `pool_exhausted_count` 和 `queue_full_count` 构成；应单独分析 `rejected_not_running_count` 与 `rejected_empty_task_count`，以区分生命周期状态拒绝和无效输入。
-  - `failed_pushes` (uint64_t)：LockFreeQueue 失败入队数（仅 `enable_stats=true` 时由底层队列统计；与 `dropped_task_count` 的子集：仅含"队列满"那一部分）。
+  - `failed_pushes` (uint64_t)：LockFreeQueue 所有底层失败入队尝试数（仅 `enable_stats=true` 时统计），包括队列满、CAS 竞争和 reservation 取消；它不等同于也不一定是 `dropped_task_count` 的子集。
   - `peak_queue_size` (uint64_t)：队列峰值长度（仅 `enable_stats=true`）。
   - `queue_capacity` (uint64_t)：RT 无锁队列固定容量（结合 `queue_full_count` 分析队列背压比例）。
   - `rejected_not_running_count` (uint64_t)：未运行/已停止时拒绝的累计数。

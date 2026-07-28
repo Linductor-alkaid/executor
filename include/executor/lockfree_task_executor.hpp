@@ -138,6 +138,7 @@ public:
     struct QueueStats {
         uint64_t total_pushes;
         uint64_t failed_pushes;
+        uint64_t queue_full_rejections;
         uint64_t total_pops;
         uint64_t empty_pops;
         uint64_t batch_pushes;
@@ -150,6 +151,7 @@ public:
         uint64_t reservation_count;
         uint64_t ready_count;
         uint64_t contention_rejection;
+        uint64_t reservation_cancelled_rejections;
         uint64_t cancelled_reservation_count;
         // Rejections before a task reaches the queue (empty input, stopped
         // executor, or object-pool exhaustion).
