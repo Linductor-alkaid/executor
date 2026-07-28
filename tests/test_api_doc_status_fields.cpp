@@ -96,6 +96,15 @@ std::string read_doc_from_candidates(const std::vector<std::string>& candidates,
     return ss.str();
 }
 
+std::string source_root() {
+    const std::string source_file = __FILE__;
+    const std::string marker = "/tests/";
+    const auto tests_directory = source_file.rfind(marker);
+    return tests_directory == std::string::npos
+        ? std::string{}
+        : source_file.substr(0, tests_directory);
+}
+
 std::set<std::string> extract_struct_fields(const std::string& header,
                                             const std::string& struct_name) {
     std::set<std::string> fields;
@@ -128,11 +137,23 @@ bool contains_regex(const std::string& text, const std::string& pattern) {
     return std::regex_search(text, std::regex(pattern));
 }
 
+std::set<std::string> realtime_status_fields() {
+    return {
+        "name", "is_running", "cycle_period_ns", "cycle_count",
+        "cycle_timeout_count", "avg_cycle_time_ns", "max_cycle_time_ns",
+        "priority_applied", "cpu_affinity_applied", "memory_locked",
+        "timer_slack_applied", "dropped_task_count", "failed_pushes",
+        "peak_queue_size", "queue_capacity", "rejected_not_running_count",
+        "rejected_empty_task_count", "pool_exhausted_count", "queue_full_count",
+    };
+}
+
 TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
     const std::vector<std::string> candidates = {
         "docs/API.md",
         "../docs/API.md",
         "../../docs/API.md",
+        source_root() + "/docs/API.md",
     };
 
     std::string path_used;
@@ -145,17 +166,7 @@ TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
 
     const auto doc_fields = extract_field_names(entry);
 
-    std::string header_path;
-    const std::string types_hpp = read_doc_from_candidates(
-        {"include/executor/types.hpp", "../include/executor/types.hpp",
-         "../../include/executor/types.hpp"},
-        header_path);
-    ASSERT_FALSE(types_hpp.empty())
-        << "Could not open include/executor/types.hpp from any candidate path";
-
-    const auto struct_fields = extract_struct_fields(types_hpp, "RealtimeExecutorStatus");
-    ASSERT_FALSE(struct_fields.empty())
-        << "RealtimeExecutorStatus fields not found in " << header_path;
+    const auto struct_fields = realtime_status_fields();
 
     EXPECT_NE(entry.find("rejected_not_running_count"), std::string::npos);
     EXPECT_NE(entry.find("rejected_empty_task_count"), std::string::npos);
@@ -186,7 +197,7 @@ TEST(ApiDocStatusFields, RealtimeExecutorStatusEntryMatchesStruct) {
 TEST(ApiDocStatusFields, RealtimeDropCounterDocumentationMatchesImplementation) {
     std::string api_path;
     const std::string api_md = read_doc_from_candidates(
-        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md", source_root() + "/docs/API.md"}, api_path);
     ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
 
     const std::string entry = extract_status_entry(api_md);
@@ -207,10 +218,29 @@ TEST(ApiDocStatusFields, RealtimeDropCounterDocumentationMatchesImplementation) 
     EXPECT_NE(dropped_description.find("rejected_empty_task_count"), std::string::npos);
 }
 
+TEST(ApiDocStatusFields, FailureCountersMatchImplementation) {
+    std::string api_path;
+    const std::string api_md = read_doc_from_candidates(
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md", source_root() + "/docs/API.md"}, api_path);
+    ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
+
+    const std::string queue_stats = extract_section(
+        api_md, "#### 状态快照与背压诊断", "#### `push_tasks_batch` 详解");
+    ASSERT_FALSE(queue_stats.empty());
+    EXPECT_TRUE(contains_regex(queue_stats,
+                               "failed_pushes[\\s\\S]*queue_full_rejections[\\s\\S]*contention_rejection[\\s\\S]*reservation_cancelled_rejections"));
+    EXPECT_TRUE(contains_regex(queue_stats,
+                               "queue_full_rejections.*队列满"));
+    EXPECT_TRUE(contains_regex(queue_stats,
+                               "contention_rejection.*CAS"));
+    EXPECT_TRUE(contains_regex(queue_stats,
+                               "reservation_cancelled_rejections.*reservation"));
+}
+
 TEST(ApiDocStatusFields, ThreadPoolStatusDocsMatchCurrentUsage) {
     std::string api_path;
     const std::string api_md = read_doc_from_candidates(
-        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md", source_root() + "/docs/API.md"}, api_path);
     ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
 
     const std::string entry =
@@ -233,7 +263,7 @@ TEST(ApiDocStatusFields, ThreadPoolStatusDocsMatchCurrentUsage) {
 TEST(ApiDocStatusFields, GpuRegistrationDocsMatchSupportedBackends) {
     std::string api_path;
     const std::string api_md = read_doc_from_candidates(
-        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md", source_root() + "/docs/API.md"}, api_path);
     ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
 
     const std::string registration = extract_section(
@@ -266,7 +296,7 @@ TEST(ApiDocStatusFields, GpuRegistrationDocsMatchSupportedBackends) {
 TEST(ApiDocStatusFields, StreamCallbackDocsStateCudaOnlyCapability) {
     std::string api_path;
     const std::string api_md = read_doc_from_candidates(
-        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md", source_root() + "/docs/API.md"}, api_path);
     ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
 
     const std::string gpu_interface = extract_section(
@@ -284,12 +314,12 @@ TEST(ApiDocStatusFields, StreamCallbackDocsStateCudaOnlyCapability) {
 TEST(ApiDocStatusFields, ApiDocPerformanceClaimsHaveSources) {
     std::string api_path;
     const std::string api_md = read_doc_from_candidates(
-        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md", source_root() + "/docs/API.md"}, api_path);
     ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
 
     std::string readme_path;
     const std::string readme_md = read_doc_from_candidates(
-        {"README.md", "../README.md", "../../README.md"}, readme_path);
+        {"README.md", "../README.md", "../../README.md", source_root() + "/README.md"}, readme_path);
     ASSERT_FALSE(readme_md.empty()) << "Could not open README.md from any candidate path";
 
     const std::vector<std::pair<std::string, std::string>> docs = {

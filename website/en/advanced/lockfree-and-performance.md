@@ -57,11 +57,13 @@ std::thread monitor([&] {
 
 The snapshot is composed of independent atomic loads, so **every field is approximate and unsynchronized**: treat it as a trend/alerting signal, never as a synchronization primitive or a correctness oracle.
 
-The new `QueueStats` splits "rejection" into three different sources, each pointing to a different remediation:
+`failed_pushes` is the aggregate of every failed underlying push attempt. In a quiescent snapshot, the three reason counters below sum to it and point to different remediation:
 
 | Field | Source | Typical action |
 | --- | --- | --- |
-| `contention_rejection` | Queue full or CAS/reservation contention | Scale capacity, reduce producer count, or raise the backoff multiplier. |
+| `queue_full_rejections` | Queue full | Scale capacity or consumer throughput. |
+| `contention_rejection` | CAS contention exhausted the retry budget | Reduce producer count or raise the backoff multiplier. |
+| `reservation_cancelled_rejections` | Consumer cancelled the producer's reservation | Check producer preemption and the reservation window. |
 | `cancelled_reservation_count` | Consumer cancelled a reservation after the bounded wait (default 64 yields) | Check whether producers get preempted or hold a lock in the `Writing` window. |
 | `submission_rejection` | Executor entry-side reject: empty task, post-stop submit, or object-pool exhaustion | Usually upstream logic or `stop()` race; small empty-task counts are caller bugs. |
 
