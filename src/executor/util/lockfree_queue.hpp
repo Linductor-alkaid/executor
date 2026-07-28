@@ -384,7 +384,10 @@ private:
     }
 
     bool finish_write_reservation(size_t index) {
-        if (before_publish_hook_ != nullptr) before_publish_hook_(before_publish_hook_context_);
+        const auto hook_state = std::atomic_load_explicit(&before_publish_hook_, std::memory_order_acquire);
+        if (hook_state && hook_state->hook != nullptr) {
+            hook_state->hook(hook_state->context);
+        }
         SlotState expected = SlotState::Reserved;
         return states_[index].compare_exchange_strong(expected, SlotState::Writing,
                                                        std::memory_order_acq_rel,
@@ -486,9 +489,16 @@ private:
 
 public:
     using BeforePublishHook = void (*)(void*);
+
+    // The hook and its context are published together. A producer observes
+    // either the previous complete state or the replacement complete state.
+    // The caller must keep the context valid until a later call has cleared
+    // or replaced this hook and concurrent producers have stopped.
     void set_before_publish_hook(BeforePublishHook hook, void* context) {
-        before_publish_hook_ = hook;
-        before_publish_hook_context_ = context;
+        std::atomic_store_explicit(
+            &before_publish_hook_,
+            std::make_shared<const BeforePublishHookState>(BeforePublishHookState{hook, context}),
+            std::memory_order_release);
     }
 private:
     void update_peak_size() {
@@ -546,8 +556,11 @@ private:
     // enable_stats() 可从任意线程写入,热路径 (push/pop) 频繁读取 — C++ data race (UB)
     // relaxed ordering: 统计开关不与其它内存构成 happens-before 关系
     std::atomic<bool> stats_enabled_;
-    BeforePublishHook before_publish_hook_ = nullptr;
-    void* before_publish_hook_context_ = nullptr;
+    struct BeforePublishHookState {
+        BeforePublishHook hook;
+        void* context;
+    };
+    std::shared_ptr<const BeforePublishHookState> before_publish_hook_;
 
     struct Stats {
         alignas(64) std::atomic<uint64_t> total_pushes{0};

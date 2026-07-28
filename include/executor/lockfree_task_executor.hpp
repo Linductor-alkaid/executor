@@ -176,7 +176,11 @@ public:
     QueueStats get_status_snapshot() const;
 
     // Test/debug hook: invoked after a producer reserves a slot and before it
-    // enters the non-interruptible write window.
+    // enters the non-interruptible write window. This method may be called
+    // concurrently with push_task(); each producer observes either the old
+    // complete (hook, context) pair or the new complete pair. Keep context
+    // valid until the hook is cleared or replaced and concurrent producers
+    // have stopped.
     using BeforePublishHook = void (*)(void*);
     void set_before_publish_hook(BeforePublishHook hook, void* context);
 
