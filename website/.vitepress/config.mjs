@@ -21,7 +21,7 @@ export default defineConfig({
           { text: 'Tutorials', link: '/en/tutorial/' },
           { text: 'Guides', link: '/en/guides/choosing-submit-api' },
           { text: 'API Reference', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' },
-          { text: 'Development Snapshot v0.2.3', link: '/en/reference/version-and-migration' },
+          { text: 'Release v0.3.0', link: '/en/reference/version-and-migration' },
           {
             text: 'Topics',
             items: [
@@ -182,7 +182,7 @@ export default defineConfig({
       { text: '循序教程', link: '/zh/tutorial/' },
       { text: '场景指南', link: '/zh/guides/choosing-submit-api' },
       { text: 'API 参考', link: '/zh/reference/api' },
-      { text: '开发快照 v0.2.3', link: '/zh/reference/version-and-migration' },
+      { text: '稳定版 v0.3.0', link: '/zh/reference/version-and-migration' },
       {
         text: '专题',
         items: [
