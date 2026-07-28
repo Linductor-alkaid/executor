@@ -112,15 +112,21 @@ TEST(LockFreeQueueStatusSnapshotTest, DoesNotBlockProducersUnderConcurrentTraffi
 TEST(LockFreeQueueStatsTest, FailureReasonsAreClassified) {
     using executor::util::LockFreeQueue;
 
-    LockFreeQueue<int> full_queue(2, 1, true);
-    ASSERT_TRUE(full_queue.push(1));
-    EXPECT_FALSE(full_queue.push(2));
+    LockFreeQueue<int> full_queue(16, 1, true);
+    for (int value = 0; value < 15; ++value) {
+        ASSERT_TRUE(full_queue.push(value));
+    }
+    EXPECT_FALSE(full_queue.push(15));
     const auto full = full_queue.get_stats();
     EXPECT_EQ(full.queue_full_rejections, 1u);
 
-    LockFreeQueue<int> contention_queue(65536, 1, true);
-    constexpr size_t kProducerCount = 64;
-    constexpr size_t kPushesPerProducer = 2000;
+    // Keep the consumer frozen so successful producers continuously advance
+    // the shared enqueue position while their peers retry its CAS. The large
+    // capacity leaves a long contention window before QueueFull can mask the
+    // bounded-retry path.
+    LockFreeQueue<int> contention_queue(1u << 22, 1, true);
+    constexpr size_t kProducerCount = 128;
+    constexpr size_t kPushesPerProducer = 20000;
     std::atomic<bool> start{false};
     std::vector<std::thread> producers;
     producers.reserve(kProducerCount);
