@@ -131,7 +131,7 @@ TEST(LockFreeQueueStatsTest, ReservationCancellationAccounting) {
 
     EXPECT_FALSE(executor.push_task([]() {}));
     auto rejected = executor.get_queue_stats();
-    EXPECT_GE(rejected.contention_rejection, 1u);
+    EXPECT_GE(rejected.queue_full_rejections, 1u);
     EXPECT_EQ(rejected.fail_reason, LockFreeTaskExecutor::QueueFailReason::QueueFull);
 
     ASSERT_TRUE(executor.start());
