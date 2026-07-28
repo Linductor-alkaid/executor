@@ -153,23 +153,34 @@ void OpenCLExecutor::stop() {
 
     stopping_ = true;
 
+    lifecycle_lock.unlock();
+
     queue_cv_.notify_all();
     queue_not_full_cv_.notify_all();
+
+    size_t cancelled_tasks = 0;
 
     // Cancel queued tasks so the worker cannot block trying to enter the
     // lifecycle shared gate while stop() is waiting to join it.
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
-        std::queue<std::packaged_task<void()>> empty;
-        task_queue_.swap(empty);
+        while (!task_queue_.empty()) {
+            auto task = std::move(task_queue_.front());
+            task_queue_.pop();
+            task.promise->set_exception(std::make_exception_ptr(
+                ExecutorStopping("OpenCLExecutor stopped before queued kernel execution")));
+            ++cancelled_tasks;
+        }
         if (active_kernels_.load() == 0) {
             queue_drained_cv_.notify_all();
         }
     }
 
-    // Let a worker that already dequeued a task acquire the shared gate and
-    // finish it before waiting for its thread to exit.
-    lifecycle_lock.unlock();
+    if (cancelled_tasks > 0) {
+        failed_kernels_.fetch_add(cancelled_tasks, std::memory_order_relaxed);
+        set_last_error("OpenCLExecutor stopped: cancelled " +
+                       std::to_string(cancelled_tasks) + " queued kernel task(s)");
+    }
 
     // P-260625-002 fix: signal + join all submit_kernel_after waiter threads
     // before tearing down internal state. Mirrors the same P-002 fix on
@@ -710,20 +721,27 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
         return promise.get_future();
     }
 
-    std::packaged_task<void()> task([this, kernel_func, config]() {
+    auto promise = std::make_shared<std::promise<void>>();
+    auto future = promise->get_future();
+    QueuedTask task;
+    task.promise = promise;
+    task.run = [this, kernel_func, config, promise]() {
         auto start = std::chrono::high_resolution_clock::now();
         bool kernel_func_started = false;
 
         try {
-            std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
-            if (!is_available_.load(std::memory_order_acquire)) {
-                throw std::runtime_error("OpenCLExecutor is unavailable");
-            }
-            auto queue_wrapper = get_queue(config.stream_id);
-            if (!queue_wrapper) {
-                std::ostringstream oss;
-                oss << "submit_kernel: invalid stream_id " << config.stream_id;
-                throw std::runtime_error(oss.str());
+            std::shared_ptr<CommandQueueWrapper> queue_wrapper;
+            {
+                std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+                if (!is_available_.load(std::memory_order_acquire)) {
+                    throw std::runtime_error("OpenCLExecutor is unavailable");
+                }
+                queue_wrapper = get_queue(config.stream_id);
+                if (!queue_wrapper) {
+                    std::ostringstream oss;
+                    oss << "submit_kernel: invalid stream_id " << config.stream_id;
+                    throw std::runtime_error(oss.str());
+                }
             }
 
             std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
@@ -739,6 +757,7 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
             auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
             total_kernel_time_ns_ += duration;
             completed_kernels_++;
+            promise->set_value();
         } catch (const std::exception& ex) {
             if (kernel_func_started) {
                 set_last_error(std::string("submit_kernel: kernel_func exception: ") + ex.what());
@@ -746,17 +765,15 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
                 set_last_error(ex.what());
             }
             failed_kernels_++;
-            throw;
+            promise->set_exception(std::current_exception());
         } catch (...) {
             set_last_error(kernel_func_started
                 ? "submit_kernel: kernel_func exception: unknown"
                 : "submit_kernel: unknown exception");
             failed_kernels_++;
-            throw;
+            promise->set_exception(std::current_exception());
         }
-    });
-
-    auto future = task.get_future();
+    };
 
     {
         std::unique_lock<std::mutex> lock(queue_mutex_);
@@ -765,10 +782,10 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
                    task_queue_.size() < config_.max_queue_size;
         });
         if (!running_.load(std::memory_order_acquire)) {
-            std::promise<void> promise;
-            promise.set_exception(std::make_exception_ptr(
+            std::promise<void> stopped_promise;
+            stopped_promise.set_exception(std::make_exception_ptr(
                 std::runtime_error("OpenCLExecutor is not running")));
-            return promise.get_future();
+            return stopped_promise.get_future();
         }
 
         task_queue_.push(std::move(task));
@@ -780,7 +797,7 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
 
 void OpenCLExecutor::worker_thread() {
     while (true) {
-        std::packaged_task<void()> task;
+        QueuedTask task;
 
         {
             std::unique_lock<std::mutex> lock(queue_mutex_);
@@ -800,8 +817,8 @@ void OpenCLExecutor::worker_thread() {
             queue_not_full_cv_.notify_one();
         }
 
-        if (task.valid()) {
-            task();
+        if (task.run) {
+            task.run();
         }
 
         {
