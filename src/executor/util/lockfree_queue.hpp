@@ -118,7 +118,7 @@ public:
                 // 槽位可用，尝试预留
                 if (enqueue_pos_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
                     if (!begin_write(index, state)) {
-                        record_push_failure(reservation_failure_reason(index));
+                        record_push_failure(reservation_failure_reason(index, pos));
                         return false;
                     }
                     buffer_[index] = item;
@@ -212,14 +212,14 @@ public:
                     // may then cancel stalled slots, but it can never advance
                     // into an unreserved Free slot in this batch.
                     if (!reserve_slot(index, state)) {
-                        record_push_failure(reservation_failure_reason(index));
+                        record_push_failure(reservation_failure_reason(index, pos + i));
                         return false;
                     }
                 }
                 for (size_t i = 0; i < count; ++i) {
                     const size_t index = (pos + i) & mask_;
                     if (!finish_write_reservation(index)) {
-                        record_push_failure(reservation_failure_reason(index));
+                        record_push_failure(reservation_failure_reason(index, pos + i));
                         return false;
                     }
                     buffer_[index] = items[i];
@@ -366,21 +366,22 @@ private:
 private:
 
     static bool slot_can_be_reserved(SlotState state) {
-        return state == SlotState::Free || state == SlotState::Cancelled;
+        return state == SlotState::Free;
     }
 
     bool reserve_slot(size_t index, SlotState previous_state) {
-        while (slot_can_be_reserved(previous_state)) {
-            if (states_[index].compare_exchange_weak(previous_state, SlotState::Reserved,
-                                                     std::memory_order_acq_rel,
-                                                     std::memory_order_acquire)) {
-                if (stats_enabled_.load(std::memory_order_relaxed)) {
-                    stats_.reservation_count.fetch_add(1, std::memory_order_relaxed);
-                }
-                return true;
-            }
+        if (!slot_can_be_reserved(previous_state)) {
+            return false;
         }
-        return false;
+        if (!states_[index].compare_exchange_strong(previous_state, SlotState::Reserved,
+                                                    std::memory_order_acq_rel,
+                                                    std::memory_order_acquire)) {
+            return false;
+        }
+        if (stats_enabled_.load(std::memory_order_relaxed)) {
+            stats_.reservation_count.fetch_add(1, std::memory_order_relaxed);
+        }
+        return true;
     }
 
     bool finish_write_reservation(size_t index) {
@@ -401,8 +402,8 @@ private:
         return finish_write_reservation(index);
     }
 
-    LockFreeQueueFailReason reservation_failure_reason(size_t index) const {
-        return states_[index].load(std::memory_order_acquire) == SlotState::Cancelled
+    LockFreeQueueFailReason reservation_failure_reason(size_t index, size_t pos) const {
+        return sequences_[index].load(std::memory_order_acquire) != pos
             ? LockFreeQueueFailReason::ReservationCancelled
             : LockFreeQueueFailReason::Contention;
     }
@@ -454,6 +455,7 @@ private:
             if (state == SlotState::Reserved) {
                 if (cancel_reservation(index)) {
                     sequences_[index].store(pos + capacity_, std::memory_order_release);
+                    states_[index].store(SlotState::Free, std::memory_order_release);
                     ++pos;
                     continue;
                 }
