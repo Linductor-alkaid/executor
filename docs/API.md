@@ -1321,6 +1321,8 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 
 CUDA 的 `stop()` 可被多个外部线程并发调用：其中一个调用方接管并等待 worker 线程，其余调用方安全返回。需要区分调用方时可直接使用 `CudaExecutor::stop_and_join()`；它在外部线程返回 `true`，在 CUDA worker 内调用时只请求停止并返回 `false`，外部线程随后必须调用一次 `stop_and_join()` 完成线程回收。自停止后的重新 `start()` 会在 worker 句柄被外部回收前被拒绝。
 
+`stop()` 的队列契约因后端而异：CUDA 会继续排空已入队的 kernel；OpenCL 会取消 `stop()` 开始时尚未被 worker 取出的 kernel。每个被取消的 OpenCL `std::future<void>` 都会就绪，`get()` 抛出 `executor::ExecutorStopping`，而不会抛出 `std::future_error(broken_promise)`。取消会计入 OpenCL `GpuExecutorStatus::failed_kernels`，并将 `last_error_message` 更新为取消原因；已经由 worker 开始执行的 OpenCL kernel 正常完成或报告其自身执行错误。
+
 ### 8.4 配置与类型
 
 - **GpuExecutorConfig**：`name`、`backend`（支持 CUDA/OpenCL；分别要求 `EXECUTOR_ENABLE_CUDA` / `EXECUTOR_ENABLE_OPENCL` 且运行时可用）、`device_id`、`max_queue_size`、`memory_pool_size`、`default_stream_count`、`enable_monitoring`、`enable_unified_memory`（启用 `allocate_unified_memory` 等统一内存 API，CUDA 后端需要 `EXECUTOR_ENABLE_CUDA` 且硬件支持 managed memory）。`backend` 默认是 `GpuBackend::CUDA`；需要自动选择时可先调用 `gpu::get_recommended_backend()`，推荐逻辑会优先可用 CUDA 设备，其次 OpenCL，最后回到 CUDA 默认值。`device_id` 必须非负；`ExecutorManager::create_gpu_executor` 会拒绝负值，直接构造 `OpenCLExecutor` 时也会记录无效配置并在 `start()` 阶段拒绝负 `device_id`，不会用负下标访问设备数组。

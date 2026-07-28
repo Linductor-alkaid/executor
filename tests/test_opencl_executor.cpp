@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "executor/gpu/opencl_executor.hpp"
 #include "executor/gpu/opencl_loader.hpp"
+#include "executor/types.hpp"
 #include <atomic>
 #include <stdexcept>
 #include <thread>
@@ -295,34 +296,51 @@ TEST_F(OpenCLExecutorTest, StopDrainsOrFailsPendingFutures) {
         GTEST_SKIP() << "OpenCL platform/device not available";
     }
 
-    constexpr int kSubmitted = 16;
-    std::vector<std::future<void>> futures;
-    futures.reserve(kSubmitted);
+    std::atomic<bool> first_started{false};
+    std::atomic<bool> release_first{false};
 
     GpuTaskConfig config;
     config.stream_id = 0;
 
-    for (int i = 0; i < kSubmitted; ++i) {
-        futures.push_back(executor_->submit_kernel([](void*) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }, config));
-    }
-
-    executor_->stop();
-
-    int completed = 0;
-    int failed = 0;
-    for (auto& future : futures) {
-        ASSERT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
-        try {
-            future.get();
-            ++completed;
-        } catch (...) {
-            ++failed;
+    auto first = executor_->submit_kernel([&](void*) {
+        first_started.store(true, std::memory_order_release);
+        while (!release_first.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+    }, config);
+
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!first_started.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(first_started.load(std::memory_order_acquire));
+
+    constexpr int kTrailingTasks = 15;
+    std::vector<std::future<void>> trailing_futures;
+    trailing_futures.reserve(kTrailingTasks);
+    for (int i = 0; i < kTrailingTasks; ++i) {
+        trailing_futures.push_back(executor_->submit_kernel([](void*) {}, config));
     }
 
-    EXPECT_EQ(completed + failed, kSubmitted);
+    std::thread stopper([&] { executor_->stop(); });
+    for (auto& future : trailing_futures) {
+        EXPECT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    }
+
+    auto status = executor_->get_status();
+    EXPECT_FALSE(status.is_running);
+    EXPECT_EQ(status.queue_size, 0U);
+    EXPECT_GE(status.failed_kernels, kTrailingTasks);
+    EXPECT_NE(status.last_error_message.find("cancelled"), std::string::npos);
+
+    release_first.store(true, std::memory_order_release);
+    stopper.join();
+
+    EXPECT_NO_THROW(first.get());
+    for (auto& future : trailing_futures) {
+        EXPECT_THROW(future.get(), executor::ExecutorStopping);
+    }
 }
 
 TEST_F(OpenCLExecutorTest, OpenCLExecutorRespectsMaxQueueSize) {

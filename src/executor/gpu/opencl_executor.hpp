@@ -65,6 +65,11 @@ private:
         size_t size = 0;
     };
 
+    struct QueuedTask {
+        std::function<void()> run;
+        std::shared_ptr<std::promise<void>> promise;
+    };
+
     bool initialize_opencl();
     void cleanup();
     void cleanup_locked();
@@ -103,7 +108,7 @@ private:
     std::string last_error_message_;
     std::thread worker_;
     std::function<std::thread(OpenCLExecutor*)> worker_thread_factory_for_test_;
-    std::queue<std::packaged_task<void()>> task_queue_;
+    std::queue<QueuedTask> task_queue_;
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::condition_variable queue_not_full_cv_;

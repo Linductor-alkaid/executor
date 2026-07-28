@@ -23,6 +23,12 @@ public:
         : std::runtime_error(message) {}
 };
 
+class ExecutorStopping : public std::runtime_error {
+public:
+    explicit ExecutorStopping(const std::string& message)
+        : std::runtime_error(message) {}
+};
+
 /**
  * @brief 任务优先级枚举
  */
