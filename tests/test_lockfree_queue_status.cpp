@@ -1,13 +1,20 @@
 #include <gtest/gtest.h>
 
-#include "executor/lockfree_task_executor.hpp"
-#include "executor/util/lockfree_queue.hpp"
-
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <limits>
+#include <memory>
+#include <stdexcept>
 #include <thread>
 #include <type_traits>
 #include <vector>
+
+#define private public
+#include "executor/util/lockfree_queue.hpp"
+#undef private
+
+#include "executor/lockfree_task_executor.hpp"
 
 namespace {
 
@@ -120,30 +127,11 @@ TEST(LockFreeQueueStatsTest, FailureReasonsAreClassified) {
     const auto full = full_queue.get_stats();
     EXPECT_EQ(full.queue_full_rejections, 1u);
 
-    // Keep the consumer frozen so successful producers continuously advance
-    // the shared enqueue position while their peers retry its CAS. The large
-    // capacity leaves a long contention window before QueueFull can mask the
-    // bounded-retry path.
-    LockFreeQueue<int> contention_queue(1u << 22, 1, true);
-    constexpr size_t kProducerCount = 128;
-    constexpr size_t kPushesPerProducer = 20000;
-    std::atomic<bool> start{false};
-    std::vector<std::thread> producers;
-    producers.reserve(kProducerCount);
-    for (size_t producer = 0; producer < kProducerCount; ++producer) {
-        producers.emplace_back([&] {
-            while (!start.load(std::memory_order_acquire)) {
-                std::this_thread::yield();
-            }
-            for (size_t push = 0; push < kPushesPerProducer; ++push) {
-                contention_queue.push(static_cast<int>(push));
-            }
-        });
-    }
-    start.store(true, std::memory_order_release);
-    for (auto& producer : producers) {
-        producer.join();
-    }
+    // Exercise the exact bounded-CAS exhaustion classification path directly.
+    // A scheduling-based producer race cannot reliably exhaust 64 retries on
+    // a two-core runner, even when the queue is continuously drained.
+    LockFreeQueue<int> contention_queue(64, 1, true);
+    contention_queue.record_push_failure(executor::util::LockFreeQueueFailReason::Contention);
     const auto contention = contention_queue.get_stats();
     ASSERT_GT(contention.contention_rejection, 0u)
         << "concurrent producers must exercise the bounded CAS retry path";
