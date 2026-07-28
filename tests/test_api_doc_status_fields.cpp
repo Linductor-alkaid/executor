@@ -230,6 +230,33 @@ TEST(ApiDocStatusFields, ThreadPoolStatusDocsMatchCurrentUsage) {
         << "ThreadPoolStatus docs must not claim the type is unused";
 }
 
+TEST(ApiDocStatusFields, LockFreeQueueStatsDocsDescribeStatsAvailability) {
+    std::string api_path;
+    const std::string api_md = read_doc_from_candidates(
+        {"docs/API.md", "../docs/API.md", "../../docs/API.md"}, api_path);
+    ASSERT_FALSE(api_md.empty()) << "Could not open docs/API.md from any candidate path";
+
+    const std::string queue_stats = extract_section(
+        api_md, "#### 状态快照与背压诊断", "### 5.6");
+    ASSERT_FALSE(queue_stats.empty())
+        << "LockFreeTaskExecutor QueueStats section not found in " << api_path;
+
+    EXPECT_NE(queue_stats.find("底层队列统计（均需 `enable_stats=true`）"),
+              std::string::npos);
+    EXPECT_NE(queue_stats.find("执行器生命周期、拒绝与异常统计（均不需 `enable_stats=true`）"),
+              std::string::npos);
+
+    const std::vector<std::string> always_observable_fields = {
+        "`queue_capacity` | 调整为 2 的幂后的实际队列容量。 | 否（始终可读）",
+        "`submission_rejection` | 进入队列前的拒绝：空任务、停止后提交或对象池耗尽；始终累计。 | 否（始终可读）",
+        "`exception_count` | 任务执行期间累计捕获的异常次数；也可由 `exception_count()` 读取。 | 否（始终可读）",
+    };
+    for (const auto& field : always_observable_fields) {
+        EXPECT_NE(queue_stats.find(field), std::string::npos)
+            << field << " must not be documented as enable_stats-gated";
+    }
+}
+
 TEST(ApiDocStatusFields, GpuRegistrationDocsMatchSupportedBackends) {
     std::string api_path;
     const std::string api_md = read_doc_from_candidates(
