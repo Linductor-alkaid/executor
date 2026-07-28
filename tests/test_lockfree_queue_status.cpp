@@ -1,16 +1,37 @@
 #include <gtest/gtest.h>
 
-#include "executor/lockfree_task_executor.hpp"
-
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <limits>
+#include <memory>
+#include <stdexcept>
 #include <thread>
 #include <type_traits>
 #include <vector>
 
+#define private public
+#include "executor/util/lockfree_queue.hpp"
+#undef private
+
+#include "executor/lockfree_task_executor.hpp"
+
 namespace {
 
 using executor::LockFreeTaskExecutor;
+
+struct ReservationHook {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+};
+
+void pause_reservation(void* context) {
+    auto* hook = static_cast<ReservationHook*>(context);
+    hook->entered.store(true, std::memory_order_release);
+    while (!hook->release.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
 
 static_assert(std::is_copy_constructible<LockFreeTaskExecutor::QueueStats>::value,
               "QueueStats must remain a value-typed snapshot");
@@ -93,6 +114,55 @@ TEST(LockFreeQueueStatusSnapshotTest, DoesNotBlockProducersUnderConcurrentTraffi
     EXPECT_GT(samples, 0u);
     EXPECT_EQ(final_snapshot.total_pushes, kExpectedPushes);
     EXPECT_EQ(executor.processed_count(), kExpectedPushes);
+}
+
+TEST(LockFreeQueueStatsTest, FailureReasonsAreClassified) {
+    using executor::util::LockFreeQueue;
+
+    LockFreeQueue<int> full_queue(16, 1, true);
+    for (int value = 0; value < 15; ++value) {
+        ASSERT_TRUE(full_queue.push(value));
+    }
+    EXPECT_FALSE(full_queue.push(15));
+    const auto full = full_queue.get_stats();
+    EXPECT_EQ(full.queue_full_rejections, 1u);
+
+    // Exercise the exact bounded-CAS exhaustion classification path directly.
+    // A scheduling-based producer race cannot reliably exhaust 64 retries on
+    // a two-core runner, even when the queue is continuously drained.
+    LockFreeQueue<int> contention_queue(64, 1, true);
+    contention_queue.record_push_failure(executor::util::LockFreeQueueFailReason::Contention);
+    const auto contention = contention_queue.get_stats();
+    ASSERT_GT(contention.contention_rejection, 0u)
+        << "concurrent producers must exercise the bounded CAS retry path";
+
+    LockFreeQueue<int> cancelled_queue(2, 1, true);
+    ReservationHook hook;
+    cancelled_queue.set_before_publish_hook(pause_reservation, &hook);
+    std::atomic<bool> producer_result{true};
+    std::thread cancelled_producer([&] {
+        producer_result.store(cancelled_queue.push(1), std::memory_order_release);
+    });
+    while (!hook.entered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    int ignored = 0;
+    EXPECT_FALSE(cancelled_queue.pop(ignored));
+    hook.release.store(true, std::memory_order_release);
+    cancelled_producer.join();
+    const auto cancelled = cancelled_queue.get_stats();
+    EXPECT_FALSE(producer_result.load(std::memory_order_acquire));
+    EXPECT_EQ(cancelled.reservation_cancelled_rejections, 1u);
+
+    const uint64_t failed_pushes = full.failed_pushes + contention.failed_pushes +
+        cancelled.failed_pushes;
+    const uint64_t classified_rejections = full.queue_full_rejections +
+        contention.queue_full_rejections + cancelled.queue_full_rejections +
+        full.contention_rejection + contention.contention_rejection +
+        cancelled.contention_rejection + full.reservation_cancelled_rejections +
+        contention.reservation_cancelled_rejections +
+        cancelled.reservation_cancelled_rejections;
+    EXPECT_EQ(failed_pushes, classified_rejections);
 }
 
 } // namespace

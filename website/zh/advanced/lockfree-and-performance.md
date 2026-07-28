@@ -49,11 +49,13 @@ std::thread monitor([&] {
 
 快照由多个独立原子读取组成，**所有字段均为近似、非同步值**：不能用作同步原语或正确性判定依据，仅适合趋势与告警。
 
-新 `QueueStats` 把“拒绝”分成三种不同来源，分别对应不同的处置：
+`failed_pushes` 汇总所有底层入队失败；在静止快照中，下列三个原因计数之和等于它，分别对应不同的处置：
 
 | 字段 | 来源 | 典型处置 |
 | --- | --- | --- |
-| `contention_rejection` | 底层队列满或 CAS / 预留竞争 | 扩容、降低 producer 数或调高 backoff multiplier。 |
+| `queue_full_rejections` | 队列满 | 扩容或提高消费者吞吐。 |
+| `contention_rejection` | CAS 竞争耗尽重试预算 | 降低 producer 数或调高 backoff multiplier。 |
+| `reservation_cancelled_rejections` | 消费者取消了生产者的 reservation | 检查生产者抢占和 reservation 窗口。 |
 | `cancelled_reservation_count` | 消费者在有界等待（默认 64 次 yield）后取消了 reservation | 检查生产者是否在 `Writing` 窗口被抢占或持有锁。 |
 | `submission_rejection` | 执行器入口拒绝：空任务、已停止、对象池耗尽 | 多为上游逻辑或 `stop()` 竞态，少量空任务是调用方 bug。 |
 

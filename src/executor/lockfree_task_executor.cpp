@@ -221,6 +221,7 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     QueueStats result;
     result.total_pushes = raw.total_pushes;
     result.failed_pushes = raw.failed_pushes;
+    result.queue_full_rejections = raw.queue_full_rejections;
     result.total_pops = raw.total_pops;
     result.empty_pops = raw.empty_pops;
     result.batch_pushes = raw.batch_pushes;
@@ -232,6 +233,7 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
     result.reservation_count = raw.reservation_count;
     result.ready_count = raw.ready_count;
     result.contention_rejection = raw.contention_rejection;
+    result.reservation_cancelled_rejections = raw.reservation_cancelled_rejections;
     result.cancelled_reservation_count = raw.cancelled_reservation_count;
     result.submission_rejection = submission_rejection_.load(std::memory_order_relaxed);
     result.reservation_wait_yields = raw.reservation_wait_yields;

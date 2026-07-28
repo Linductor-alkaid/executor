@@ -34,7 +34,12 @@ enum class LockFreeQueueFailReason : uint8_t {
  */
 struct LockFreeQueueStats {
     uint64_t total_pushes = 0;
+    // All failed underlying push attempts. In a quiescent snapshot, this
+    // equals the sum of the three per-reason rejection counters below.
     uint64_t failed_pushes = 0;
+    uint64_t queue_full_rejections = 0;
+    uint64_t contention_rejection = 0;
+    uint64_t reservation_cancelled_rejections = 0;
     uint64_t total_pops = 0;
     uint64_t empty_pops = 0;
     uint64_t batch_pushes = 0;
@@ -47,7 +52,6 @@ struct LockFreeQueueStats {
     // cancelled_reservation_count, this supports reservation conservation.
     uint64_t reservation_count = 0;
     uint64_t ready_count = 0;
-    uint64_t contention_rejection = 0;
     uint64_t cancelled_reservation_count = 0;
     // The configured number of consumer yields before cancellation recovery.
     uint64_t reservation_wait_yields = 0;
@@ -165,12 +169,6 @@ public:
             if (!push(items[pushed])) break;
         }
         if (pushed == 0) return false;
-        // A partial batch is a successful API operation. push() recorded the
-        // final unavailable slot as a failed single-item attempt; do not let
-        // that internal probe inflate the batch failure statistic.
-        if (pushed < count && stats_enabled_.load(std::memory_order_relaxed)) {
-            stats_.failed_pushes.fetch_sub(1, std::memory_order_relaxed);
-        }
         if (stats_enabled_.load(std::memory_order_relaxed)) {
             stats_.batch_pushes.fetch_add(1, std::memory_order_relaxed);
         }
@@ -314,13 +312,17 @@ public:
         LockFreeQueueStats result;
         result.total_pushes = stats_.total_pushes.load(std::memory_order_relaxed);
         result.failed_pushes = stats_.failed_pushes.load(std::memory_order_relaxed);
+        result.queue_full_rejections =
+            stats_.queue_full_rejections.load(std::memory_order_relaxed);
+        result.contention_rejection = stats_.contention_rejection.load(std::memory_order_relaxed);
+        result.reservation_cancelled_rejections =
+            stats_.reservation_cancelled_rejections.load(std::memory_order_relaxed);
         result.total_pops = stats_.total_pops.load(std::memory_order_relaxed);
         result.empty_pops = stats_.empty_pops.load(std::memory_order_relaxed);
         result.batch_pushes = stats_.batch_pushes.load(std::memory_order_relaxed);
         result.batch_pops = stats_.batch_pops.load(std::memory_order_relaxed);
         result.current_size = size();
         result.peak_size = stats_.peak_size.load(std::memory_order_relaxed);
-        result.contention_rejection = stats_.contention_rejection.load(std::memory_order_relaxed);
         result.reservation_count = stats_.reservation_count.load(std::memory_order_relaxed);
         result.cancelled_reservation_count =
             stats_.cancelled_reservation_count.load(std::memory_order_relaxed);
@@ -484,7 +486,22 @@ private:
     void record_push_failure(LockFreeQueueFailReason reason) {
         if (stats_enabled_.load(std::memory_order_relaxed)) {
             stats_.failed_pushes.fetch_add(1, std::memory_order_relaxed);
-            stats_.contention_rejection.fetch_add(1, std::memory_order_relaxed);
+            switch (reason) {
+            case LockFreeQueueFailReason::QueueFull:
+                stats_.queue_full_rejections.fetch_add(1, std::memory_order_relaxed);
+                break;
+            case LockFreeQueueFailReason::Contention:
+                stats_.contention_rejection.fetch_add(1, std::memory_order_relaxed);
+                break;
+            case LockFreeQueueFailReason::ReservationCancelled:
+                stats_.reservation_cancelled_rejections.fetch_add(1,
+                                                                   std::memory_order_relaxed);
+                break;
+            case LockFreeQueueFailReason::None:
+                break;
+            default:
+                break;
+            }
             stats_.fail_reason.store(static_cast<uint8_t>(reason), std::memory_order_relaxed);
         }
     }
@@ -567,12 +584,14 @@ private:
     struct Stats {
         alignas(64) std::atomic<uint64_t> total_pushes{0};
         alignas(64) std::atomic<uint64_t> failed_pushes{0};
+        alignas(64) std::atomic<uint64_t> queue_full_rejections{0};
         alignas(64) std::atomic<uint64_t> total_pops{0};
         alignas(64) std::atomic<uint64_t> empty_pops{0};
         alignas(64) std::atomic<uint64_t> batch_pushes{0};
         alignas(64) std::atomic<uint64_t> batch_pops{0};
         alignas(64) std::atomic<uint64_t> peak_size{0};
         alignas(64) std::atomic<uint64_t> contention_rejection{0};
+        alignas(64) std::atomic<uint64_t> reservation_cancelled_rejections{0};
         alignas(64) std::atomic<uint64_t> reservation_count{0};
         alignas(64) std::atomic<uint64_t> cancelled_reservation_count{0};
         alignas(64) std::atomic<uint8_t> fail_reason{
