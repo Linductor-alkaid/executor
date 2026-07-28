@@ -541,10 +541,10 @@ public:
     size_t pending_count() const;                    // 队列中待处理任务数（近似值）
     uint64_t processed_count() const;                // 已处理任务总数
 
-    QueueStats get_queue_stats() const;              // 队列性能统计（需 enable_stats=true）
+    QueueStats get_queue_stats() const;              // 队列状态快照；字段是否依赖 enable_stats 见下表
     QueueStats get_status_snapshot() const;          // 可复制的非同步状态快照
 
-    // 异常观测与自定义处理（require enable_stats=true）
+    // 异常观测与自定义处理（异常计数不依赖 enable_stats）
     // exception_count() 返回 get_queue_stats() 期间累积的 task 异常次数
     // set_exception_handler() 允许替换默认「记录到 stats + 忽略」的行为,
     // 改由用户回调处理(例如记录到全局 logger、计数、转发到 ThreadPool 兜底)
@@ -559,19 +559,30 @@ public:
 
 `get_status_snapshot()` 返回一个可按值复制的 `QueueStats`，适合由监控线程采样；它不等待生产者或消费者。快照由多个独立原子读取组成，**所有字段均为近似、非同步值**：并发读写可在采样期间推进，字段不保证来自同一时刻，不能作为同步或正确性判定依据。`get_queue_stats()` 返回相同的值类型快照。
 
-| `QueueStats` 字段 | 含义与使用建议 |
-|---|---|
-| `queue_capacity` | 调整为 2 的幂后的实际队列容量。 |
-| `current_size` / `peak_size` | 当前近似积压 / 历史峰值；`peak_size` 需 `enable_stats=true`。 |
-| `reserved_count` / `ready_count` | 尚未发布的预留槽位 / 已发布可消费槽位；持续增长分别提示生产者停滞或消费者积压。 |
-| `contention_rejection` | 底层队列满或 CAS/预留竞争造成的拒绝，需 `enable_stats=true`。 |
-| `cancelled_reservation_count` | 消费者恢复停滞 reservation 时取消的次数，需 `enable_stats=true`。 |
-| `submission_rejection` | 进入队列前的拒绝：空任务、停止后提交或对象池耗尽；始终累计。 |
-| `total_pushes` / `failed_pushes` / `total_pops` / `empty_pops` | 底层队列累计操作计数，需 `enable_stats=true`。 |
-| `batch_pushes` / `batch_pops` / `reservation_count` / `reservation_wait_yields` / `fail_reason` | 批操作、reservation 及最近失败原因的辅助诊断字段。 |
-| `exception_count` / `rejected_empty_count` / `success_rate` | 执行异常、空任务拒绝及队列成功率。 |
+**底层队列统计（均需 `enable_stats=true`）**：未启用时，底层队列返回零值，因此下列字段不提供有效的队列统计。
 
-因此，竞争/容量压力（`contention_rejection`）、reservation 取消恢复（`cancelled_reservation_count`）和执行器入口拒绝（`submission_rejection`）可以分别观察。
+| `QueueStats` 字段 | 含义与使用建议 | 需要 `enable_stats=true` |
+|---|---|---|
+| `total_pushes` / `failed_pushes` / `total_pops` / `empty_pops` | 底层队列累计操作计数。 | 是 |
+| `batch_pushes` / `batch_pops` | 底层队列批操作计数。 | 是 |
+| `current_size` / `peak_size` | 当前近似积压 / 历史峰值。 | 是 |
+| `reserved_count` / `ready_count` | 尚未发布的预留槽位 / 已发布可消费槽位；持续增长分别提示生产者停滞或消费者积压。 | 是 |
+| `reservation_count` / `reservation_wait_yields` | reservation 操作及等待让出的辅助诊断计数。 | 是 |
+| `contention_rejection` | 底层队列满或 CAS/预留竞争造成的拒绝。 | 是 |
+| `cancelled_reservation_count` | 消费者恢复停滞 reservation 时取消的次数。 | 是 |
+| `fail_reason` | 最近一次底层队列失败原因。 | 是 |
+
+**执行器生命周期、拒绝与异常统计（均不需 `enable_stats=true`）**：这些字段由执行器在读取底层队列统计后独立填充，始终可观察。
+
+| `QueueStats` 字段 | 含义与使用建议 | 需要 `enable_stats=true` |
+|---|---|---|
+| `queue_capacity` | 调整为 2 的幂后的实际队列容量。 | 否（始终可读） |
+| `submission_rejection` | 进入队列前的拒绝：空任务、停止后提交或对象池耗尽；始终累计。 | 否（始终可读） |
+| `exception_count` | 任务执行期间累计捕获的异常次数；也可由 `exception_count()` 读取。 | 否（始终可读） |
+| `rejected_empty_count` | 因空 `std::function` 输入被拒绝的累计次数；也可由 `rejected_empty_count()` 读取。 | 否（始终可读） |
+| `success_rate` | `total_pushes / (total_pushes + failed_pushes)`；始终返回，但未启用统计时分子和分母均为零，结果为 `0.0`，不表示实际队列成功率。 | 否（始终可读；有效值需启用统计） |
+
+因此，即使未启用底层队列统计，也可以观察实际容量、执行器入口拒绝和任务异常；启用统计后还可诊断竞争/容量压力、reservation 取消恢复及队列操作结果。
 
 ```cpp
 executor::LockFreeTaskExecutor exec(4096, 2, true);
