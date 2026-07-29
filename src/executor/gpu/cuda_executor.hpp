@@ -72,6 +72,14 @@ public:
     bool copy_device_to_device(void* dst, const void* src, size_t size, bool async = false, int stream_id = 0) override;
     bool copy_from_peer(IGpuExecutor* src_executor, const void* src_ptr, void* dst_ptr,
                        size_t size, bool async = false, int stream_id = 0) override;
+
+    /**
+     * @brief 显式允许本执行器的复制操作使用外部分配的 CUDA 内存。
+     *
+     * 外部内存不会由执行器释放；调用方必须在内存失效前注销它。
+     */
+    bool register_external_memory(void* ptr, size_t size);
+    void unregister_external_memory(void* ptr);
     bool add_stream_callback(int stream_id, std::function<void()> callback) override;
     bool supports_stream_callback() const noexcept override;
     void synchronize() override;
@@ -149,6 +157,26 @@ private:
     std::string get_last_error() const;
 
 private:
+    enum class AllocationKind {
+        Owned,
+        ExternalOptIn,
+    };
+
+    struct AllocationRecord {
+        size_t size = 0;
+        AllocationKind kind = AllocationKind::Owned;
+        bool free_directly = true;
+    };
+
+    /**
+     * CUDA runtime APIs cannot establish which executor owns a raw pointer.  Keep
+     * every user-visible allocation here and validate an exact allocation base
+     * plus its requested range before reaching the driver.  External CUDA memory
+     * is deliberately accepted only after register_external_memory(); it is
+     * tracked for range checks but never released by this executor.
+     */
+    bool validate_memory_range(const void* ptr, size_t size, const char* argument) const;
+
     /**
      * @brief 检查 CUDA 运行时是否可用
      * @return 是否可用
@@ -258,7 +286,7 @@ private:
 
     // 内存管理
     std::unique_ptr<GpuMemoryManager> memory_manager_;    // 内存池（memory_pool_size > 0 时使用）
-    std::unordered_map<void*, size_t> allocated_memory_;  // 已分配内存映射（仅未使用池时）
+    std::unordered_map<void*, AllocationRecord> allocated_memory_;  // 已登记内存范围
     mutable std::mutex memory_mutex_;                     // 内存映射互斥锁（mutable用于const方法）
 
     // 统计信息

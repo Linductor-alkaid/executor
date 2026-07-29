@@ -113,8 +113,8 @@ CudaExecutor::~CudaExecutor() {
         // 释放所有已分配的内存（仅未使用内存池时 allocated_memory_ 非空）
         {
             std::lock_guard<std::mutex> lock(memory_mutex_);
-            for (auto& [ptr, size] : allocated_memory_) {
-                if (ptr != nullptr && funcs.cudaFree != nullptr) {
+            for (auto& [ptr, allocation] : allocated_memory_) {
+                if (ptr != nullptr && allocation.free_directly && funcs.cudaFree != nullptr) {
                     funcs.cudaFree(ptr);
                 }
             }
@@ -482,6 +482,45 @@ std::string CudaExecutor::get_last_error() const {
     return last_error_message_;
 }
 
+bool CudaExecutor::register_external_memory(void* ptr, size_t size) {
+    if (ptr == nullptr || size == 0) {
+        set_last_error("CUDA external memory registration requires a non-null pointer and non-zero size");
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(memory_mutex_);
+    if (allocated_memory_.find(ptr) != allocated_memory_.end()) {
+        set_last_error("CUDA external memory registration conflicts with an existing allocation");
+        return false;
+    }
+    allocated_memory_.emplace(ptr, AllocationRecord{size, AllocationKind::ExternalOptIn, false});
+    return true;
+}
+
+void CudaExecutor::unregister_external_memory(void* ptr) {
+    std::lock_guard<std::mutex> lock(memory_mutex_);
+    auto it = allocated_memory_.find(ptr);
+    if (it != allocated_memory_.end() && it->second.kind == AllocationKind::ExternalOptIn) {
+        allocated_memory_.erase(it);
+    }
+}
+
+bool CudaExecutor::validate_memory_range(const void* ptr, size_t size, const char* argument) const {
+    std::lock_guard<std::mutex> lock(memory_mutex_);
+    const auto it = allocated_memory_.find(const_cast<void*>(ptr));
+    if (it == allocated_memory_.end()) {
+        set_last_error(std::string("CUDA ") + argument + " memory was not allocated by this executor");
+        return false;
+    }
+    if (size > it->second.size) {
+        std::ostringstream oss;
+        oss << "CUDA " << argument << " memory range overflows its allocation (requested "
+            << size << " bytes, allocated " << it->second.size << " bytes)";
+        set_last_error(oss.str());
+        return false;
+    }
+    return true;
+}
+
 void CudaExecutor::wait_for_completion() {
     if (!is_available_) {
         return;
@@ -549,7 +588,12 @@ void* CudaExecutor::allocate_device_memory(size_t size) {
     }
 
     if (memory_manager_) {
-        return memory_manager_->allocate(size);
+        void* ptr = memory_manager_->allocate(size);
+        if (ptr != nullptr) {
+            std::lock_guard<std::mutex> lock(memory_mutex_);
+            allocated_memory_[ptr] = AllocationRecord{size, AllocationKind::Owned, false};
+        }
+        return ptr;
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
@@ -570,7 +614,7 @@ void* CudaExecutor::allocate_device_memory(size_t size) {
 
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        allocated_memory_[ptr] = size;
+        allocated_memory_[ptr] = AllocationRecord{size, AllocationKind::Owned, true};
     }
 
     return ptr;
@@ -586,6 +630,14 @@ void CudaExecutor::free_device_memory(void* ptr) {
     }
 
     if (memory_manager_) {
+        {
+            std::lock_guard<std::mutex> lock(memory_mutex_);
+            auto it = allocated_memory_.find(ptr);
+            if (it == allocated_memory_.end() || it->second.kind != AllocationKind::Owned) {
+                return;
+            }
+            allocated_memory_.erase(it);
+        }
         memory_manager_->free(ptr);
         return;
     }
@@ -602,10 +654,12 @@ void CudaExecutor::free_device_memory(void* ptr) {
 
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        if (allocated_memory_.find(ptr) == allocated_memory_.end()) {
+        auto it = allocated_memory_.find(ptr);
+        if (it == allocated_memory_.end() || it->second.kind != AllocationKind::Owned ||
+            !it->second.free_directly) {
             return;
         }
-        allocated_memory_.erase(ptr);
+        allocated_memory_.erase(it);
     }
 
     cudaError_t error = funcs.cudaFree(ptr);
@@ -643,7 +697,7 @@ void* CudaExecutor::allocate_unified_memory(size_t size) {
 
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        allocated_memory_[ptr] = size;
+        allocated_memory_[ptr] = AllocationRecord{size, AllocationKind::Owned, true};
     }
 
     return ptr;
@@ -670,10 +724,11 @@ void CudaExecutor::free_unified_memory(void* ptr) {
 
     {
         std::lock_guard<std::mutex> lock(memory_mutex_);
-        if (allocated_memory_.find(ptr) == allocated_memory_.end()) {
+        auto it = allocated_memory_.find(ptr);
+        if (it == allocated_memory_.end() || it->second.kind != AllocationKind::Owned) {
             return;
         }
-        allocated_memory_.erase(ptr);
+        allocated_memory_.erase(it);
     }
 
     cudaError_t error = funcs.cudaFree(ptr);
@@ -684,7 +739,7 @@ void CudaExecutor::free_unified_memory(void* ptr) {
 }
 
 bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, int stream_id) {
-    if (!is_available_ || !is_running_.load() || ptr == nullptr || !loader_->is_available()) {
+    if (!is_available_ || !is_running_.load() || ptr == nullptr) {
         return false;
     }
 
@@ -693,7 +748,15 @@ bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, 
         return false;  // 未启用统一内存
     }
 
+    if (!validate_memory_range(ptr, size, "prefetch")) {
+        return false;
+    }
+
 #ifdef EXECUTOR_ENABLE_CUDA
+    if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
+        return false;
+    }
     if (!ensure_device_context()) {
         return false;
     }
@@ -727,11 +790,19 @@ bool CudaExecutor::prefetch_memory(const void* ptr, size_t size, int device_id, 
 }
 
 bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
+    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr) {
+        return false;
+    }
+
+    if (!validate_memory_range(dst, size, "destination")) {
         return false;
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
+    if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
+        return false;
+    }
     if (!ensure_device_context()) {
         return false;
     }
@@ -777,11 +848,19 @@ bool CudaExecutor::copy_to_device(void* dst, const void* src, size_t size, bool 
 }
 
 bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
+    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr) {
+        return false;
+    }
+
+    if (!validate_memory_range(src, size, "source")) {
         return false;
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
+    if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
+        return false;
+    }
     if (!ensure_device_context()) {
         return false;
     }
@@ -827,11 +906,20 @@ bool CudaExecutor::copy_to_host(void* dst, const void* src, size_t size, bool as
 }
 
 bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
-    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr || !loader_->is_available()) {
+    if (!is_available_ || !is_running_.load() || dst == nullptr || src == nullptr) {
+        return false;
+    }
+
+    if (!validate_memory_range(dst, size, "destination") ||
+        !validate_memory_range(src, size, "source")) {
         return false;
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
+    if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
+        return false;
+    }
     if (!ensure_device_context()) {
         return false;
     }
@@ -878,8 +966,19 @@ bool CudaExecutor::copy_device_to_device(void* dst, const void* src, size_t size
 
 bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_ptr, void* dst_ptr,
                                   size_t size, bool async, int stream_id) {
-    if (!is_available_ || !is_running_.load() || !loader_->is_available() ||
+    if (!is_available_ || !is_running_.load() ||
         src_executor == nullptr || src_executor == this || src_ptr == nullptr || dst_ptr == nullptr) {
+        return false;
+    }
+
+    if (!validate_memory_range(dst_ptr, size, "P2P destination")) {
+        return false;
+    }
+    auto* cuda_source = dynamic_cast<CudaExecutor*>(src_executor);
+    if (cuda_source == nullptr || !cuda_source->validate_memory_range(src_ptr, size, "P2P source")) {
+        if (cuda_source == nullptr) {
+            set_last_error("CUDA P2P source memory was not allocated by a CUDA executor");
+        }
         return false;
     }
 
@@ -891,6 +990,10 @@ bool CudaExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_pt
     }
 
 #ifdef EXECUTOR_ENABLE_CUDA
+    if (!loader_->is_available()) {
+        set_last_error("CUDA loader is unavailable");
+        return false;
+    }
     auto funcs = loader_->get_functions();
     auto p2p_log = [this, &funcs](const char* step, bool use_cuda_err) {
         if (funcs.cudaGetLastError && funcs.cudaGetErrorString) {
@@ -1248,8 +1351,8 @@ GpuExecutorStatus CudaExecutor::get_status() const {
                 } else {
                     std::lock_guard<std::mutex> lock(memory_mutex_);
                     size_t allocated = 0;
-                    for (const auto& [ptr, size] : allocated_memory_) {
-                        allocated += size;
+                    for (const auto& [ptr, allocation] : allocated_memory_) {
+                        allocated += allocation.size;
                     }
                     status.memory_used_bytes = allocated;
                 }
