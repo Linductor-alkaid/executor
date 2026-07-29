@@ -94,7 +94,7 @@ public:
         // 初始化序列号
         for (size_t i = 0; i < capacity_; ++i) {
             sequences_[i].store(i, std::memory_order_relaxed);
-            states_[i].store(SlotState::Free, std::memory_order_relaxed);
+            states_[i].store(state_tag(i, SlotState::Free), std::memory_order_relaxed);
         }
     }
 
@@ -118,12 +118,12 @@ public:
             size_t index = pos & mask_;
             size_t seq = sequences_[index].load(std::memory_order_acquire);
             intptr_t diff = static_cast<intptr_t>(seq) - static_cast<intptr_t>(pos);
-            SlotState state = states_[index].load(std::memory_order_acquire);
+            SlotState state = slot_state(index);
 
             if (diff == 0 && slot_can_be_reserved(state)) {
                 // 槽位可用，尝试预留
                 if (enqueue_pos_.compare_exchange_weak(pos, pos + 1, std::memory_order_relaxed)) {
-                    if (!begin_write(index, state)) {
+                    if (!begin_write(index, pos)) {
                         record_push_failure(reservation_failure_reason(index, pos));
                         return false;
                     }
@@ -131,7 +131,8 @@ public:
                     sequences_[index].store(pos + 1, std::memory_order_release);
                     reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
                     ready_approx_.fetch_add(1, std::memory_order_relaxed);
-                    states_[index].store(SlotState::Published, std::memory_order_release);
+                    states_[index].store(state_tag(pos, SlotState::Published),
+                                         std::memory_order_release);
                     // 260610P013: relaxed load
                     if (stats_enabled_.load(std::memory_order_relaxed)) {
                         stats_.total_pushes.fetch_add(1, std::memory_order_relaxed);
@@ -200,7 +201,7 @@ public:
             for (size_t i = 0; i < count; ++i) {
                 const size_t index = (pos + i) & mask_;
                 if (sequences_[index].load(std::memory_order_acquire) != pos + i ||
-                    !slot_can_be_reserved(states_[index].load(std::memory_order_acquire))) {
+                    !slot_can_be_reserved(slot_state(index))) {
                     available = false;
                     break;
                 }
@@ -208,19 +209,18 @@ public:
             if (available && enqueue_pos_.compare_exchange_weak(pos, pos + count, std::memory_order_relaxed)) {
                 for (size_t i = 0; i < count; ++i) {
                     const size_t index = (pos + i) & mask_;
-                    SlotState state = states_[index].load(std::memory_order_acquire);
                     // Reserve the complete claimed range before any slot can
                     // enter the cancellable debug-hook window.  A consumer
                     // may then cancel stalled slots, but it can never advance
                     // into an unreserved Free slot in this batch.
-                    if (!reserve_slot(index, state)) {
+                    if (!reserve_slot(index, pos + i)) {
                         record_push_failure(reservation_failure_reason(index, pos + i));
                         return false;
                     }
                 }
                 for (size_t i = 0; i < count; ++i) {
                     const size_t index = (pos + i) & mask_;
-                    if (!finish_write_reservation(index)) {
+                    if (!finish_write_reservation(index, pos + i)) {
                         record_push_failure(reservation_failure_reason(index, pos + i));
                         return false;
                     }
@@ -228,7 +228,8 @@ public:
                     sequences_[index].store(pos + i + 1, std::memory_order_release);
                     reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
                     ready_approx_.fetch_add(1, std::memory_order_relaxed);
-                    states_[index].store(SlotState::Published, std::memory_order_release);
+                    states_[index].store(state_tag(pos + i, SlotState::Published),
+                                         std::memory_order_release);
                 }
                 if (stats_enabled_.load(std::memory_order_relaxed)) {
                     stats_.total_pushes.fetch_add(count, std::memory_order_relaxed);
@@ -277,30 +278,24 @@ public:
     /**
      * @brief 返回队列中当前的元素数量（近似值）
      *
-     * 本方法在多线程并发下读取 enqueue_pos_ 和 dequeue_pos_ 两个原子变量。
-     * 在 ARM/POWER 等弱内存序架构上,如果使用 relaxed 加载,编译器/CPU 可能把
-     * dequeue_pos_ 的读取重排到 enqueue_pos_ 之前,导致在 deq 刚刚被推进的
-     * 瞬间出现 enq < deq 的情况,触发 size_t 下溢,size() 返回一个巨大的
-     * 接近 SIZE_MAX 的值,引发调用方分配/拷贝异常甚至安全断言。
+     * 本方法读取 ready_approx_，它在发布元素时递增、在消费者移除元素时递减。
+     * 与独立读取 enqueue_pos_ 和 dequeue_pos_ 并相减不同，单个原子快照不会
+     * 因两个位置计数器的并发推进而产生暂时的负值或超过容量的值。
      *
-     * 修复:两个加载都改用 acquire,确保 enqueue_pos_ 看到的是 dequeue_pos_
-     * 推进之后的"最新"视图(以及相反),并用饱和减法保护下溢。
-     *
-     * 注意:此方法返回的是某瞬时快照,不是精确值(并发环境下两值仍可能小幅
-     * 不一致),仅供监控/统计用途,不可作为容量判定依据。
+     * 注意:此方法返回的是某瞬时快照,不是精确值,仅供监控/统计用途,
+     * 不可作为容量判定依据。尚未发布的预留槽位不计入 size()；可通过
+     * get_stats().reserved_count 观察。
      *
      * 在弱序架构 (ARM/POWER) 上的端到端正确性需要 CI 验证,本机 x86_64
      * TSO 模型下能掩盖此问题。
      *
-     * **与 empty() 的语义差异（260611P007 文档化）**：本方法基于 enqueue_pos_/dequeue_pos_
-     * 计数（容量统计视角），而 `empty()` 基于 sequences_（消费者就绪视角）。两者均为近似值，
+     * **与 empty() 的语义差异（260611P007 文档化）**：本方法基于 ready_approx_
+     * 计数，而 `empty()` 基于 sequences_（消费者就绪视角）。两者均为近似值，
      * 并发下可能短暂不一致。LockFreeTaskExecutor::pending_count() 本质上即调用本方法，
      * 故 pending_count() 也是近似值，不可用于精确同步。
      */
     size_t size() const {
-        size_t enq = enqueue_pos_.load(std::memory_order_acquire);
-        size_t deq = dequeue_pos_.load(std::memory_order_acquire);
-        return (enq >= deq) ? (enq - deq) : 0;
+        return ready_approx_.load(std::memory_order_relaxed);
     }
 
     size_t capacity() const {
@@ -352,7 +347,7 @@ public:
         result.reserved_count = 0;
         result.ready_count = 0;
         for (size_t i = 0; i < capacity_; ++i) {
-            SlotState state = states_[i].load(std::memory_order_acquire);
+            SlotState state = slot_state(i);
             if (state == SlotState::Reserved || state == SlotState::Writing) {
                 ++result.reserved_count;
             } else if (state == SlotState::Published) {
@@ -393,11 +388,20 @@ private:
         return state == SlotState::Free;
     }
 
-    bool reserve_slot(size_t index, SlotState previous_state) {
-        if (!slot_can_be_reserved(previous_state)) {
-            return false;
-        }
-        if (!states_[index].compare_exchange_strong(previous_state, SlotState::Reserved,
+    static constexpr size_t kStateBits = 3;
+    static constexpr size_t kStateMask = (size_t{1} << kStateBits) - 1;
+
+    static size_t state_tag(size_t position, SlotState state) {
+        return (position << kStateBits) | static_cast<size_t>(state);
+    }
+
+    SlotState slot_state(size_t index) const {
+        return static_cast<SlotState>(states_[index].load(std::memory_order_acquire) & kStateMask);
+    }
+
+    bool reserve_slot(size_t index, size_t position) {
+        size_t expected = state_tag(position, SlotState::Free);
+        if (!states_[index].compare_exchange_strong(expected, state_tag(position, SlotState::Reserved),
                                                     std::memory_order_acq_rel,
                                                     std::memory_order_acquire)) {
             return false;
@@ -409,22 +413,22 @@ private:
         return true;
     }
 
-    bool finish_write_reservation(size_t index) {
+    bool finish_write_reservation(size_t index, size_t position) {
         const auto hook_state = std::atomic_load_explicit(&before_publish_hook_, std::memory_order_acquire);
         if (hook_state && hook_state->hook != nullptr) {
             hook_state->hook(hook_state->context);
         }
-        SlotState expected = SlotState::Reserved;
-        return states_[index].compare_exchange_strong(expected, SlotState::Writing,
+        size_t expected = state_tag(position, SlotState::Reserved);
+        return states_[index].compare_exchange_strong(expected, state_tag(position, SlotState::Writing),
                                                        std::memory_order_acq_rel,
                                                        std::memory_order_acquire);
     }
 
-    bool begin_write(size_t index, SlotState previous_state) {
-        if (!reserve_slot(index, previous_state)) {
+    bool begin_write(size_t index, size_t position) {
+        if (!reserve_slot(index, position)) {
             return false;
         }
-        return finish_write_reservation(index);
+        return finish_write_reservation(index, position);
     }
 
     LockFreeQueueFailReason reservation_failure_reason(size_t index, size_t pos) const {
@@ -433,9 +437,9 @@ private:
             : LockFreeQueueFailReason::Contention;
     }
 
-    bool cancel_reservation(size_t index) {
+    bool cancel_reservation(size_t index, size_t position) {
         for (size_t spin = 0; spin < reservation_wait_yields_; ++spin) {
-            SlotState state = states_[index].load(std::memory_order_acquire);
+            SlotState state = slot_state(index);
             if (state == SlotState::Published) return false;
             if (state == SlotState::Writing) return false;
             // A reserved slot normally belongs to a producer that is ready to
@@ -447,15 +451,12 @@ private:
             std::this_thread::yield();
             PAUSE_INSTRUCTION();
         }
-        SlotState expected = states_[index].load(std::memory_order_acquire);
-        while (expected == SlotState::Free || expected == SlotState::Reserved) {
-            const bool was_reserved = expected == SlotState::Reserved;
-            if (states_[index].compare_exchange_weak(expected, SlotState::Cancelled,
+        size_t expected = state_tag(position, SlotState::Reserved);
+        while (expected == state_tag(position, SlotState::Reserved)) {
+            if (states_[index].compare_exchange_weak(expected, state_tag(position, SlotState::Cancelled),
                                                      std::memory_order_acq_rel,
                                                      std::memory_order_acquire)) {
-                if (was_reserved) {
-                    reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
-                }
+                reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
                 if (stats_enabled_.load(std::memory_order_relaxed)) {
                     stats_.cancelled_reservation_count.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -472,25 +473,34 @@ private:
 
         while (pos < enqueued && popped < max_count) {
             const size_t index = pos & mask_;
-            SlotState state = states_[index].load(std::memory_order_acquire);
+            SlotState state = slot_state(index);
             if (state == SlotState::Published &&
                 sequences_[index].load(std::memory_order_acquire) == pos + 1) {
                 items[popped++] = buffer_[index];
                 sequences_[index].store(pos + capacity_, std::memory_order_release);
-                states_[index].store(SlotState::Free, std::memory_order_release);
+                states_[index].store(state_tag(pos + capacity_, SlotState::Free),
+                                     std::memory_order_release);
                 ready_approx_.fetch_sub(1, std::memory_order_relaxed);
                 ++pos;
                 continue;
             }
             if (state == SlotState::Reserved) {
-                if (cancel_reservation(index)) {
+                if (cancel_reservation(index, pos)) {
                     sequences_[index].store(pos + capacity_, std::memory_order_release);
-                    states_[index].store(SlotState::Free, std::memory_order_release);
+                    states_[index].store(state_tag(pos + capacity_, SlotState::Free),
+                                         std::memory_order_release);
                     ++pos;
                     continue;
                 }
-                state = states_[index].load(std::memory_order_acquire);
+                state = slot_state(index);
                 if (state == SlotState::Published) continue;
+            }
+            if (state == SlotState::Cancelled) {
+                sequences_[index].store(pos + capacity_, std::memory_order_release);
+                states_[index].store(state_tag(pos + capacity_, SlotState::Free),
+                                     std::memory_order_release);
+                ++pos;
+                continue;
             }
             if (state == SlotState::Free) break;
             // A producer has begun the non-interruptible data-write window.
@@ -572,7 +582,7 @@ private:
 
         if (power > std::vector<T>().max_size() ||
             power > std::vector<std::atomic<size_t>>().max_size() ||
-            power > std::vector<std::atomic<SlotState>>().max_size()) {
+            power > std::vector<std::atomic<size_t>>().max_size()) {
             throw std::invalid_argument("LockFreeQueue capacity is too large to allocate");
         }
 
@@ -590,7 +600,9 @@ private:
     const size_t mask_;
     std::vector<T> buffer_;
     std::vector<std::atomic<size_t>> sequences_;
-    std::vector<std::atomic<SlotState>> states_;
+    // State tags include the absolute position so a delayed producer cannot
+    // transition a later reuse of the same ring slot after cancellation.
+    std::vector<std::atomic<size_t>> states_;
     alignas(64) std::atomic<size_t> enqueue_pos_;
     alignas(64) std::atomic<size_t> dequeue_pos_;
     // Approximate slot-state counters maintained on every transition.
