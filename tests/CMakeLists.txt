@@ -12,6 +12,7 @@ endif()
 file(GLOB TEST_SOURCES "*.cpp")
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_dispatch_task_fallback\\.cpp$")
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_object_pool_double_release_detect\\.cpp$")
+
 if(NOT (EXECUTOR_CUDA_ENABLED OR EXECUTOR_OPENCL_ENABLED))
     list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_gpu_executor_direct_config_validation\\.cpp$")
 endif()
@@ -90,6 +91,17 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     
     add_executable(${TEST_NAME} ${TEST_SOURCE})
 
+    # Keep CUDA memory validation runnable on hosts without a CUDA SDK.  The
+    # executor source uses its fallback CUDA types there, so this target can
+    # exercise the pre-driver validation gate without linking a CUDA runtime.
+    if(TEST_NAME STREQUAL "test_gpu_memory_validation" AND NOT EXECUTOR_CUDA_ENABLED)
+        target_sources(${TEST_NAME} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/cuda_executor.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/cuda_loader.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/gpu_memory_manager.cpp
+        )
+    endif()
+
     # 链接 executor 库和 GTest
     target_link_libraries(${TEST_NAME} PRIVATE executor GTest::GTest GTest::Main)
     
@@ -107,7 +119,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     
     # 如果是 CUDA/GPU 测试，添加 CUDA 头文件支持（不链接库，使用动态加载）
-    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_executor.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*" OR TEST_NAME MATCHES ".*gpu_dep_async.*" OR TEST_NAME MATCHES ".*gpu_wait_for_completion.*" OR TEST_NAME MATCHES ".*unified_memory.*") AND EXECUTOR_CUDA_ENABLED)
+    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_memory_validation.*" OR TEST_NAME MATCHES ".*gpu_executor.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*" OR TEST_NAME MATCHES ".*gpu_dep_async.*" OR TEST_NAME MATCHES ".*gpu_wait_for_completion.*" OR TEST_NAME MATCHES ".*unified_memory.*") AND EXECUTOR_CUDA_ENABLED)
         if(CUDA_INCLUDE_DIRS)
             target_include_directories(${TEST_NAME} SYSTEM PRIVATE ${CUDA_INCLUDE_DIRS})
         elseif(CUDAToolkit_INCLUDE_DIRS)
@@ -148,7 +160,11 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     
     # 添加测试
-    add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    if(TEST_NAME STREQUAL "test_gpu_memory_validation")
+        add_test(NAME CudaExecutorMemoryValidation COMMAND ${TEST_NAME})
+    else()
+        add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
+    endif()
     
     # 根据测试类型设置 LABELS 和 TIMEOUT
     # 单元测试
@@ -219,6 +235,11 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "benchmark"
             TIMEOUT 120
+        )
+    elseif(TEST_NAME STREQUAL "test_gpu_memory_validation")
+        set_tests_properties(CudaExecutorMemoryValidation PROPERTIES
+            LABELS "unit"
+            TIMEOUT 30
         )
     # 默认：单元测试
     else()
