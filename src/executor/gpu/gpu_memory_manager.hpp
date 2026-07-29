@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <set>
@@ -88,6 +89,9 @@ private:
     void* pool_backing_ = nullptr;   // 池后备块（仅 pool_size_ > 0 时使用）
     std::vector<FreeBlock> free_blocks_;
     std::set<void*> raw_alloced_blocks_;  // 经 raw_alloc 直接分配且未回收到池的块首地址
+    // Pool overflow blocks are returned to raw_free directly and never enter free_blocks_,
+    // so coalescing only operates on subranges of the single pool_backing_ allocation.
+    std::set<void*> direct_alloced_blocks_;
     std::unordered_map<void*, size_t> block_size_map_;  // block_start -> size，用于 free 时合并
     size_t total_allocated_ = 0;
     size_t allocation_count_ = 0;

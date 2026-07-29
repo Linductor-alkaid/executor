@@ -22,7 +22,13 @@ GpuMemoryManager::~GpuMemoryManager() {
             raw_free_(block);
         }
     }
+    for (void* block : direct_alloced_blocks_) {
+        if (raw_free_) {
+            raw_free_(block);
+        }
+    }
     raw_alloced_blocks_.clear();
+    direct_alloced_blocks_.clear();
     block_size_map_.clear();
     free_blocks_.clear();
 }
@@ -83,7 +89,7 @@ void* GpuMemoryManager::allocate(size_t size) {
     if (block == nullptr) {
         return nullptr;
     }
-    raw_alloced_blocks_.insert(block);
+    direct_alloced_blocks_.insert(block);
     block_size_map_[block] = size;
     total_allocated_ += size;
     allocation_count_++;
@@ -108,6 +114,12 @@ void GpuMemoryManager::free(void* ptr) {
 
     if (raw_alloced_blocks_.count(block_start) != 0) {
         raw_alloced_blocks_.erase(block_start);
+        raw_free_(block_start);
+        return;
+    }
+
+    if (direct_alloced_blocks_.count(block_start) != 0) {
+        direct_alloced_blocks_.erase(block_start);
         raw_free_(block_start);
         return;
     }
@@ -139,7 +151,8 @@ void GpuMemoryManager::coalesce_free_blocks() {
     }
     std::sort(free_blocks_.begin(), free_blocks_.end(),
               [](const FreeBlock& a, const FreeBlock& b) {
-                  return static_cast<char*>(a.ptr) < static_cast<char*>(b.ptr);
+                  return std::less<uintptr_t>{}(reinterpret_cast<uintptr_t>(a.ptr),
+                                                reinterpret_cast<uintptr_t>(b.ptr));
               });
     std::vector<FreeBlock> merged;
     merged.push_back(free_blocks_.front());
