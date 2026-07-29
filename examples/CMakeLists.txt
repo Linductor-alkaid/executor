@@ -28,6 +28,18 @@ endforeach()
 
 add_subdirectory(tutorial)
 
+if(TARGET cycle_manager_example)
+    add_dependencies(tutorial_examples cycle_manager_example)
+
+    if(BUILD_TESTING)
+        add_test(NAME cycle_manager_example COMMAND cycle_manager_example)
+        set_tests_properties(cycle_manager_example PROPERTIES
+            LABELS "tutorial;smoke"
+            TIMEOUT 15
+        )
+    endif()
+endif()
+
 # GPU 示例：仅在启用 GPU 时构建
 if(EXECUTOR_ENABLE_GPU)
     # 设备查询示例（CUDA或OpenCL任一可用即可）
