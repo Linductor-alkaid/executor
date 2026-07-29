@@ -6,13 +6,16 @@
 #include <functional>
 #include <type_traits>
 #include <vector>
+#include <deque>
 #include <thread>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include <chrono>
 #include <stdexcept>
 #include <utility>
+#include <iterator>
 
 namespace executor {
 
@@ -851,6 +854,17 @@ public:
      */
     virtual void wait_for_completion() = 0;
 
+    /**
+     * @brief Set the maximum number of unresolved dependency waiters.
+     *
+     * A submission above this limit completes immediately with an exception.
+     * This setting must be changed while the executor is stopped.
+     */
+    void set_max_pending_waiters(size_t max_pending_waiters) {
+        std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
+        max_pending_waiters_ = max_pending_waiters;
+    }
+
 protected:
     /**
      * @brief 提交 GPU kernel 实现（内部方法）
@@ -866,47 +880,124 @@ protected:
         const gpu::GpuTaskConfig& config) = 0;
 
     /**
-     * @brief 等待并清理所有 submit_kernel_after 产生的等待线程。
+     * @brief Start a generation of the bounded dependency waiter scheduler.
      *
-     * 派生类的 stop() 应在销毁内部状态前调用此方法，防止析构后
-     * waiter 线程访问已销毁成员（UAF）。
+     * One scheduler thread polls all unresolved dependencies at a short
+     * interval and submits ready kernels outside the scheduler lock.  This
+     * bounds both waiting threads (one per executor) and queued waiter state;
+     * submissions beyond max_pending_waiters_ fail immediately.  stop()
+     * closes admission, wakes this thread, cancels queued waiters, and joins
+     * the one scheduler thread before backend state is destroyed.
      */
     void start_waiter_generation() {
         std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
         ++waiter_generation_;
         accepting_waiters_ = true;
+        waiter_stop_requested_ = false;
+        waiter_thread_ = std::thread([this, generation = waiter_generation_] {
+            run_pending_waiters(generation);
+        });
     }
 
     void close_waiter_admission() {
-        std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
-        accepting_waiters_ = false;
-    }
-
-    void join_pending_waiters() {
-        std::vector<std::thread> to_join;
         {
             std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
             accepting_waiters_ = false;
-            to_join.swap(pending_waiters_);
+            waiter_stop_requested_ = true;
         }
-        for (auto& t : to_join) {
-            if (t.joinable()) {
-                t.join();
+        pending_waiters_cv_.notify_all();
+    }
+
+    void join_pending_waiters() {
+        std::thread waiter_thread;
+        {
+            std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
+            accepting_waiters_ = false;
+            waiter_stop_requested_ = true;
+            waiter_thread.swap(waiter_thread_);
+        }
+        pending_waiters_cv_.notify_all();
+        if (waiter_thread.joinable()) {
+            waiter_thread.join();
+        }
+    }
+
+    struct PendingWaiter {
+        std::shared_future<void> dependency;
+        std::function<void(void*)> kernel_func;
+        gpu::GpuTaskConfig config;
+        std::shared_ptr<std::promise<void>> promise;
+    };
+
+    void run_pending_waiters(uint64_t generation) {
+        for (;;) {
+            std::vector<PendingWaiter> ready_waiters;
+            std::vector<PendingWaiter> cancelled_waiters;
+            bool stopping = false;
+            {
+                std::unique_lock<std::mutex> lk(pending_waiters_mutex_);
+                pending_waiters_cv_.wait_for(lk, std::chrono::milliseconds(10), [this, generation] {
+                    return waiter_stop_requested_ || waiter_generation_ != generation;
+                });
+
+                if (waiter_stop_requested_ || waiter_generation_ != generation) {
+                    stopping = true;
+                    cancelled_waiters.assign(
+                        std::make_move_iterator(pending_waiters_.begin()),
+                        std::make_move_iterator(pending_waiters_.end()));
+                    pending_waiters_.clear();
+                } else {
+                    auto waiter = pending_waiters_.begin();
+                    while (waiter != pending_waiters_.end()) {
+                        if (waiter->dependency.wait_for(std::chrono::seconds(0)) ==
+                            std::future_status::ready) {
+                            ready_waiters.push_back(std::move(*waiter));
+                            waiter = pending_waiters_.erase(waiter);
+                        } else {
+                            ++waiter;
+                        }
+                    }
+                }
+            }
+
+            for (auto& waiter : cancelled_waiters) {
+                waiter.promise->set_exception(std::make_exception_ptr(
+                    std::runtime_error("executor stopped before dependency completed")));
+            }
+            if (stopping) {
+                return;
+            }
+
+            for (auto& waiter : ready_waiters) {
+                try {
+                    if (!waiter_generation_is_active(generation)) {
+                        throw std::runtime_error("executor stopped before dependency completed");
+                    }
+                    auto inner_future = submit_kernel_impl(std::move(waiter.kernel_func), waiter.config);
+                    inner_future.get();
+                    waiter.promise->set_value();
+                } catch (...) {
+                    waiter.promise->set_exception(std::current_exception());
+                }
             }
         }
     }
 
     bool waiter_generation_is_active(uint64_t generation) {
         std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
-        return accepting_waiters_ && waiter_generation_ == generation;
+        return accepting_waiters_ && !waiter_stop_requested_ && waiter_generation_ == generation;
     }
 
-    // The lock protects both the waiter list and admission state, so stop()
-    // cannot miss a waiter that was registered concurrently with it.
-    std::mutex               pending_waiters_mutex_;
-    std::vector<std::thread> pending_waiters_;
-    uint64_t                 waiter_generation_{0};
-    bool                     accepting_waiters_{false};
+    // The lock protects both waiter state and admission, so stop() cannot
+    // miss a submission registered concurrently with it.
+    std::mutex                    pending_waiters_mutex_;
+    std::condition_variable       pending_waiters_cv_;
+    std::deque<PendingWaiter>     pending_waiters_;
+    std::thread                   waiter_thread_;
+    uint64_t                      waiter_generation_{0};
+    size_t                        max_pending_waiters_{256};
+    bool                          accepting_waiters_{false};
+    bool                          waiter_stop_requested_{false};
 };
 
 // 模板方法实现
@@ -940,23 +1031,6 @@ inline std::vector<std::future<void>> IGpuExecutor::submit_kernels_batch(
 template<typename KernelFunc>
 auto IGpuExecutor::submit_kernel_after(std::shared_future<void> dependency, KernelFunc&& kernel,
                                        const gpu::GpuTaskConfig& config) -> std::future<void> {
-    // P-005 fix: 旧实现在 worker 线程的 lambda 中直接 dep.wait(),
-    // 会阻塞单一 GPU worker,后续无依赖任务全部饿死。
-    //
-    // 新实现: dep.wait() 移到独立 std::thread,等依赖完成后再通过
-    // submit_kernel_impl 把真正的 kernel 重新入队,worker 线程立即
-    // 可处理其它任务。
-    //
-    // 限制 (选项 B, 最小可行修复):
-    //   - 每个 submit_kernel_after 启一个 std::thread。线程创建有
-    //     固定开销 (~数十 us + 8MB stack),大规模依赖链 (>>千级)
-    //     短暂 burst 场景下会比"阻塞 worker"更糟。计划在后续 P
-    //     中用 CUDA event + 共享等待线程池(选项 A)替换。
-    //   - 独立 thread 中调用 submit_kernel_impl 需要类成员上下文
-    //     (protected 虚函数),此处合法,因为 lambda 继承自 IGpuExecutor。
-    //   - 失败/超时: dep.wait() 在 std::future 上无超时 API;
-    //     若 dep 永远不完成,独立线程会永久存活,但不会影响 worker。
-    //     调用方应避免传入永远不完成的 future。
     std::shared_future<void> dep = std::move(dependency);
 
     // 构造"去 dep 等待"的 kernel lambda,这样重新入队时 worker 线程
@@ -976,9 +1050,6 @@ auto IGpuExecutor::submit_kernel_after(std::shared_future<void> dependency, Kern
     auto promise = std::make_shared<std::promise<void>>();
     auto result_future = promise->get_future();
 
-    // Registration and stop() share pending_waiters_mutex_.  Either the waiter
-    // is present in the list stop() joins, or admission is already closed and
-    // this call returns an exceptional future without creating a thread.
     {
         std::lock_guard<std::mutex> lk(pending_waiters_mutex_);
         if (!accepting_waiters_) {
@@ -986,37 +1057,15 @@ auto IGpuExecutor::submit_kernel_after(std::shared_future<void> dependency, Kern
                 std::runtime_error("executor is stopped")));
             return result_future;
         }
-
-        const uint64_t generation = waiter_generation_;
-        try {
-            pending_waiters_.emplace_back(
-                [dep, kernel_func = std::move(kernel_func), config, promise,
-                 this, generation]() mutable {
-                    try {
-                        while (dep.wait_for(std::chrono::milliseconds(10)) !=
-                               std::future_status::ready) {
-                            if (!waiter_generation_is_active(generation)) {
-                                promise->set_exception(std::make_exception_ptr(
-                                    std::runtime_error("executor stopped before dependency completed")));
-                                return;
-                            }
-                        }
-                        if (!waiter_generation_is_active(generation)) {
-                            promise->set_exception(std::make_exception_ptr(
-                                std::runtime_error("executor stopped before dependency completed")));
-                            return;
-                        }
-                        auto inner_future = submit_kernel_impl(std::move(kernel_func), config);
-                        inner_future.get();
-                        promise->set_value();
-                    } catch (...) {
-                        promise->set_exception(std::current_exception());
-                    }
-                });
-        } catch (...) {
-            promise->set_exception(std::current_exception());
+        if (pending_waiters_.size() >= max_pending_waiters_) {
+            promise->set_exception(std::make_exception_ptr(
+                std::runtime_error("too many pending gpu dependencies; waiter pool saturated")));
+            return result_future;
         }
+        pending_waiters_.push_back(
+            PendingWaiter{std::move(dep), std::move(kernel_func), config, promise});
     }
+    pending_waiters_cv_.notify_one();
     return result_future;
 }
 
