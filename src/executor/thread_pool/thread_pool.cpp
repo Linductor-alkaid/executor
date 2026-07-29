@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstdio>
+#include <limits>
 #include <random>
 #include <new>
 #include <vector>
@@ -31,6 +32,13 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
     }
     
     config_ = config;
+    constexpr int64_t kMaxTaskTimeoutMs =
+        std::numeric_limits<int64_t>::max() / 1'000'000;
+    if (config_.task_timeout_ms > kMaxTaskTimeoutMs) {
+        // Saturate instead of allowing the later milliseconds-to-nanoseconds
+        // conversion to overflow and make a far-future timeout appear expired.
+        config_.task_timeout_ms = kMaxTaskTimeoutMs;
+    }
 
     try {
         stop_.store(false);

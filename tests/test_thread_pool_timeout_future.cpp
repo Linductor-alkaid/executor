@@ -3,6 +3,7 @@
 #include <exception>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <thread>
 
@@ -145,12 +146,42 @@ bool test_executor_timeout_satisfies_future_and_failure_status() {
     return true;
 }
 
+bool test_extreme_timeout_does_not_overflow() {
+    std::cout << "Testing ThreadPool extreme timeout saturation..." << std::endl;
+
+    ThreadPool pool;
+    ThreadPoolConfig config;
+    config.min_threads = 1;
+    config.max_threads = 1;
+    config.task_timeout_ms = std::numeric_limits<int64_t>::max() / 2;
+    TEST_ASSERT(pool.initialize(config), "thread pool should initialize");
+
+    std::atomic<bool> task_ran{false};
+    auto result = pool.submit([&task_ran]() {
+        task_ran.store(true, std::memory_order_release);
+        return 42;
+    });
+
+    TEST_ASSERT(result.get() == 42, "extreme-timeout task should complete");
+    pool.wait_for_completion();
+    TEST_ASSERT(task_ran.load(std::memory_order_acquire),
+                "extreme-timeout task function should run");
+    TEST_ASSERT(pool.get_timeout_count() == 0,
+                "extreme timeout should not increment timeout_count");
+
+    pool.shutdown();
+
+    std::cout << "  ThreadPool extreme timeout saturation: PASSED" << std::endl;
+    return true;
+}
+
 }  // namespace
 
 int main() {
     bool all_passed = true;
     all_passed &= test_thread_pool_timeout_satisfies_future_and_monitor();
     all_passed &= test_executor_timeout_satisfies_future_and_failure_status();
+    all_passed &= test_extreme_timeout_does_not_overflow();
 
     if (all_passed) {
         std::cout << "All thread pool timeout future tests passed."
