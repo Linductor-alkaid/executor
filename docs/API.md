@@ -1441,9 +1441,15 @@ public:
 
 ```cpp
 #include <executor/executor.hpp>
+#include <algorithm>
+#include <chrono>
+#include <functional>
 #include <thread>
 #include <mutex>
+#include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 class SimpleCycleManager : public executor::ICycleManager {
 public:
@@ -1461,6 +1467,10 @@ public:
         return true;
     }
 
+    ~SimpleCycleManager() override {
+        stop_all_cycles();
+    }
+
     bool start_cycle(const std::string& name) override {
         CycleInfo info;
         {
@@ -1469,41 +1479,53 @@ public:
             if (it == cycles_.end()) {
                 return false;
             }
+            const auto worker = std::find_if(cycle_threads_.begin(), cycle_threads_.end(),
+                [&name](const auto& entry) { return entry.first == name; });
+            if (worker != cycle_threads_.end()) {
+                return false;
+            }
             info = it->second;
             stop_requested_[name] = false;
-        }
+            cycle_threads_.emplace_back(name, std::thread([this, name, info]() {
+                auto next_cycle_time = std::chrono::steady_clock::now();
+                const auto period_ns = std::chrono::nanoseconds(info.period_ns);
 
-        // 在独立线程中运行周期循环
-        std::thread cycle_thread([this, name, info]() {
-            auto next_cycle_time = std::chrono::steady_clock::now();
-            const auto period_ns = std::chrono::nanoseconds(info.period_ns);
-
-            while (true) {
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    if (stop_requested_[name]) {
-                        break;
+                while (true) {
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        if (stop_requested_[name]) {
+                            break;
+                        }
                     }
-                }
 
-                // 执行周期回调
-                if (info.callback) {
-                    info.callback();
-                }
+                    if (info.callback) {
+                        info.callback();
+                    }
 
-                // 等待下一个周期
-                next_cycle_time += period_ns;
-                std::this_thread::sleep_until(next_cycle_time);
-            }
-        });
-        cycle_thread.detach();
+                    next_cycle_time += period_ns;
+                    std::this_thread::sleep_until(next_cycle_time);
+                }
+            }));
+        }
 
         return true;
     }
 
     void stop_cycle(const std::string& name) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_requested_[name] = true;
+        std::thread cycle_thread;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_requested_[name] = true;
+            const auto worker = std::find_if(cycle_threads_.begin(), cycle_threads_.end(),
+                [&name](const auto& entry) { return entry.first == name; });
+            if (worker != cycle_threads_.end()) {
+                cycle_thread = std::move(worker->second);
+                cycle_threads_.erase(worker);
+            }
+        }
+        if (cycle_thread.joinable()) {
+            cycle_thread.join();
+        }
     }
 
     executor::CycleStatistics get_statistics(const std::string& name) const override {
@@ -1514,11 +1536,35 @@ public:
     }
 
 private:
+    void stop_all_cycles() {
+        std::vector<std::thread> cycle_threads;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            for (auto& stop_requested : stop_requested_) {
+                stop_requested.second = true;
+            }
+            for (auto& worker : cycle_threads_) {
+                cycle_threads.push_back(std::move(worker.second));
+            }
+            cycle_threads_.clear();
+        }
+        for (auto& cycle_thread : cycle_threads) {
+            if (cycle_thread.joinable()) {
+                cycle_thread.join();
+            }
+        }
+    }
+
     std::unordered_map<std::string, CycleInfo> cycles_;
     std::unordered_map<std::string, bool> stop_requested_;
+    std::vector<std::pair<std::string, std::thread>> cycle_threads_;
     mutable std::mutex mutex_;
 };
 ```
+
+`SimpleCycleManager` owns each worker thread. `stop_cycle()` signals and joins the
+matching worker; its destructor signals and joins every remaining worker before
+destroying callbacks or synchronization state.
 
 ### 9.4 注入到实时线程配置
 
