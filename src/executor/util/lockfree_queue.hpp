@@ -86,6 +86,8 @@ public:
         , states_(capacity_)
         , enqueue_pos_(0)
         , dequeue_pos_(0)
+        , reserved_approx_(0)
+        , ready_approx_(0)
         , backoff_multiplier_(normalize_backoff_multiplier(backoff_multiplier))
         , reservation_wait_yields_(reservation_wait_yields)
         , stats_enabled_(enable_stats) {
@@ -127,6 +129,8 @@ public:
                     }
                     buffer_[index] = item;
                     sequences_[index].store(pos + 1, std::memory_order_release);
+                    reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
+                    ready_approx_.fetch_add(1, std::memory_order_relaxed);
                     states_[index].store(SlotState::Published, std::memory_order_release);
                     // 260610P013: relaxed load
                     if (stats_enabled_.load(std::memory_order_relaxed)) {
@@ -222,6 +226,8 @@ public:
                     }
                     buffer_[index] = items[i];
                     sequences_[index].store(pos + i + 1, std::memory_order_release);
+                    reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
+                    ready_approx_.fetch_add(1, std::memory_order_relaxed);
                     states_[index].store(SlotState::Published, std::memory_order_release);
                 }
                 if (stats_enabled_.load(std::memory_order_relaxed)) {
@@ -324,11 +330,27 @@ public:
         result.current_size = size();
         result.peak_size = stats_.peak_size.load(std::memory_order_relaxed);
         result.reservation_count = stats_.reservation_count.load(std::memory_order_relaxed);
+        result.reserved_count = reserved_approx_.load(std::memory_order_relaxed);
+        result.ready_count = ready_approx_.load(std::memory_order_relaxed);
         result.cancelled_reservation_count =
             stats_.cancelled_reservation_count.load(std::memory_order_relaxed);
         result.reservation_wait_yields = reservation_wait_yields_;
         result.fail_reason = static_cast<LockFreeQueueFailReason>(
             stats_.fail_reason.load(std::memory_order_relaxed));
+        return result;
+    }
+
+    /**
+     * @brief Returns a full per-slot diagnostic snapshot.
+     *
+     * O(capacity), do not call in hot paths. This is a non-synchronized
+     * diagnostic snapshot and may observe concurrent state transitions.
+     */
+    [[nodiscard]] LockFreeQueueStats expensive_diagnostic_snapshot() const {
+        LockFreeQueueStats result = get_stats();
+        if (!stats_enabled_.load(std::memory_order_relaxed)) return result;
+        result.reserved_count = 0;
+        result.ready_count = 0;
         for (size_t i = 0; i < capacity_; ++i) {
             SlotState state = states_[i].load(std::memory_order_acquire);
             if (state == SlotState::Reserved || state == SlotState::Writing) {
@@ -380,6 +402,7 @@ private:
                                                     std::memory_order_acquire)) {
             return false;
         }
+        reserved_approx_.fetch_add(1, std::memory_order_relaxed);
         if (stats_enabled_.load(std::memory_order_relaxed)) {
             stats_.reservation_count.fetch_add(1, std::memory_order_relaxed);
         }
@@ -426,9 +449,13 @@ private:
         }
         SlotState expected = states_[index].load(std::memory_order_acquire);
         while (expected == SlotState::Free || expected == SlotState::Reserved) {
+            const bool was_reserved = expected == SlotState::Reserved;
             if (states_[index].compare_exchange_weak(expected, SlotState::Cancelled,
                                                      std::memory_order_acq_rel,
                                                      std::memory_order_acquire)) {
+                if (was_reserved) {
+                    reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
+                }
                 if (stats_enabled_.load(std::memory_order_relaxed)) {
                     stats_.cancelled_reservation_count.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -451,6 +478,7 @@ private:
                 items[popped++] = buffer_[index];
                 sequences_[index].store(pos + capacity_, std::memory_order_release);
                 states_[index].store(SlotState::Free, std::memory_order_release);
+                ready_approx_.fetch_sub(1, std::memory_order_relaxed);
                 ++pos;
                 continue;
             }
@@ -565,6 +593,9 @@ private:
     std::vector<std::atomic<SlotState>> states_;
     alignas(64) std::atomic<size_t> enqueue_pos_;
     alignas(64) std::atomic<size_t> dequeue_pos_;
+    // Approximate slot-state counters maintained on every transition.
+    alignas(64) std::atomic<size_t> reserved_approx_;
+    alignas(64) std::atomic<size_t> ready_approx_;
     // Valid range: [1, kMaxBackoffMultiplier]. Constructor rejects 0 and
     // clamps larger values to keep scaled pause-loop arithmetic bounded.
     const size_t backoff_multiplier_;

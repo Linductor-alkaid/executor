@@ -356,6 +356,43 @@ TEST(LockFreeQueueSizeTest, ConcurrentPushBatchDrainPreservesAccounting) {
     EXPECT_GE(stats.failed_pushes, failed_pushes.load(std::memory_order_relaxed));
 }
 
+TEST(LockFreeQueueStatusTest, SnapshotDoesNotScaleWithCapacity) {
+    constexpr size_t kSmallCapacity = 1u << 10;
+    constexpr size_t kLargeCapacity = 1u << 20;
+    constexpr size_t kReadyItems = 100;
+    constexpr size_t kSamples = 10000;
+
+    LockFreeQueue<int> small(kSmallCapacity, 1, /*enable_stats=*/true);
+    LockFreeQueue<int> large(kLargeCapacity, 1, /*enable_stats=*/true);
+    for (size_t item = 0; item < kReadyItems; ++item) {
+        ASSERT_TRUE(small.push(static_cast<int>(item)));
+        ASSERT_TRUE(large.push(static_cast<int>(item)));
+    }
+
+    const LockFreeQueueStats small_stats = small.get_stats();
+    const LockFreeQueueStats large_stats = large.get_stats();
+    EXPECT_EQ(small_stats.reserved_count, 0u);
+    EXPECT_EQ(large_stats.reserved_count, 0u);
+    EXPECT_EQ(small_stats.ready_count, kReadyItems);
+    EXPECT_EQ(large_stats.ready_count, kReadyItems);
+
+    const auto sample = [](const LockFreeQueue<int>& queue) {
+        size_t ready_total = 0;
+        const auto start = std::chrono::steady_clock::now();
+        for (size_t sample_index = 0; sample_index < kSamples; ++sample_index) {
+            ready_total += queue.get_stats().ready_count;
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - start;
+        EXPECT_EQ(ready_total, kSamples * kReadyItems);
+        return elapsed;
+    };
+
+    const auto small_duration = sample(small);
+    const auto large_duration = sample(large);
+    EXPECT_LT(large_duration, small_duration * 10)
+        << "get_stats() must remain O(1) as queue capacity grows";
+}
+
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
