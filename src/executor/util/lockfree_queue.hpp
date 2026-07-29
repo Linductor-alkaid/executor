@@ -277,30 +277,24 @@ public:
     /**
      * @brief 返回队列中当前的元素数量（近似值）
      *
-     * 本方法在多线程并发下读取 enqueue_pos_ 和 dequeue_pos_ 两个原子变量。
-     * 在 ARM/POWER 等弱内存序架构上,如果使用 relaxed 加载,编译器/CPU 可能把
-     * dequeue_pos_ 的读取重排到 enqueue_pos_ 之前,导致在 deq 刚刚被推进的
-     * 瞬间出现 enq < deq 的情况,触发 size_t 下溢,size() 返回一个巨大的
-     * 接近 SIZE_MAX 的值,引发调用方分配/拷贝异常甚至安全断言。
+     * 本方法读取 ready_approx_，它在发布元素时递增、在消费者移除元素时递减。
+     * 与独立读取 enqueue_pos_ 和 dequeue_pos_ 并相减不同，单个原子快照不会
+     * 因两个位置计数器的并发推进而产生暂时的负值或超过容量的值。
      *
-     * 修复:两个加载都改用 acquire,确保 enqueue_pos_ 看到的是 dequeue_pos_
-     * 推进之后的"最新"视图(以及相反),并用饱和减法保护下溢。
-     *
-     * 注意:此方法返回的是某瞬时快照,不是精确值(并发环境下两值仍可能小幅
-     * 不一致),仅供监控/统计用途,不可作为容量判定依据。
+     * 注意:此方法返回的是某瞬时快照,不是精确值,仅供监控/统计用途,
+     * 不可作为容量判定依据。尚未发布的预留槽位不计入 size()；可通过
+     * get_stats().reserved_count 观察。
      *
      * 在弱序架构 (ARM/POWER) 上的端到端正确性需要 CI 验证,本机 x86_64
      * TSO 模型下能掩盖此问题。
      *
-     * **与 empty() 的语义差异（260611P007 文档化）**：本方法基于 enqueue_pos_/dequeue_pos_
-     * 计数（容量统计视角），而 `empty()` 基于 sequences_（消费者就绪视角）。两者均为近似值，
+     * **与 empty() 的语义差异（260611P007 文档化）**：本方法基于 ready_approx_
+     * 计数，而 `empty()` 基于 sequences_（消费者就绪视角）。两者均为近似值，
      * 并发下可能短暂不一致。LockFreeTaskExecutor::pending_count() 本质上即调用本方法，
      * 故 pending_count() 也是近似值，不可用于精确同步。
      */
     size_t size() const {
-        size_t enq = enqueue_pos_.load(std::memory_order_acquire);
-        size_t deq = dequeue_pos_.load(std::memory_order_acquire);
-        return (enq >= deq) ? (enq - deq) : 0;
+        return ready_approx_.load(std::memory_order_relaxed);
     }
 
     size_t capacity() const {
@@ -448,14 +442,11 @@ private:
             PAUSE_INSTRUCTION();
         }
         SlotState expected = states_[index].load(std::memory_order_acquire);
-        while (expected == SlotState::Free || expected == SlotState::Reserved) {
-            const bool was_reserved = expected == SlotState::Reserved;
+        while (expected == SlotState::Reserved) {
             if (states_[index].compare_exchange_weak(expected, SlotState::Cancelled,
                                                      std::memory_order_acq_rel,
                                                      std::memory_order_acquire)) {
-                if (was_reserved) {
-                    reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
-                }
+                reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
                 if (stats_enabled_.load(std::memory_order_relaxed)) {
                     stats_.cancelled_reservation_count.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -491,6 +482,12 @@ private:
                 }
                 state = states_[index].load(std::memory_order_acquire);
                 if (state == SlotState::Published) continue;
+            }
+            if (state == SlotState::Cancelled) {
+                sequences_[index].store(pos + capacity_, std::memory_order_release);
+                states_[index].store(SlotState::Free, std::memory_order_release);
+                ++pos;
+                continue;
             }
             if (state == SlotState::Free) break;
             // A producer has begun the non-interruptible data-write window.
