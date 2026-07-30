@@ -4,6 +4,8 @@
 #include <mutex>
 #include <functional>
 
+#include "loaded_library_lease.hpp"
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -72,6 +74,7 @@ using clWaitForEventsFunc = cl_int (*)(cl_uint, const cl_event*);
 using clReleaseEventFunc = cl_int (*)(cl_event);
 
 struct OpenCLFunctionPointers {
+    LoadedLibraryLease library_lease;
     clGetPlatformIDsFunc clGetPlatformIDs = nullptr;
     clGetDeviceIDsFunc clGetDeviceIDs = nullptr;
     clGetDeviceInfoFunc clGetDeviceInfo = nullptr;
@@ -115,13 +118,24 @@ public:
     OpenCLLoader& operator=(const OpenCLLoader&) = delete;
 
     bool load();
+    /**
+     * @brief 放弃加载器持有的 OpenCL DLL 引用
+     *
+     * 已获取的函数表仍持有库租约，因此不会因此调用悬空函数指针。
+     */
     void unload();
+    /**
+     * @brief 放弃加载器引用，并报告 DLL 是否已实际卸载
+     *
+     * @return true 表示没有函数表租约保留 DLL；false 表示仍有调用方租约
+     */
+    bool unload_if_idle();
     bool is_available() const;
     /**
-     * @brief 获取 OpenCL 函数指针集合（按值返回以保证线程安全）
+     * @brief 获取带 DLL 租约的 OpenCL 函数指针集合
      *
-     * 返回函数指针集合的拷贝而非引用,即便其他线程并发调用 unload()
-     * 也不会让副本悬空。锁在拷贝期间持有,出函数即释放。
+     * 返回值同时复制函数指针并持有 DLL 租约。即便其他线程调用 unload()
+     * 或 unload_if_idle()，函数指针也会在返回值存活期间保持有效。
      */
     OpenCLFunctionPointers get_functions() const;
     std::string get_dll_path() const;
@@ -149,6 +163,8 @@ private:
     void* dll_handle_;
 #endif
     OpenCLFunctionPointers functions_;
+    std::shared_ptr<LoadedLibraryLease::Library> library_;
+    std::weak_ptr<LoadedLibraryLease::Library> last_library_;
     std::function<void*(const char*)> function_resolver_;
 };
 

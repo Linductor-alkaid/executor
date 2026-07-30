@@ -66,31 +66,44 @@ bool CudaLoader::load() {
 
     is_loaded_ = true;
     dll_path_ = dll_path;
+    library_ = std::make_shared<LoadedLibraryLease::Library>(dll_handle_);
+    last_library_ = library_;
     return true;
 }
 
 void CudaLoader::unload() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    (void)unload_if_idle();
+}
 
+bool CudaLoader::unload_if_idle() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const bool can_unload = library_ ? library_.use_count() == 1 : last_library_.expired();
     unload_locked();
+    return can_unload;
 }
 
 void CudaLoader::unload_locked() {
     // 清空函数指针
     functions_ = CudaFunctionPointers{};
 
-    // 卸载DLL
+    // 放弃加载器持有的引用；函数表租约会延迟实际卸载。
+    if (library_) {
+        library_.reset();
+        dll_handle_ = nullptr;
+    } else {
+        // 仅处理 load_functions() 失败时尚未创建租约的句柄。
 #ifdef _WIN32
-    if (dll_handle_ != nullptr) {
-        FreeLibrary(dll_handle_);
-        dll_handle_ = nullptr;
-    }
+        if (dll_handle_ != nullptr) {
+            FreeLibrary(dll_handle_);
+            dll_handle_ = nullptr;
+        }
 #else
-    if (dll_handle_ != nullptr) {
-        dlclose(dll_handle_);
-        dll_handle_ = nullptr;
-    }
+        if (dll_handle_ != nullptr) {
+            dlclose(dll_handle_);
+            dll_handle_ = nullptr;
+        }
 #endif
+    }
 
     is_loaded_ = false;
     dll_path_.clear();
@@ -102,11 +115,10 @@ bool CudaLoader::is_available() const {
 }
 
 CudaFunctionPointers CudaLoader::get_functions() const {
-    // 按值返回以避免悬空引用:
-    // 拷贝在锁内完成,出函数时锁释放,调用方持有的副本与 loader
-    // 内部状态脱钩,即使其他线程随后 unload() 也不会影响本副本。
     std::lock_guard<std::mutex> lock(mutex_);
-    return functions_;
+    auto functions = functions_;
+    functions.library_lease = LoadedLibraryLease(library_);
+    return functions;
 }
 
 std::string CudaLoader::get_dll_path() const {

@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <future>
 #include <string>
+#include <thread>
 
 #define private public
 #include "executor/gpu/cuda_loader.hpp"
@@ -15,6 +17,14 @@ using executor::gpu::CudaLoader;
 using executor::gpu::OpenCLLoader;
 
 namespace {
+
+cudaError_t cuda_test_symbol() {
+    return cudaSuccess;
+}
+
+cl_int opencl_test_symbol(cl_command_queue) {
+    return CL_SUCCESS;
+}
 
 class LoaderLibraryPathScope {
 public:
@@ -59,6 +69,44 @@ void verify_failed_load_can_retry(Loader& loader) {
     loader.function_resolver_ = {};
 }
 
+template <typename Loader, typename InvokeTestSymbol>
+void verify_function_table_lease_survives_concurrent_unload(
+    Loader& loader, InvokeTestSymbol invoke_test_symbol) {
+    loader.unload();
+    LoaderLibraryPathScope library_path;
+    loader.function_resolver_ = [](const char* function_name) {
+        if (std::string(function_name) == "cudaGetLastError") {
+            return reinterpret_cast<void*>(&cuda_test_symbol);
+        }
+        if (std::string(function_name) == "clFinish") {
+            return reinterpret_cast<void*>(&opencl_test_symbol);
+        }
+        return reinterpret_cast<void*>(&std::rand);
+    };
+    ASSERT_TRUE(loader.load());
+
+    auto functions = loader.get_functions();
+    ASSERT_TRUE(functions.library_lease.valid());
+
+    std::atomic<bool> saw_deferred_unload{false};
+    std::thread unloader([&] {
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            if (!loader.unload_if_idle()) {
+                saw_deferred_unload.store(true, std::memory_order_relaxed);
+            }
+        }
+    });
+    unloader.join();
+
+    EXPECT_TRUE(saw_deferred_unload.load(std::memory_order_relaxed));
+    invoke_test_symbol(functions);
+
+    functions = {};
+    EXPECT_TRUE(loader.unload_if_idle());
+    EXPECT_EQ(loader.dll_handle_, nullptr);
+    loader.function_resolver_ = {};
+}
+
 }  // namespace
 
 TEST(CudaLoaderTest, LoaderLoadFunctionsFailureDoesNotDeadlock) {
@@ -67,4 +115,20 @@ TEST(CudaLoaderTest, LoaderLoadFunctionsFailureDoesNotDeadlock) {
 
 TEST(OpenCLLoaderTest, LoaderLoadFunctionsFailureDoesNotDeadlock) {
     verify_failed_load_can_retry(OpenCLLoader::instance());
+}
+
+TEST(CudaLoaderTest, LoaderFunctionTableLeaseSurvivesConcurrentUnload) {
+    verify_function_table_lease_survives_concurrent_unload(
+        CudaLoader::instance(), [](const auto& functions) {
+            ASSERT_NE(functions.cudaGetLastError, nullptr);
+            EXPECT_EQ(functions.cudaGetLastError(), cudaSuccess);
+        });
+}
+
+TEST(OpenCLLoaderTest, LoaderFunctionTableLeaseSurvivesConcurrentUnload) {
+    verify_function_table_lease_survives_concurrent_unload(
+        OpenCLLoader::instance(), [](const auto& functions) {
+            ASSERT_NE(functions.clFinish, nullptr);
+            EXPECT_EQ(functions.clFinish(nullptr), CL_SUCCESS);
+        });
 }
