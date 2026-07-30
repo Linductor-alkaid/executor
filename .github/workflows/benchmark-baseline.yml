@@ -1,0 +1,67 @@
+name: Lockfree benchmark baseline
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Capture informational MPSC baseline
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Release benchmark build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEXECUTOR_BUILD_TESTS=ON \
+            -DEXECUTOR_BUILD_EXAMPLES=OFF \
+            -DEXECUTOR_ENABLE_GPU=OFF \
+            -DEXECUTOR_ENABLE_COVERAGE=OFF
+
+      - name: Build lockfree benchmark targets
+        run: |
+          cmake --build build --target \
+            benchmark_lockfree_mpsc_full \
+            benchmark_lockfree_task_executor \
+            benchmark_lockfree_mpsc
+
+      - name: Capture pinned JSON baseline
+        id: capture
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          cpu="$(taskset -pc $$ | sed 's/.*: //' | cut -d, -f1 | cut -d- -f1)"
+          governor="unknown"
+          if [ -r "/sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor" ]; then
+            governor="$(< "/sys/devices/system/cpu/cpu${cpu}/cpufreq/scaling_governor")"
+          fi
+          mkdir -p benchmark-artifact
+          taskset -c "$cpu" ./build/tests/benchmark_lockfree_mpsc --json > benchmark-artifact/raw-results.json
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg short_sha "${GITHUB_SHA:0:7}" \
+            --arg captured_at "$(date --iso-8601=seconds)" \
+            --arg platform "$(uname -srmo)" \
+            --arg governor "$governor" \
+            --arg cpu_pinning "taskset -c $cpu" \
+            --arg compiler "$(c++ --version | head -n1)" \
+            --slurpfile raw benchmark-artifact/raw-results.json \
+            '{schema_version: 1, benchmark: {target: "benchmark_lockfree_mpsc", metric_definition: "N producer threads plus one consumer; sampled producer-side push_task call latency every 100th success; throughput is successful submissions per second.", queue_capacity: 16384, enable_stats: false, reservation_wait_yields: 64}, capture: {commit: $commit, short_sha: $short_sha, captured_at: $captured_at, platform: $platform, cpu_governor: $governor, cpu_pinning: $cpu_pinning, compiler: $compiler}, raw_results: $raw[0].results}' \
+            > "benchmark-artifact/${GITHUB_SHA:0:7}.json"
+
+      - name: Upload informational baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lockfree-mpsc-baseline-${{ github.sha }}
+          path: benchmark-artifact/
+          if-no-files-found: warn
+          retention-days: 30
