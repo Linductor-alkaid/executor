@@ -102,6 +102,19 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         )
     endif()
 
+    if(TEST_NAME STREQUAL "test_gpu_loader_failure")
+        if(NOT EXECUTOR_CUDA_ENABLED)
+            target_sources(${TEST_NAME} PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/cuda_loader.cpp
+            )
+        endif()
+        if(NOT EXECUTOR_OPENCL_ENABLED)
+            target_sources(${TEST_NAME} PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/opencl_loader.cpp
+            )
+        endif()
+    endif()
+
     # 链接 executor 库和 GTest
     target_link_libraries(${TEST_NAME} PRIVATE executor GTest::GTest GTest::Main)
     
@@ -119,7 +132,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     
     # 如果是 CUDA/GPU 测试，添加 CUDA 头文件支持（不链接库，使用动态加载）
-    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_memory_validation.*" OR TEST_NAME MATCHES ".*gpu_executor.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*" OR TEST_NAME MATCHES ".*gpu_dep_async.*" OR TEST_NAME MATCHES ".*gpu_wait_for_completion.*" OR TEST_NAME MATCHES ".*unified_memory.*") AND EXECUTOR_CUDA_ENABLED)
+    if((TEST_NAME MATCHES ".*cuda.*" OR TEST_NAME MATCHES ".*gpu_memory_validation.*" OR TEST_NAME MATCHES ".*gpu_executor.*" OR TEST_NAME MATCHES ".*gpu_multi_device.*" OR TEST_NAME MATCHES ".*gpu_memory_manager.*" OR TEST_NAME MATCHES ".*gpu_monitor.*" OR TEST_NAME MATCHES ".*gpu_dep_async.*" OR TEST_NAME MATCHES ".*gpu_wait_for_completion.*" OR TEST_NAME MATCHES ".*unified_memory.*" OR TEST_NAME STREQUAL "test_gpu_loader_failure") AND EXECUTOR_CUDA_ENABLED)
         if(CUDA_INCLUDE_DIRS)
             target_include_directories(${TEST_NAME} SYSTEM PRIVATE ${CUDA_INCLUDE_DIRS})
         elseif(CUDAToolkit_INCLUDE_DIRS)
