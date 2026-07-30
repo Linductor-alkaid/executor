@@ -49,29 +49,41 @@ bool OpenCLLoader::load() {
 
     is_loaded_ = true;
     dll_path_ = dll_path;
+    library_ = std::make_shared<LoadedLibraryLease::Library>(dll_handle_);
+    last_library_ = library_;
     return true;
 }
 
 void OpenCLLoader::unload() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    (void)unload_if_idle();
+}
 
+bool OpenCLLoader::unload_if_idle() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const bool can_unload = library_ ? library_.use_count() == 1 : last_library_.expired();
     unload_locked();
+    return can_unload;
 }
 
 void OpenCLLoader::unload_locked() {
     functions_ = OpenCLFunctionPointers{};
 
+    if (library_) {
+        library_.reset();
+        dll_handle_ = nullptr;
+    } else {
 #ifdef _WIN32
-    if (dll_handle_) {
-        FreeLibrary(dll_handle_);
-        dll_handle_ = nullptr;
-    }
+        if (dll_handle_) {
+            FreeLibrary(dll_handle_);
+            dll_handle_ = nullptr;
+        }
 #else
-    if (dll_handle_) {
-        dlclose(dll_handle_);
-        dll_handle_ = nullptr;
-    }
+        if (dll_handle_) {
+            dlclose(dll_handle_);
+            dll_handle_ = nullptr;
+        }
 #endif
+    }
 
     is_loaded_ = false;
     dll_path_.clear();
@@ -83,11 +95,10 @@ bool OpenCLLoader::is_available() const {
 }
 
 OpenCLFunctionPointers OpenCLLoader::get_functions() const {
-    // 按值返回以避免悬空引用:
-    // 拷贝在锁内完成,出函数时锁释放,调用方持有的副本与 loader
-    // 内部状态脱钩,即使其他线程随后 unload() 也不会影响本副本。
     std::lock_guard<std::mutex> lock(mutex_);
-    return functions_;
+    auto functions = functions_;
+    functions.library_lease = LoadedLibraryLease(library_);
+    return functions;
 }
 
 std::string OpenCLLoader::get_dll_path() const {

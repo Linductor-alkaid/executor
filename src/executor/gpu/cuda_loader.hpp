@@ -6,6 +6,8 @@
 #include <atomic>
 #include <functional>
 
+#include "loaded_library_lease.hpp"
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -75,6 +77,7 @@ using CudaMemPrefetchAsyncFunc = cudaError_t (*)(const void*, size_t, int, cudaS
  * @brief CUDA函数指针集合
  */
 struct CudaFunctionPointers {
+    LoadedLibraryLease library_lease;
     CudaFreeFunc cudaFree = nullptr;
     CudaGetDeviceCountFunc cudaGetDeviceCount = nullptr;
     CudaSetDeviceFunc cudaSetDevice = nullptr;
@@ -169,9 +172,18 @@ public:
     bool load();
 
     /**
-     * @brief 卸载CUDA DLL
+     * @brief 放弃加载器持有的 CUDA DLL 引用
+     *
+     * 已获取的函数表仍持有库租约，因此不会因此调用悬空函数指针。
      */
     void unload();
+
+    /**
+     * @brief 放弃加载器引用，并报告 DLL 是否已实际卸载
+     *
+     * @return true 表示没有函数表租约保留 DLL；false 表示仍有调用方租约
+     */
+    bool unload_if_idle();
 
     /**
      * @brief 检查CUDA是否可用
@@ -181,16 +193,15 @@ public:
     bool is_available() const;
 
     /**
-     * @brief 获取CUDA函数指针集合（按值返回以保证线程安全）
+     * @brief 获取带 DLL 租约的 CUDA 函数指针集合
      *
-     * 返回函数指针集合的拷贝而非引用。这样调用方持有的是独立副本,
-     * 即便其他线程并发调用 unload() 也不会让副本悬空,副本中的指针
-     * 在拷贝完成瞬间即与 loader 内部状态脱钩。
+     * 返回值同时复制函数指针并持有 DLL 租约。即便其他线程调用 unload()
+     * 或 unload_if_idle()，函数指针也会在返回值存活期间保持有效。
      *
      * 拷贝成本: CudaFunctionPointers 内全部为函数指针(几十个),
      *         sizeof 在百字节级,远小于一次 CUDA 调用。
      *
-     * @return 函数指针集合的拷贝,如果未加载则所有指针为 nullptr
+     * @return 带 DLL 租约的函数指针集合；未加载时所有指针为 nullptr
      */
     CudaFunctionPointers get_functions() const;
 
@@ -265,6 +276,8 @@ private:
 #endif
 
     CudaFunctionPointers functions_;              // CUDA函数指针集合
+    std::shared_ptr<LoadedLibraryLease::Library> library_;
+    std::weak_ptr<LoadedLibraryLease::Library> last_library_;
     std::function<void*(const char*)> function_resolver_;
 };
 
