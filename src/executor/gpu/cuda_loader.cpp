@@ -60,7 +60,7 @@ bool CudaLoader::load() {
 
     // 加载函数指针
     if (!load_functions()) {
-        unload();
+        unload_locked();
         return false;  // 函数加载失败
     }
 
@@ -71,11 +71,11 @@ bool CudaLoader::load() {
 
 void CudaLoader::unload() {
     std::lock_guard<std::mutex> lock(mutex_);
-    
-    if (!is_loaded_) {
-        return;
-    }
 
+    unload_locked();
+}
+
+void CudaLoader::unload_locked() {
     // 清空函数指针
     functions_ = CudaFunctionPointers{};
 
@@ -278,6 +278,10 @@ bool CudaLoader::load_functions() {
 void* CudaLoader::get_function_pointer(const char* function_name) {
     if (dll_handle_ == nullptr) {
         return nullptr;
+    }
+
+    if (function_resolver_) {
+        return function_resolver_(function_name);
     }
 
 #ifdef _WIN32

@@ -2,6 +2,7 @@
 
 #include <string>
 #include <mutex>
+#include <functional>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -130,6 +131,7 @@ private:
     std::string search_opencl_dll();
     bool try_load_dll(const std::string& dll_path);
     bool load_functions();
+    void unload_locked();
     void* get_function_pointer(const char* function_name);
 
 #ifdef _WIN32
@@ -147,6 +149,7 @@ private:
     void* dll_handle_;
 #endif
     OpenCLFunctionPointers functions_;
+    std::function<void*(const char*)> function_resolver_;
 };
 
 } // namespace gpu

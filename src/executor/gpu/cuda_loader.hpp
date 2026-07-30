@@ -4,6 +4,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <functional>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -233,6 +234,8 @@ private:
      */
     bool load_functions();
 
+    void unload_locked();
+
     /**
      * @brief 获取函数指针（平台无关）
      * 
@@ -262,6 +265,7 @@ private:
 #endif
 
     CudaFunctionPointers functions_;              // CUDA函数指针集合
+    std::function<void*(const char*)> function_resolver_;
 };
 
 } // namespace gpu

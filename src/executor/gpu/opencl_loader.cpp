@@ -43,7 +43,7 @@ bool OpenCLLoader::load() {
     }
 
     if (!load_functions()) {
-        unload();
+        unload_locked();
         return false;
     }
 
@@ -55,10 +55,10 @@ bool OpenCLLoader::load() {
 void OpenCLLoader::unload() {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    if (!is_loaded_) {
-        return;
-    }
+    unload_locked();
+}
 
+void OpenCLLoader::unload_locked() {
     functions_ = OpenCLFunctionPointers{};
 
 #ifdef _WIN32
@@ -116,6 +116,9 @@ bool OpenCLLoader::try_load_dll(const std::string& dll_path) {
 void* OpenCLLoader::get_function_pointer(const char* function_name) {
     if (!dll_handle_) {
         return nullptr;
+    }
+    if (function_resolver_) {
+        return function_resolver_(function_name);
     }
 #ifdef _WIN32
     return reinterpret_cast<void*>(GetProcAddress(dll_handle_, function_name));
