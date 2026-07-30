@@ -1392,18 +1392,26 @@ public:
     // 注册周期任务
     virtual bool register_cycle(const std::string& name,
                                 int64_t period_ns,
-                                std::function<void()> callback) = 0;
+                                std::function<void()> callback) noexcept(false) = 0;
 
     // 启动周期任务
-    virtual bool start_cycle(const std::string& name) = 0;
+    virtual bool start_cycle(const std::string& name) noexcept(false) = 0;
 
     // 停止周期任务
-    virtual void stop_cycle(const std::string& name) = 0;
+    virtual void stop_cycle(const std::string& name) noexcept(false) = 0;
 
     // 获取周期统计信息（可选）
     virtual CycleStatistics get_statistics(const std::string& name) const = 0;
 };
 ```
+
+`noexcept(false)` is explicit: manager implementations may throw, but
+`RealtimeThreadExecutor` catches the exception, increments
+`RealtimeExecutorStatus::cycle_manager_error_count`, and falls back or returns
+normally. `stop_cycle()` is invoked without the executor lifecycle mutex held;
+therefore a registered cycle callback may safely call `stop()` or
+`stop_and_join()` on that executor. Implementations must still make their own
+callback and stop state thread-safe.
 
 ### 9.2 使用场景
 
