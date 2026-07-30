@@ -662,34 +662,17 @@ if (!ok) {
 
 ### 5.5 性能特性（LockFreeTaskExecutor）
 
-> 数据来源：[docs/performance/lockfree_task_executor_baseline.md](performance/lockfree_task_executor_baseline.md)（2026-03-13 性能基线，10,000 任务单生产者场景）。后续基线更新请同步刷新本表。
+> 当前提交的可复现基线：[tests/benchmarks/baselines/db589fb.json](../tests/benchmarks/baselines/db589fb.json)。该记录由 `benchmark_lockfree_mpsc` 在 Release 构建中采集；队列容量为 16384，`enable_stats=false`，reservation 等待让出预算为 64。
 
-#### 单生产者性能（SPSC）
+#### MPSC 提交路径（单生产者）
 
 | 指标 | 值 |
 |------|-----|
-| 平均延迟 | 97.29 ns |
-| P50 延迟 | 29.00 ns |
-| P99 延迟 | 1,013 ns |
-| 吞吐量 | 8,242,895 ops/s |
+| P50 提交调用延迟 | 86 ns |
+| P99 提交调用延迟 | 92 ns |
+| 成功提交吞吐量 | 9,050,750 ops/s |
 
-#### 多生产者性能（MPSC）
-
-| 生产者数 | 总吞吐量 | 单生产者吞吐量 | P99延迟 | 效率 |
-|---------|---------|---------------|---------|------|
-| 1       | 535万/s | 535万/s       | 4322ns  | 100% |
-| 2       | 389万/s | 194万/s       | 3971ns  | 36%  |
-| 4       | 340万/s | 85万/s        | 7576ns  | 16%  |
-| 8       | 232万/s | 29万/s        | 9316ns  | 5%   |
-| 16      | 186万/s | 12万/s        | 32090ns | 2%   |
-
-**性能说明**：
-- 单生产者性能接近理论最优（P99延迟 4.3μs）
-- 2个生产者性能下降可控（36% 效率，P99延迟 4.0μs）
-- 4+ 生产者因 CAS 竞争导致效率显著下降
-- 16生产者场景下延迟升至 32μs，效率降至 2%
-
-> 数据来源：docs/performance/lockfree_mpsc_baseline.json，基准时间 2026-06-25 12:34 CST。测试环境：队列容量16384，持续1秒吞吐量测试。更新请运行 `build/tests/benchmark_lockfree_mpsc_full` 并解析输出重新生成 JSON。
+**指标定义**：一个生产者线程和一个 `LockFreeTaskExecutor` 消费线程运行约 1 秒；吞吐量是成功 `push_task()` 调用数每秒。每第 100 次成功调用采样一次，延迟为生产者侧 `push_task()` 调用耗时，**不是**任务从提交到开始执行的端到端延迟。此结果固定到采集主机的 CPU 24、`powersave` governor；不同 CPU、负载和 pinning 会改变结果。完整的多生产者原始结果、编译器和平台元数据在 sidecar 中。
 
 ### 5.6 最佳实践
 

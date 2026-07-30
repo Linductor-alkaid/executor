@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "benchmark": {
+    "target": "benchmark_lockfree_mpsc",
+    "command": "taskset -c 24 ./build/tests/benchmark_lockfree_mpsc --json",
+    "metric_definition": "Each result runs N producer threads plus one LockFreeTaskExecutor consumer for approximately one second. Throughput is successful push_task submissions per second. Latency is sampled every 100th successful push_task call and measures producer-side submit-call duration, not submit-to-execution latency.",
+    "queue_capacity": 16384,
+    "enable_stats": false,
+    "reservation_wait_yields": 64,
+    "duration_ms": 1000,
+    "latency_sample_interval": 100
+  },
+  "capture": {
+    "commit": "db589fb80216e4b64dee73ee39a3e2071270fcf2",
+    "short_sha": "db589fb",
+    "captured_at": "2026-07-30T09:06:19+08:00",
+    "platform": {
+      "system": "Linux",
+      "kernel": "6.8.0-124-generic",
+      "architecture": "x86_64",
+      "cpu_count": 32,
+      "cpu_governor": "powersave",
+      "cpu_pinning": "taskset -c 24 (benchmark process; producer and consumer threads inherit CPU 24)"
+    },
+    "compiler": {
+      "id": "GNU",
+      "version": "11.4.0",
+      "path": "/usr/bin/c++",
+      "build_type": "Release"
+    }
+  },
+  "raw_results": [
+    {
+      "num_producers": 1,
+      "total_pushes": 9059799,
+      "failed_pushes": 553,
+      "failure_rate": 0.00610352,
+      "throughput_ops_per_sec": 9050750,
+      "duration_ms": 1001,
+      "latency_ns": { "avg": 86, "p50": 86, "p95": 89, "p99": 92 }
+    },
+    {
+      "num_producers": 2,
+      "total_pushes": 9087379,
+      "failed_pushes": 829,
+      "failure_rate": 0.00912171,
+      "throughput_ops_per_sec": 9087380,
+      "duration_ms": 1000,
+      "latency_ns": { "avg": 86, "p50": 86, "p95": 88, "p99": 92 }
+    },
+    {
+      "num_producers": 4,
+      "total_pushes": 9092565,
+      "failed_pushes": 1391,
+      "failure_rate": 0.0152959,
+      "throughput_ops_per_sec": 9083480,
+      "duration_ms": 1001,
+      "latency_ns": { "avg": 86, "p50": 86, "p95": 89, "p99": 91 }
+    },
+    {
+      "num_producers": 8,
+      "total_pushes": 9043417,
+      "failed_pushes": 4572,
+      "failure_rate": 0.0505306,
+      "throughput_ops_per_sec": 9034380,
+      "duration_ms": 1001,
+      "latency_ns": { "avg": 86, "p50": 86, "p95": 89, "p99": 92 }
+    },
+    {
+      "num_producers": 16,
+      "total_pushes": 9022842,
+      "failed_pushes": 8803,
+      "failure_rate": 0.0974684,
+      "throughput_ops_per_sec": 9013830,
+      "duration_ms": 1001,
+      "latency_ns": { "avg": 86, "p50": 86, "p95": 89, "p99": 92 }
+    },
+    {
+      "num_producers": 32,
+      "total_pushes": 8912352,
+      "failed_pushes": 17756,
+      "failure_rate": 0.198833,
+      "throughput_ops_per_sec": 8903450,
+      "duration_ms": 1001,
+      "latency_ns": { "avg": 86, "p50": 86, "p95": 89, "p99": 90 }
+    }
+  ]
+}
