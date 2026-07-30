@@ -89,7 +89,8 @@ public:
      * @param count 任务数量
      * @param pushed 实际提交的任务数量（输出参数）。返回 true 时等于 count；
      *               返回 false 时为 0。
-     * @return 全部入队返回 true；空输入、stop() 后、队列空间不足或对象池耗尽返回 false
+     * @return 全部入队返回 true；空输入、stop() 后、队列空间不足、对象池耗尽或
+     *         内部临时分配失败返回 false
      */
     bool push_tasks_batch(const std::function<void()>* tasks, size_t count, size_t& pushed);
 
@@ -186,6 +187,13 @@ public:
     using BeforePublishHook = void (*)(void*);
     void set_before_publish_hook(BeforePublishHook hook, void* context);
 
+    // Test-only hook invoked immediately before push_tasks_batch allocates its
+    // temporary wrapper-pointer array. It may throw to simulate allocation
+    // failure; do not change it while producers are submitting batches.
+    using BeforeBatchAllocationHook = void (*)(void*);
+    void set_before_batch_allocation_hook_for_test(BeforeBatchAllocationHook hook,
+                                                   void* context);
+
 protected:
     virtual std::thread create_worker_thread();
 
@@ -200,6 +208,7 @@ private:
 
     std::unique_ptr<util::LockFreeQueue<TaskWrapper*>> queue_;
     std::unique_ptr<util::ObjectPool<TaskWrapper>> task_pool_;
+    size_t task_pool_capacity_;
 
     std::thread worker_;
     std::thread::id worker_id_;
@@ -214,6 +223,8 @@ private:
     // 空任务属于提交拒绝，而不是 worker 执行异常。
     std::atomic<uint64_t> rejected_empty_count_{0};
     std::atomic<uint64_t> submission_rejection_{0};
+    BeforeBatchAllocationHook before_batch_allocation_hook_{nullptr};
+    void* before_batch_allocation_context_{nullptr};
     // P-260618-006: 可选异常回调. 在 worker 线程中调用, 需自行保证线程安全.
     std::mutex exception_handler_mutex_;
     std::function<void(std::exception_ptr)> exception_handler_;

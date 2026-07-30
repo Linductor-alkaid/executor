@@ -3,6 +3,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <future>
 #include <stdexcept>
 #include <memory>
 #include <string>
@@ -59,6 +60,31 @@ protected:
 private:
     bool fail_next_start_{false};
 };
+
+void throw_bad_alloc(void*) {
+    throw std::bad_alloc();
+}
+
+TEST(LockFreeTaskExecutor, BatchAllocationFailureLeavesStopJoinable) {
+    LockFreeTaskExecutor exec(16);
+    ASSERT_TRUE(exec.start());
+
+    std::function<void()> tasks[2] = {[] {}, [] {}};
+    const auto rejections_before = exec.get_queue_stats().submission_rejection;
+    exec.set_before_batch_allocation_hook_for_test(throw_bad_alloc, nullptr);
+
+    size_t pushed = 99;
+    EXPECT_FALSE(exec.push_tasks_batch(tasks, 2, pushed));
+    EXPECT_EQ(pushed, 0u);
+    EXPECT_EQ(exec.get_queue_stats().submission_rejection, rejections_before + 1);
+    exec.set_before_batch_allocation_hook_for_test(nullptr, nullptr);
+
+    auto stop_result = std::async(std::launch::async, [&exec] {
+        return exec.stop_and_join();
+    });
+    ASSERT_EQ(stop_result.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_TRUE(stop_result.get());
+}
 
 TEST(LockFreeTaskExecutorTest, BasicStartStop) {
     LockFreeTaskExecutor exec(128);

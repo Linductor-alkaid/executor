@@ -19,7 +19,8 @@ namespace executor {
 
 LockFreeTaskExecutor::LockFreeTaskExecutor(size_t queue_capacity, size_t backoff_multiplier, bool enable_stats)
     : queue_(std::make_unique<util::LockFreeQueue<TaskWrapper*>>(queue_capacity, backoff_multiplier, enable_stats))
-    , task_pool_(std::make_unique<util::ObjectPool<TaskWrapper>>(queue_capacity)) {
+    , task_pool_(std::make_unique<util::ObjectPool<TaskWrapper>>(queue_capacity))
+    , task_pool_capacity_(queue_capacity) {
 }
 
 LockFreeTaskExecutor::~LockFreeTaskExecutor() {
@@ -125,6 +126,13 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
     if (count == 0) {
         return true;
     }
+    // The bounded ring always reserves one slot, so no batch this large can
+    // succeed. Reject it before scanning caller memory or allocating the
+    // temporary pointer array.
+    if (count > task_pool_capacity_ || count >= queue_->capacity()) {
+        submission_rejection_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
     for (size_t i = 0; i < count; ++i) {
         if (!tasks[i]) {
             rejected_empty_count_.fetch_add(1, std::memory_order_relaxed);
@@ -138,61 +146,70 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
         return false;
     }
 
+    struct PushGuard {
+        LockFreeTaskExecutor& executor;
+
+        ~PushGuard() {
+            executor.leave_push();
+        }
+    } push_guard{*this};
+
     // P-260623-004: keep batch monitoring meaningful by bulk-acquiring
     // wrappers, populating them, then dispatching the whole array in one exact
     // batch call so the queue records a single batch_pushes++ and a single CAS
     // reservation, instead of N independent push() calls.
-    std::vector<TaskWrapper*> ptrs(count, nullptr);
+    std::vector<TaskWrapper*> ptrs;
     size_t acquired = 0;
 
-    // 1) Bulk-acquire wrappers. If the pool cannot hand out `count` in one
-    //    pass we must report a hard failure (matches the previous behaviour
-    //    where the first acquire() returning null aborted the whole batch).
-    for (size_t i = 0; i < count; ++i) {
-        auto* wrapper = task_pool_->acquire();
-        if (!wrapper) {
-            submission_rejection_.fetch_add(1, std::memory_order_relaxed);
-            for (size_t j = 0; j < acquired; ++j) {
-                task_pool_->release(ptrs[j]);
-            }
-            leave_push();
-            return false;
+    try {
+        if (before_batch_allocation_hook_) {
+            before_batch_allocation_hook_(before_batch_allocation_context_);
         }
-        ptrs[i] = wrapper;
-        ++acquired;
-    }
+        ptrs.assign(count, nullptr);
 
-    // 2) Populate wrappers. An exception while copying a std::function must
-    //    release every acquired wrapper so the pool does not leak. We do not
-    //    have to undo any queue mutation because exact enqueue happens after.
-    for (size_t i = 0; i < count; ++i) {
-        try {
-            ptrs[i]->func = tasks[i];
-        } catch (...) {
-            submission_rejection_.fetch_add(1, std::memory_order_relaxed);
-            for (size_t j = 0; j < count; ++j) {
-                task_pool_->release(ptrs[j]);
-            }
-            // pushed stays 0; nothing reached the queue.
-            leave_push();
-            return false;
-        }
-    }
-
-    // 3) Single exact batched enqueue. LockFreeTaskExecutor exposes atomic
-    //    batch semantics: either all wrappers are handed to the queue, or none
-    //    are. The queue-level exact helper refuses to reserve a smaller prefix.
-    bool ok = queue_->push_batch_exact(ptrs.data(), count);
-    if (ok) {
-        pushed = count;
-    } else {
+        // 1) Bulk-acquire wrappers. If the pool cannot hand out `count` in one
+        //    pass we must report a hard failure (matches the previous behaviour
+        //    where the first acquire() returning null aborted the whole batch).
         for (size_t i = 0; i < count; ++i) {
+            auto* wrapper = task_pool_->acquire();
+            if (!wrapper) {
+                submission_rejection_.fetch_add(1, std::memory_order_relaxed);
+                for (size_t j = 0; j < acquired; ++j) {
+                    task_pool_->release(ptrs[j]);
+                }
+                return false;
+            }
+            ptrs[i] = wrapper;
+            ++acquired;
+        }
+
+        // 2) Populate wrappers. An exception while copying a std::function must
+        //    release every acquired wrapper so the pool does not leak. We do not
+        //    have to undo any queue mutation because exact enqueue happens after.
+        for (size_t i = 0; i < count; ++i) {
+            ptrs[i]->func = tasks[i];
+        }
+
+        // 3) Single exact batched enqueue. LockFreeTaskExecutor exposes atomic
+        //    batch semantics: either all wrappers are handed to the queue, or none
+        //    are. The queue-level exact helper refuses to reserve a smaller prefix.
+        bool ok = queue_->push_batch_exact(ptrs.data(), count);
+        if (ok) {
+            pushed = count;
+        } else {
+            for (size_t i = 0; i < count; ++i) {
+                task_pool_->release(ptrs[i]);
+            }
+        }
+
+        return ok;
+    } catch (...) {
+        for (size_t i = 0; i < acquired; ++i) {
             task_pool_->release(ptrs[i]);
         }
+        submission_rejection_.fetch_add(1, std::memory_order_relaxed);
+        return false;
     }
-
-    leave_push();
-    return ok;
 }
 
 size_t LockFreeTaskExecutor::pending_count() const {
@@ -270,6 +287,12 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_status_snapshot() con
 
 void LockFreeTaskExecutor::set_before_publish_hook(BeforePublishHook hook, void* context) {
     queue_->set_before_publish_hook(hook, context);
+}
+
+void LockFreeTaskExecutor::set_before_batch_allocation_hook_for_test(
+    BeforeBatchAllocationHook hook, void* context) {
+    before_batch_allocation_context_ = context;
+    before_batch_allocation_hook_ = hook;
 }
 
 bool LockFreeTaskExecutor::enter_push() {
