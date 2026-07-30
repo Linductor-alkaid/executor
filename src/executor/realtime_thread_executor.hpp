@@ -176,7 +176,12 @@ private:
     };
     std::atomic<bool> running_{false};              // 运行状态标志
     std::thread::id worker_id_;
-    std::mutex stop_mutex_;                         // 串行化 stop() join/drain
+    // Lock order: stop_mutex_ is the sole lifecycle lock. Never invoke an
+    // ICycleManager method while holding it because managers may synchronously
+    // invoke a callback that calls stop_and_join().
+    std::mutex stop_mutex_;
+    std::atomic<bool> stopping_{false};
+    std::atomic<bool> cycle_manager_active_{false};
     std::atomic<bool> self_stop_requested_{false};
     std::atomic<uint32_t> in_flight_pushes_{0};      // 正在进入队列的 push_task_ex 调用
 
@@ -206,6 +211,7 @@ private:
     std::atomic<uint64_t> rejected_empty_task_count_{0};
     std::atomic<uint64_t> pool_exhausted_count_{0};
     std::atomic<uint64_t> queue_full_count_{0};
+    std::atomic<uint64_t> cycle_manager_error_count_{0};
     // P-001 (260615): 构造时指定的统计开关, push_task() 路径不依赖此开关.
     const bool enable_stats_;
     

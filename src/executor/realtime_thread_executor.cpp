@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
 #include <optional>
 
 // Round-robin CPU hint: incremented each time a new RT thread auto-selects its core.
@@ -14,6 +15,30 @@ static std::atomic<unsigned> g_next_rt_cpu_hint{0};
 #endif
 
 namespace executor {
+
+namespace {
+
+void report_cycle_manager_exception(const std::string& executor_name,
+                                    const char* operation,
+                                    std::atomic<uint64_t>& error_count,
+                                    util::ExceptionHandler& exception_handler) {
+    error_count.fetch_add(1, std::memory_order_relaxed);
+    const auto exception = std::current_exception();
+    try {
+        if (exception) {
+            std::rethrow_exception(exception);
+        }
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "RealtimeThreadExecutor '%s': ICycleManager::%s threw: %s\n",
+                     executor_name.c_str(), operation, error.what());
+    } catch (...) {
+        std::fprintf(stderr, "RealtimeThreadExecutor '%s': ICycleManager::%s threw an unknown exception\n",
+                     executor_name.c_str(), operation);
+    }
+    exception_handler.handle_task_exception(executor_name, exception);
+}
+
+} // namespace
 
 RealtimeThreadExecutor::RealtimeThreadExecutor(const std::string& name,
                                              const RealtimeThreadConfig& config,
@@ -39,10 +64,15 @@ RealtimeThreadExecutor::~RealtimeThreadExecutor() {
 }
 
 bool RealtimeThreadExecutor::start() {
-    // 检查是否已在运行
+    // stop_mutex_ serializes lifecycle state. It is deliberately released
+    // before any ICycleManager call below, because callbacks may re-enter stop.
+    std::unique_lock<std::mutex> lifecycle_lock(stop_mutex_);
+    if (stopping_.load(std::memory_order_acquire)) {
+        return false;
+    }
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
-        return false;  // 已经在运行
+        return false;
     }
 
     // 创建实时线程
@@ -128,22 +158,38 @@ bool RealtimeThreadExecutor::start() {
 
         // 如果提供了外部周期管理器，使用它进行精确周期控制
         if (config_.cycle_manager) {
+            cycle_manager_active_.store(true, std::memory_order_release);
             // 注册周期任务：回调函数是 cycle_loop()
-            if (!config_.cycle_manager->register_cycle(
-                    name_,
-                    config_.cycle_period_ns,
-                    [this]() { cycle_loop(); })) {
+            bool registered = false;
+            try {
+                registered = config_.cycle_manager->register_cycle(
+                    name_, config_.cycle_period_ns, [this]() { cycle_loop(); });
+            } catch (...) {
+                report_cycle_manager_exception(name_, "register_cycle",
+                                               cycle_manager_error_count_, exception_handler_);
+            }
+            if (!registered) {
+                cycle_manager_active_.store(false, std::memory_order_release);
                 // 注册失败，回退到内置实现
                 simple_cycle_loop();
                 return;
             }
 
             // 启动周期任务（阻塞在此，直到 stop_cycle 被调用）
-            if (!config_.cycle_manager->start_cycle(name_)) {
+            bool started = false;
+            try {
+                started = config_.cycle_manager->start_cycle(name_);
+            } catch (...) {
+                report_cycle_manager_exception(name_, "start_cycle",
+                                               cycle_manager_error_count_, exception_handler_);
+            }
+            if (!started) {
+                cycle_manager_active_.store(false, std::memory_order_release);
                 // 启动失败，回退到内置实现
                 simple_cycle_loop();
                 return;
             }
+            cycle_manager_active_.store(false, std::memory_order_release);
         } else {
             // 使用内置的简单周期实现
             simple_cycle_loop();
@@ -166,20 +212,33 @@ void RealtimeThreadExecutor::stop() {
 
 bool RealtimeThreadExecutor::stop_and_join() {
     std::thread joiner;
+    bool stop_cycle = false;
     {
-        std::lock_guard<std::mutex> lock(stop_mutex_);
+        // This lock protects only lifecycle state and ownership of thread_.
+        // The ICycleManager callback happens after this scope.
+        std::unique_lock<std::mutex> lock(stop_mutex_);
         if (std::this_thread::get_id() == worker_id_) {
             self_stop_requested_.store(true, std::memory_order_release);
+            stopping_.store(true, std::memory_order_release);
             running_.store(false, std::memory_order_release);
             return false;
         }
 
+        stopping_.store(true, std::memory_order_release);
         running_.store(false, std::memory_order_release);
-        if (config_.cycle_manager) {
-            config_.cycle_manager->stop_cycle(name_);
-        }
+        stop_cycle = config_.cycle_manager &&
+                     cycle_manager_active_.load(std::memory_order_acquire);
         if (thread_.joinable()) {
             joiner = std::move(thread_);
+        }
+    }
+
+    if (stop_cycle) {
+        try {
+            config_.cycle_manager->stop_cycle(name_);
+        } catch (...) {
+            report_cycle_manager_exception(name_, "stop_cycle",
+                                           cycle_manager_error_count_, exception_handler_);
         }
     }
 
@@ -189,6 +248,8 @@ bool RealtimeThreadExecutor::stop_and_join() {
     }
 
     if (!joined_thread) {
+        std::lock_guard<std::mutex> lock(stop_mutex_);
+        stopping_.store(false, std::memory_order_release);
         return true;
     }
     std::lock_guard<std::mutex> lock(stop_mutex_);
@@ -196,6 +257,8 @@ bool RealtimeThreadExecutor::stop_and_join() {
         std::this_thread::yield();
     }
     drain_stopped_queue();
+    cycle_manager_active_.store(false, std::memory_order_release);
+    stopping_.store(false, std::memory_order_release);
     return true;
 }
 
@@ -450,6 +513,8 @@ RealtimeExecutorStatus RealtimeThreadExecutor::get_status() const {
         rejected_empty_task_count_.load(std::memory_order_acquire);
     status.pool_exhausted_count = pool_exhausted_count_.load(std::memory_order_acquire);
     status.queue_full_count = queue_full_count_.load(std::memory_order_acquire);
+    status.cycle_manager_error_count =
+        cycle_manager_error_count_.load(std::memory_order_acquire);
     // failed_pushes / peak_queue_size 仅在 enable_stats=true 时有意义;
     // LockFreeQueue 内部在 stats 关闭时 get_stats() 返回零结构.
     if (enable_stats_) {

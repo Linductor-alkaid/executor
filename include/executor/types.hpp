@@ -292,6 +292,7 @@ struct RealtimeExecutorStatus {
     uint64_t rejected_empty_task_count = 0;       // 空任务拒绝累计数
     uint64_t pool_exhausted_count = 0;            // 对象池耗尽拒绝累计数
     uint64_t queue_full_count = 0;                // 队列满拒绝累计数
+    uint64_t cycle_manager_error_count = 0;       // 外部周期管理器调用异常累计数
 };
 
 enum class BlockingIoStopReason {

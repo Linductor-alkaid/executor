@@ -569,9 +569,11 @@ public:
      * @param callback 周期回调函数
      * @return 是否注册成功
      */
+    // Implementations may throw; RealtimeThreadExecutor catches and reports
+    // such failures before falling back to its built-in cycle loop.
     virtual bool register_cycle(const std::string& name,
                                 int64_t period_ns,
-                                std::function<void()> callback) = 0;
+                                std::function<void()> callback) noexcept(false) = 0;
 
     /**
      * @brief 启动周期任务
@@ -579,14 +581,19 @@ public:
      * @param name 周期任务名称
      * @return 是否启动成功
      */
-    virtual bool start_cycle(const std::string& name) = 0;
+    virtual bool start_cycle(const std::string& name) noexcept(false) = 0;
 
     /**
      * @brief 停止周期任务
      * 
      * @param name 周期任务名称
+     *
+     * The manager may invoke the registered callback synchronously from this
+     * call. That callback may safely call RealtimeThreadExecutor::stop() or
+     * stop_and_join(); the executor does not hold its lifecycle mutex while
+     * invoking stop_cycle().
      */
-    virtual void stop_cycle(const std::string& name) = 0;
+    virtual void stop_cycle(const std::string& name) noexcept(false) = 0;
 
     /**
      * @brief 获取周期统计信息（可选）

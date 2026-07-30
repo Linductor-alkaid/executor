@@ -3,8 +3,10 @@
 #include <executor/interfaces.hpp>
 #include <executor/types.hpp>
 #include <chrono>
+#include <atomic>
 #include <functional>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -34,8 +36,15 @@ public:
     /** If true, start_cycle returns false (for fallback testing). */
     bool fail_start = false;
 
+    bool throw_register = false;
+    bool throw_start = false;
+    bool throw_stop = false;
+
     bool register_cycle(const std::string& name, int64_t period_ns,
                        std::function<void()> callback) override {
+        if (throw_register) {
+            throw std::runtime_error("register_cycle failure");
+        }
         if (fail_register) {
             return false;
         }
@@ -46,6 +55,9 @@ public:
     }
 
     bool start_cycle(const std::string& name) override {
+        if (throw_start) {
+            throw std::runtime_error("start_cycle failure");
+        }
         if (fail_start) {
             return false;
         }
@@ -84,8 +96,13 @@ public:
     }
 
     void stop_cycle(const std::string& name) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_requested_[name] = true;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stop_requested_[name] = true;
+        }
+        if (throw_stop) {
+            throw std::runtime_error("stop_cycle failure");
+        }
     }
 
     CycleStatistics get_statistics(const std::string& name) const override {
