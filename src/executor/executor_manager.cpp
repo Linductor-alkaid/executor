@@ -386,7 +386,8 @@ ExecutorManager::get_all_task_statistics() const {
 }
 
 // 关闭所有执行器
-void ExecutorManager::shutdown(bool wait_for_tasks) {
+ShutdownResult ExecutorManager::shutdown(bool wait_for_tasks) {
+    bool shutdown_requested_from_worker = false;
     std::vector<std::unique_ptr<IBlockingIoExecutor>> blocking_io_executors;
     {
         std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
@@ -440,14 +441,21 @@ void ExecutorManager::shutdown(bool wait_for_tasks) {
     {
         std::lock_guard<std::mutex> lock(default_async_mutex_);
         if (default_async_executor_) {
+            shutdown_requested_from_worker =
+                default_async_executor_->is_current_worker_thread();
             default_async_executor_->stop(wait_for_tasks);
-            if (wait_for_tasks) {
+            if (wait_for_tasks && !shutdown_requested_from_worker) {
                 default_async_executor_->wait_for_completion();
             }
-            default_async_executor_.reset();
+            if (!shutdown_requested_from_worker) {
+                default_async_executor_.reset();
+            }
         }
         default_async_shutdown_ = true;
     }
+    return shutdown_requested_from_worker
+               ? ShutdownResult::RequestedFromWorker
+               : ShutdownResult::Completed;
 }
 
 } // namespace executor

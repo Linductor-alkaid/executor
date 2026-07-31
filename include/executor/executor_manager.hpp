@@ -181,7 +181,7 @@ public:
      * 
      * @param wait_for_tasks 是否等待任务完成（默认：true）
      */
-    void shutdown(bool wait_for_tasks = true);
+    ShutdownResult shutdown(bool wait_for_tasks = true);
 
     /**
      * @brief 启用或禁用任务监控

@@ -38,7 +38,7 @@
 ```cpp
 bool initialize(const ExecutorConfig& config);  // 初始化默认异步执行器（线程池）
 ExecutorResult initialize_ex(const ExecutorConfig& config);
-void shutdown(bool wait_for_tasks = true);      // 关闭所有执行器
+ShutdownResult shutdown(bool wait_for_tasks = true); // 关闭所有执行器
 void wait_for_completion();                     // 最多等待 300s，超时记录 WaitTimeout
 bool try_wait_for_completion(std::chrono::milliseconds timeout);
 template<class Rep, class Period>
@@ -51,6 +51,7 @@ CompletionStatus get_completion_status() const;
 - **懒初始化**：若不调用 `initialize(config)`，首次提交任务时会使用默认配置自动初始化（不抛异常）。需要自定义线程数、队列容量等时，请在首次提交前显式调用 `initialize(config)`。
 - **退出时自动关闭（单例）**：使用单例时，若未显式调用 `shutdown()`，进程退出时会自动关闭所有执行器。若需在退出前等待未完成任务完成，请在业务逻辑中显式调用 `shutdown(true)`。
 - `shutdown(true)` 会先通过 facade 等待队列中任务完成后再退出；如果等待超过 `kDefaultWaitForCompletionTimeout`，会记录 `WaitTimeout` 诊断并走非等待关闭路径，避免假装全部完成。
+- 从 ThreadPool worker 任务内部调用 `shutdown(true)` 或 `shutdown(false)` 时，返回 `ShutdownResult::RequestedFromWorker`：只请求关闭，**不等待**当前任务完成，也**不从 worker 内 join**。随后由外部线程调用 `shutdown(true)`，其返回 `ShutdownResult::Completed` 并完成 wait/join。
 - `wait_for_completion()` 使用公开常量 `executor::kDefaultWaitForCompletionTimeout`，当前为 300 秒；保留 `void` 签名以兼容旧调用方，但超时会记录 `FailureKind::WaitTimeout`。
 - `try_wait_for_completion(timeout)` 返回 `true` 表示所有已提交异步任务在 `timeout` 内完成；返回 `false` 表示等待超时且仍有任务未完成。超时不是 panic，也不抛异常；调用方可继续通过 `get_failure_status().wait_timeout_count` 或 `get_recent_failures()` 观察。
 - `wait_for_completion_for(timeout)` 是支持任意 `std::chrono::duration` 的 bool 入口；`wait_for_completion_ex(timeout)` 返回 `WaitResult`，其中包含 `completed`、`timed_out`、`timeout`、`message` 和 `CompletionStatus` 快照。

@@ -213,8 +213,15 @@ public:
      * @brief 关闭线程池
      *
      * @param wait_for_tasks 是否等待所有任务完成（默认true）
+     * @return Completed 表示外部调用者已完成关闭；RequestedFromWorker 表示
+     *         当前 worker 仅请求关闭，未等待也未 join。
      */
-    void shutdown(bool wait_for_tasks = true);
+    ShutdownResult shutdown(bool wait_for_tasks = true);
+
+    /**
+     * @brief 当前线程是否是此线程池的 worker。
+     */
+    bool is_current_worker_thread() const noexcept;
 
     /**
      * @brief 重建工作线程本地队列（动态扩缩容 API）
@@ -460,14 +467,14 @@ private:
     // 互斥锁：保护共享状态
     mutable std::mutex mutex_;
 
-    // P-008: shutdown() 并发调用的幂等性保护。
-    // 第一个调用者执行实际 shutdown; 后续并发调用者等待 shutdown 完成后返回,
-    // 避免 double-join。显式状态机也避开 std::call_once 在 TSAN 下的内部
-    // mutex double-lock 报告。
+    // shutdown() 的两阶段状态：worker 只能请求关闭，外部调用者负责最终 wait/join。
     std::mutex shutdown_mutex_;
     std::condition_variable shutdown_cv_;
     bool shutdown_started_{false};
+    bool shutdown_finalizer_started_{false};
     bool shutdown_complete_{false};
+
+    static thread_local ThreadPool* current_worker_pool_;
 
     // 异常处理器
     util::ExceptionHandler exception_handler_;

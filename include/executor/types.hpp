@@ -17,6 +17,17 @@ namespace executor {
 
 inline constexpr std::chrono::seconds kDefaultWaitForCompletionTimeout{300};
 
+/**
+ * @brief Result of a shutdown request.
+ *
+ * A worker must never wait for or join the pool that is executing it.  Such
+ * calls only request shutdown; an external caller must complete finalization.
+ */
+enum class ShutdownResult {
+    Completed,
+    RequestedFromWorker
+};
+
 class TimedOutException : public std::runtime_error {
 public:
     explicit TimedOutException(const std::string& message)

@@ -75,6 +75,8 @@ public:
      */
     void stop(bool wait_for_tasks) override;
 
+    bool is_current_worker_thread() const noexcept override;
+
     /**
      * @brief 等待所有任务完成
      * 
