@@ -221,15 +221,18 @@ ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
 }
 
 // 关闭执行器
-void Executor::shutdown(bool wait_for_tasks) {
+ShutdownResult Executor::shutdown(bool wait_for_tasks) {
     stop_timer_thread();
+    if (manager_->has_default_async_executor() &&
+        manager_->get_default_async_executor()->is_current_worker_thread()) {
+        return manager_->shutdown(wait_for_tasks);
+    }
     if (wait_for_tasks && manager_->has_default_async_executor()) {
         const auto wait_result = wait_for_completion_ex(kDefaultWaitForCompletionTimeout);
-        manager_->shutdown(wait_result.completed);
-        return;
+        return manager_->shutdown(wait_result.completed);
     }
 
-    manager_->shutdown(wait_for_tasks);
+    return manager_->shutdown(wait_for_tasks);
 }
 
 void Executor::set_timer_thread_factory_for_test(

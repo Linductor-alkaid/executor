@@ -150,6 +150,13 @@ public:
     }
 
     /**
+     * @brief Whether the caller is a worker owned by this executor.
+     */
+    virtual bool is_current_worker_thread() const noexcept {
+        return false;
+    }
+
+    /**
      * @brief 等待所有任务完成
      */
     virtual void wait_for_completion() = 0;

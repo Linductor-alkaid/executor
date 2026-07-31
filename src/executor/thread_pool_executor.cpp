@@ -65,23 +65,35 @@ void ThreadPoolExecutor::stop() {
 
 void ThreadPoolExecutor::stop(bool wait_for_tasks) {
     std::shared_ptr<ThreadPool> thread_pool;
+    bool caller_is_worker = false;
     {
         std::lock_guard<std::mutex> lock(thread_pool_mutex_);
         if (!thread_pool_) {
             return;
         }
         thread_pool = thread_pool_;
-        thread_pool_.reset();
+        caller_is_worker = thread_pool->is_current_worker_thread();
+        // A worker-origin request must retain ownership until an external
+        // caller finalizes and joins the pool.
+        if (!caller_is_worker) {
+            thread_pool_.reset();
+        }
     }
 
-    // 关闭线程池，等待所有任务完成
-    if (wait_for_tasks) {
+    if (caller_is_worker) {
+        thread_pool->shutdown(true);
+    } else if (wait_for_tasks) {
         thread_pool->shutdown(true);
     } else {
         std::thread([thread_pool = std::move(thread_pool)]() {
             thread_pool->shutdown(false);
         }).detach();
     }
+}
+
+bool ThreadPoolExecutor::is_current_worker_thread() const noexcept {
+    std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+    return thread_pool_ && thread_pool_->is_current_worker_thread();
 }
 
 void ThreadPoolExecutor::wait_for_completion() {

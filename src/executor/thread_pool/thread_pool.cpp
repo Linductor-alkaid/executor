@@ -11,6 +11,7 @@
 namespace executor {
 
 // thread_local 变量会在首次使用时自动初始化
+thread_local ThreadPool* ThreadPool::current_worker_pool_ = nullptr;
 
 ThreadPool::ThreadPool() : stop_(false), initialized_(false) {
 }
@@ -148,6 +149,17 @@ void ThreadPool::rollback_initialization_failure() {
 }
 
 void ThreadPool::worker_thread(size_t worker_id) {
+    struct WorkerContextGuard {
+        explicit WorkerContextGuard(ThreadPool* pool)
+            : previous(ThreadPool::current_worker_pool_) {
+            ThreadPool::current_worker_pool_ = pool;
+        }
+        ~WorkerContextGuard() {
+            ThreadPool::current_worker_pool_ = previous;
+        }
+        ThreadPool* previous;
+    } worker_context(this);
+
     // Workers are created before initialize() can publish a usable pool.
     // Keep them out of the scheduling path until that publication succeeds;
     // an initialization rollback instead sets stop_ and releases them to exit.
@@ -441,16 +453,42 @@ ThreadPoolStatus ThreadPool::get_status() const {
     return status;
 }
 
-void ThreadPool::shutdown(bool wait_for_tasks) {
+ShutdownResult ThreadPool::shutdown(bool wait_for_tasks) {
+    const bool caller_is_worker = is_current_worker_thread();
     {
         std::unique_lock<std::mutex> shutdown_lock(shutdown_mutex_);
-        if (shutdown_started_) {
+        if (caller_is_worker) {
+            if (!shutdown_started_) {
+                shutdown_started_ = true;
+            }
+            // The current task contributes to completion and owns one of the
+            // worker threads, so it must never wait or join here.
+            shutdown_lock.unlock();
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                stop_.store(true);
+            }
+            condition_.notify_all();
+            notify_completion_waiters();
+            return ShutdownResult::RequestedFromWorker;
+        }
+
+        if (!shutdown_started_) {
+            shutdown_started_ = true;
+            shutdown_finalizer_started_ = true;
+        } else if (!shutdown_finalizer_started_) {
+            // A worker made the initial request. This external caller now
+            // takes responsibility for the blocking completion and joins.
+            shutdown_finalizer_started_ = true;
+        } else if (!shutdown_complete_) {
             shutdown_cv_.wait(shutdown_lock, [this]() {
                 return shutdown_complete_;
             });
-            return;
+            return ShutdownResult::Completed;
+        } else {
+            return ShutdownResult::Completed;
         }
-        shutdown_started_ = true;
     }
 
     // 先停止接收新任务，再按需等待已被接受的任务完成。
@@ -506,6 +544,7 @@ void ThreadPool::shutdown(bool wait_for_tasks) {
         shutdown_complete_ = true;
     }
     shutdown_cv_.notify_all();
+    return ShutdownResult::Completed;
 }
 
 bool ThreadPool::resize_local_queues(size_t new_num_queues) {
@@ -631,6 +670,10 @@ size_t ThreadPool::dispatch_pending_tasks(size_t max_tasks) {
 
 bool ThreadPool::is_stopped() const {
     return stop_.load(std::memory_order_relaxed);
+}
+
+bool ThreadPool::is_current_worker_thread() const noexcept {
+    return current_worker_pool_ == this;
 }
 
 void ThreadPool::set_task_monitor(monitor::TaskMonitor* m) {
