@@ -197,6 +197,8 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
         if (ok) {
             pushed = count;
         } else {
+            // An unsuccessful exact batch is completely non-observable, so
+            // every acquired wrapper remains ours to return to the pool.
             for (size_t i = 0; i < count; ++i) {
                 task_pool_->release(ptrs[i]);
             }

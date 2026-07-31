@@ -215,17 +215,25 @@ public:
                     // into an unreserved Free slot in this batch.
                     if (!reserve_slot(index, pos + i)) {
                         record_push_failure(reservation_failure_reason(index, pos + i));
+                        cancel_batch_reservations(pos, count);
                         return false;
                     }
                 }
                 for (size_t i = 0; i < count; ++i) {
                     const size_t index = (pos + i) & mask_;
-                    if (!finish_write_reservation(index, pos + i)) {
+                    if (!begin_batch_write(index, pos + i)) {
                         record_push_failure(reservation_failure_reason(index, pos + i));
+                        cancel_batch_reservations(pos, count);
                         return false;
                     }
                     buffer_[index] = items[i];
                     sequences_[index].store(pos + i + 1, std::memory_order_release);
+                }
+                // A BatchWriting slot is deliberately invisible to consumers.
+                // Only after every payload is complete can this batch become
+                // observable, which makes a false return all-or-nothing.
+                for (size_t i = 0; i < count; ++i) {
+                    const size_t index = (pos + i) & mask_;
                     reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
                     ready_approx_.fetch_add(1, std::memory_order_relaxed);
                     states_[index].store(state_tag(pos + i, SlotState::Published),
@@ -378,6 +386,7 @@ private:
         Free,
         Reserved,
         Writing,
+        BatchWriting,
         Published,
         Cancelled,
     };
@@ -431,8 +440,42 @@ private:
         return finish_write_reservation(index, position);
     }
 
+    bool begin_batch_write(size_t index, size_t position) {
+        const auto hook_state = std::atomic_load_explicit(&before_publish_hook_, std::memory_order_acquire);
+        if (hook_state && hook_state->hook != nullptr) {
+            hook_state->hook(hook_state->context);
+        }
+        size_t expected = state_tag(position, SlotState::Reserved);
+        return states_[index].compare_exchange_strong(expected, state_tag(position, SlotState::BatchWriting),
+                                                       std::memory_order_acq_rel,
+                                                       std::memory_order_acquire);
+    }
+
+    void cancel_batch_reservations(size_t position, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            const size_t slot_position = position + i;
+            const size_t index = slot_position & mask_;
+            size_t expected = state_tag(slot_position, SlotState::Reserved);
+            if (!states_[index].compare_exchange_strong(expected, state_tag(slot_position, SlotState::Cancelled),
+                                                        std::memory_order_acq_rel,
+                                                        std::memory_order_acquire)) {
+                expected = state_tag(slot_position, SlotState::BatchWriting);
+                if (!states_[index].compare_exchange_strong(expected, state_tag(slot_position, SlotState::Cancelled),
+                                                            std::memory_order_acq_rel,
+                                                            std::memory_order_acquire)) {
+                    continue;
+                }
+            }
+            reserved_approx_.fetch_sub(1, std::memory_order_relaxed);
+            if (stats_enabled_.load(std::memory_order_relaxed)) {
+                stats_.cancelled_reservation_count.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+
     LockFreeQueueFailReason reservation_failure_reason(size_t index, size_t pos) const {
-        return sequences_[index].load(std::memory_order_acquire) != pos
+        return sequences_[index].load(std::memory_order_acquire) != pos ||
+                slot_state(index) == SlotState::Cancelled
             ? LockFreeQueueFailReason::ReservationCancelled
             : LockFreeQueueFailReason::Contention;
     }
@@ -494,6 +537,20 @@ private:
                 }
                 state = slot_state(index);
                 if (state == SlotState::Published) continue;
+            }
+            if (state == SlotState::BatchWriting) {
+                // A batch has written an earlier payload but has not committed
+                // the range. Look ahead for a cancellable reservation so a
+                // producer blocked in a later before-publish hook can fail
+                // without exposing this prefix.
+                for (size_t scan = pos + 1; scan < enqueued; ++scan) {
+                    const size_t scan_index = scan & mask_;
+                    if (slot_state(scan_index) == SlotState::Reserved) {
+                        (void)cancel_reservation(scan_index, scan);
+                        break;
+                    }
+                }
+                break;
             }
             if (state == SlotState::Cancelled) {
                 sequences_[index].store(pos + capacity_, std::memory_order_release);

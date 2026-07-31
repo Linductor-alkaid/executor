@@ -599,7 +599,7 @@ if (status.ready_count > status.queue_capacity / 2) {
 | 时间复杂度 | O(count)，一次性申请所有 TaskWrapper，组装后单次调用 exact batch 入队 |
 | 线程安全 | 与 `push_task` 相同，线程安全，可多生产者并发调用 |
 | 原子语义 | 返回 true 时 `pushed == count`；返回 false 时没有任务入队且 `pushed == 0`。队列空间不足时不会部分入队 |
-| 返回 false 时机 | (a) `tasks == nullptr` 或任一 `tasks[i]` 为空；(b) `stop()` 已开始，执行器拒绝新任务；(c) 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；或 (d) 队列剩余空间不足以容纳整个 batch。以上情况下都不会有任务入队，`pushed` 为 0 |
+| 返回 false 时机 | (a) `tasks == nullptr` 或任一 `tasks[i]` 为空；(b) `stop()` 已开始，执行器拒绝新任务；(c) 对象池（ObjectPool）容量不足以一次性分配 count 个 wrapper；(d) 队列剩余空间不足以容纳整个 batch；或 (e) 消费者取消了尚未提交的 reservation。无论原因是什么，整个 batch 都保持不可见，不会有任务入队，`pushed` 为 0 |
 | 批量统计 | 每次成功的 `push_tasks_batch` 调用会令 `get_queue_stats().batch_pushes` 递增 1，`total_pushes` 递增 `count`（P-260623-004：与队列 batch 统计语义一致） |
 | 空任务统计 | 空任务属于提交拒绝，不进入队列，不增加 `processed_count()` 或 `exception_count()`；可通过 `rejected_empty_count()` 或 `get_queue_stats().rejected_empty_count` 观察 |
 

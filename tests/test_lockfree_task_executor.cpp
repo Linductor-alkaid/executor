@@ -65,6 +65,22 @@ void throw_bad_alloc(void*) {
     throw std::bad_alloc();
 }
 
+struct BatchPublishHook {
+    std::atomic<unsigned> calls{0};
+    std::atomic<bool> second_entered{false};
+    std::atomic<bool> release_second{false};
+};
+
+void block_second_batch_publish(void* context) {
+    auto* hook = static_cast<BatchPublishHook*>(context);
+    if (hook->calls.fetch_add(1, std::memory_order_acq_rel) == 1) {
+        hook->second_entered.store(true, std::memory_order_release);
+        while (!hook->release_second.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+    }
+}
+
 TEST(LockFreeTaskExecutor, BatchAllocationFailureLeavesStopJoinable) {
     LockFreeTaskExecutor exec(16);
     ASSERT_TRUE(exec.start());
@@ -84,6 +100,47 @@ TEST(LockFreeTaskExecutor, BatchAllocationFailureLeavesStopJoinable) {
     });
     ASSERT_EQ(stop_result.wait_for(std::chrono::seconds(1)), std::future_status::ready);
     EXPECT_TRUE(stop_result.get());
+}
+
+TEST(LockFreeTaskExecutor, BatchReservationCancellationIsAllOrNothing) {
+    LockFreeTaskExecutor exec(4, 1, true);
+    ASSERT_TRUE(exec.start());
+
+    std::atomic<int> executed{0};
+    std::function<void()> tasks[3] = {
+        [&] { executed.fetch_add(1, std::memory_order_relaxed); },
+        [&] { executed.fetch_add(1, std::memory_order_relaxed); },
+        [&] { executed.fetch_add(1, std::memory_order_relaxed); },
+    };
+    BatchPublishHook hook;
+    exec.set_before_publish_hook(block_second_batch_publish, &hook);
+
+    size_t pushed = 99;
+    std::atomic<bool> result{true};
+    std::thread producer([&] {
+        result.store(exec.push_tasks_batch(tasks, 3, pushed), std::memory_order_release);
+    });
+    ASSERT_TRUE(wait_until([&] { return hook.second_entered.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(wait_until([&] {
+        return exec.get_queue_stats().cancelled_reservation_count >= 1;
+    }));
+    hook.release_second.store(true, std::memory_order_release);
+    producer.join();
+
+    EXPECT_FALSE(result.load(std::memory_order_acquire));
+    EXPECT_EQ(pushed, 0u);
+    EXPECT_EQ(executed.load(std::memory_order_relaxed), 0);
+
+    exec.set_before_publish_hook(nullptr, nullptr);
+    // pending_count() is approximate, so submit a probe to wait until the
+    // worker has physically advanced all cancelled slots.
+    ASSERT_TRUE(wait_until([&] { return exec.push_task([] {}); }));
+    ASSERT_TRUE(wait_until([&] { return exec.processed_count() == 1; }));
+    size_t reused_pushed = 0;
+    ASSERT_TRUE(exec.push_tasks_batch(tasks, 3, reused_pushed));
+    EXPECT_EQ(reused_pushed, 3u);
+    ASSERT_TRUE(wait_until([&] { return executed.load(std::memory_order_relaxed) == 3; }));
+    exec.stop();
 }
 
 TEST(LockFreeTaskExecutorTest, BasicStartStop) {
