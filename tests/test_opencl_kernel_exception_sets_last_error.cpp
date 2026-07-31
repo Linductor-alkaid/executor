@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <future>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #define private public
 #include "executor/gpu/opencl_executor.hpp"
@@ -19,6 +22,10 @@ using executor::gpu::OpenCLFunctionPointers;
 using executor::gpu::OpenCLLoader;
 
 namespace {
+
+std::atomic<int> write_enqueue_count{0};
+std::atomic<int> copy_enqueue_count{0};
+std::atomic<std::uintptr_t> next_buffer{0x5};
 
 cl_int fake_cl_get_platform_ids(cl_uint num_entries,
                                 cl_platform_id* platforms,
@@ -95,7 +102,7 @@ cl_mem fake_cl_create_buffer(cl_context, cl_mem_flags, size_t, void*, cl_int* er
     if (errcode_ret != nullptr) {
         *errcode_ret = CL_SUCCESS;
     }
-    return reinterpret_cast<cl_mem>(0x5);
+    return reinterpret_cast<cl_mem>(next_buffer.fetch_add(1));
 }
 
 cl_int fake_cl_release_mem_object(cl_mem) {
@@ -123,6 +130,7 @@ cl_int fake_cl_enqueue_write_buffer(cl_command_queue,
                                     cl_uint,
                                     const cl_event*,
                                     cl_event*) {
+    write_enqueue_count.fetch_add(1);
     return CL_SUCCESS;
 }
 
@@ -135,6 +143,7 @@ cl_int fake_cl_enqueue_copy_buffer(cl_command_queue,
                                    cl_uint,
                                    const cl_event*,
                                    cl_event*) {
+    copy_enqueue_count.fetch_add(1);
     return CL_SUCCESS;
 }
 
@@ -174,6 +183,8 @@ public:
         loader_.dll_handle_ = nullptr;
         loader_.dll_path_ = "fake-opencl";
         loader_.functions_ = functions;
+        write_enqueue_count = 0;
+        copy_enqueue_count = 0;
     }
 
     ~FakeOpenCLLoaderScope() {
@@ -256,4 +267,50 @@ TEST(OpenCLKernelExceptionLastError, KernelFuncExceptionSetsLastError) {
         << status.last_error_message;
     EXPECT_TRUE(contains(status.last_error_message, "user-fault"))
         << status.last_error_message;
+}
+
+TEST(OpenCLCopyValidation, CopyRejectsOversizedDeviceRange) {
+    FakeOpenCLLoaderScope fake_loader;
+    OpenCLExecutor executor("opencl_copy_validation", make_opencl_config());
+    ASSERT_TRUE(executor.start()) << executor.get_status().last_error_message;
+
+    void* device_ptr = executor.allocate_device_memory(1024);
+    ASSERT_NE(device_ptr, nullptr);
+    std::vector<std::byte> host_buffer(2048);
+
+    EXPECT_FALSE(executor.copy_to_device(device_ptr, host_buffer.data(), host_buffer.size()));
+    EXPECT_TRUE(contains(executor.get_status().last_error_message, "requested 2048 bytes"));
+    EXPECT_EQ(write_enqueue_count.load(), 0);
+}
+
+TEST(OpenCLCopyValidation, CopyRejectsNullHostBuffer) {
+    FakeOpenCLLoaderScope fake_loader;
+    OpenCLExecutor executor("opencl_copy_validation", make_opencl_config());
+    ASSERT_TRUE(executor.start()) << executor.get_status().last_error_message;
+
+    void* device_ptr = executor.allocate_device_memory(1024);
+    ASSERT_NE(device_ptr, nullptr);
+
+    EXPECT_FALSE(executor.copy_to_device(device_ptr, nullptr, 1024));
+    EXPECT_TRUE(contains(executor.get_status().last_error_message, "host source pointer must not be null"));
+    EXPECT_EQ(write_enqueue_count.load(), 0);
+}
+
+TEST(OpenCLCopyValidation, DeviceToDeviceRejectsSmallerSourceOrDestination) {
+    FakeOpenCLLoaderScope fake_loader;
+    OpenCLExecutor executor("opencl_copy_validation", make_opencl_config());
+    ASSERT_TRUE(executor.start()) << executor.get_status().last_error_message;
+
+    void* small = executor.allocate_device_memory(1024);
+    void* large = executor.allocate_device_memory(2048);
+    ASSERT_NE(small, nullptr);
+    ASSERT_NE(large, nullptr);
+
+    EXPECT_FALSE(executor.copy_device_to_device(large, small, 2048));
+    EXPECT_TRUE(contains(executor.get_status().last_error_message, "source"));
+    EXPECT_EQ(copy_enqueue_count.load(), 0);
+
+    EXPECT_FALSE(executor.copy_device_to_device(small, large, 2048));
+    EXPECT_TRUE(contains(executor.get_status().last_error_message, "destination"));
+    EXPECT_EQ(copy_enqueue_count.load(), 0);
 }
