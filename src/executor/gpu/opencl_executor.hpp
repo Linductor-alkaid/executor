@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <atomic>
+#include <cstddef>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -74,6 +75,7 @@ private:
     void cleanup();
     void cleanup_locked();
     bool check_opencl_error(cl_int error, const char* operation);
+    bool validate_memory_range(const void* device_ptr, std::size_t size, const char* api_name);
     std::shared_ptr<CommandQueueWrapper> get_queue(int stream_id);
     void worker_thread();
     bool validate_config();

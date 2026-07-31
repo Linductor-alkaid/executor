@@ -405,6 +405,28 @@ void OpenCLExecutor::free_device_memory(void* ptr) {
     }
 }
 
+bool OpenCLExecutor::validate_memory_range(const void* device_ptr, std::size_t size,
+                                           const char* api_name) {
+    const char* api = (api_name && api_name[0] != '\0') ? api_name : "OpenCL copy";
+    const auto it = memory_map_.find(const_cast<void*>(device_ptr));
+    if (it == memory_map_.end()) {
+        set_last_error(std::string(api) + ": device pointer was not allocated by this executor");
+        return false;
+    }
+    if (size == 0) {
+        set_last_error(std::string(api) + ": requested copy size must be greater than zero bytes");
+        return false;
+    }
+    if (size > it->second.size) {
+        std::ostringstream oss;
+        oss << api << ": requested " << size << " bytes exceeds allocation size "
+            << it->second.size << " bytes";
+        set_last_error(oss.str());
+        return false;
+    }
+    return true;
+}
+
 bool OpenCLExecutor::copy_to_device(void* dst, const void* src, size_t size, bool async, int stream_id) {
     if (!is_available_.load(std::memory_order_acquire)) {
         return false;
@@ -420,10 +442,14 @@ bool OpenCLExecutor::copy_to_device(void* dst, const void* src, size_t size, boo
     }
 
     std::lock_guard<std::mutex> lock(memory_mutex_);
-    auto it = memory_map_.find(dst);
-    if (it == memory_map_.end()) {
+    if (src == nullptr) {
+        set_last_error("copy_to_device: host source pointer must not be null");
         return false;
     }
+    if (!validate_memory_range(dst, size, "copy_to_device destination")) {
+        return false;
+    }
+    const auto it = memory_map_.find(dst);
 
     auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
@@ -452,10 +478,14 @@ bool OpenCLExecutor::copy_to_host(void* dst, const void* src, size_t size, bool 
     }
 
     std::lock_guard<std::mutex> lock(memory_mutex_);
-    auto it = memory_map_.find(const_cast<void*>(src));
-    if (it == memory_map_.end()) {
+    if (dst == nullptr) {
+        set_last_error("copy_to_host: host destination pointer must not be null");
         return false;
     }
+    if (!validate_memory_range(src, size, "copy_to_host source")) {
+        return false;
+    }
+    const auto it = memory_map_.find(const_cast<void*>(src));
 
     auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
@@ -484,12 +514,12 @@ bool OpenCLExecutor::copy_device_to_device(void* dst, const void* src, size_t si
     }
 
     std::lock_guard<std::mutex> lock(memory_mutex_);
-    auto src_it = memory_map_.find(const_cast<void*>(src));
-    auto dst_it = memory_map_.find(dst);
-
-    if (src_it == memory_map_.end() || dst_it == memory_map_.end()) {
+    if (!validate_memory_range(src, size, "copy_device_to_device source") ||
+        !validate_memory_range(dst, size, "copy_device_to_device destination")) {
         return false;
     }
+    const auto src_it = memory_map_.find(const_cast<void*>(src));
+    const auto dst_it = memory_map_.find(dst);
 
     auto funcs = loader_->get_functions();
     std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
