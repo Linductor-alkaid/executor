@@ -102,4 +102,40 @@ RoutingDecision TaskRouter::route(
                   request.options.preferred_executor ? "preferred GPU executor selected" : "GPU scheduler selected GPU");
 }
 
+RoutingDecision TaskRouter::route_dispatch(
+    const TaskOptions& options,
+    const std::vector<ExecutorCapability>& capabilities) const {
+    RoutingDecision decision;
+    decision.task_name = options.name.empty() ? "facade_dispatch_auto" : options.name;
+    decision.requested_intent = options.intent;
+    decision.selected_backend = ExecutionBackend::LockFree;
+
+    const auto reject = [&](RoutingReason reason, std::string detail) {
+        decision.reason = reason;
+        decision.detail = std::move(detail);
+        return decision;
+    };
+    if (options.intent != ExecutionIntent::LowLatency) {
+        return reject(RoutingReason::Rejected,
+                      "dispatch_auto only supports LowLatency; use the corresponding typed API");
+    }
+    if (!options.preferred_executor || options.preferred_executor->empty()) {
+        return reject(RoutingReason::Rejected,
+                      "LowLatency dispatch requires preferred_executor");
+    }
+    decision.selected_executor_name = *options.preferred_executor;
+    const auto* capability = find_capability(
+        capabilities, ExecutionBackend::LockFree, decision.selected_executor_name);
+    if (!capability || !capability->registered) {
+        return reject(RoutingReason::BackendUnavailable, "requested lock-free executor is not registered");
+    }
+    if (!capability->running) {
+        return reject(RoutingReason::BackendNotRunning, "requested lock-free executor is not running");
+    }
+    if (capability->capacity_hint != 0 && capability->pending_work >= capability->capacity_hint) {
+        return reject(RoutingReason::CapacityPressure, "requested lock-free executor is at capacity");
+    }
+    return reject(RoutingReason::PreferredExecutor, "requested lock-free executor selected");
+}
+
 }  // namespace executor

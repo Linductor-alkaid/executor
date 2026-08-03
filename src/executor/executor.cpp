@@ -555,7 +555,7 @@ ExecutorResult Executor::register_realtime_task_ex(
         return validation;
     }
 
-    if (manager_->get_realtime_executor(name) ||
+    if (manager_->get_realtime_executor(name) || manager_->get_lockfree_executor(name) ||
         manager_->get_blocking_io_executor(name) ||
         manager_->get_gpu_executor(name)) {
         auto result = make_failure(
@@ -655,7 +655,7 @@ ExecutorResult Executor::register_blocking_io_worker_ex(
             validation, FailureKind::SubmitRejected, name, "facade_register_blocking_io_worker");
         return validation;
     }
-    if (manager_->get_blocking_io_executor(name) ||
+    if (manager_->get_blocking_io_executor(name) || manager_->get_lockfree_executor(name) ||
         manager_->get_realtime_executor(name) ||
         manager_->get_gpu_executor(name)) {
         auto result = make_failure(ExecutorErrorCode::DuplicateName,
@@ -785,6 +785,74 @@ IRealtimeExecutor* Executor::get_realtime_executor(const std::string& name) {
 // 获取所有实时任务列表
 std::vector<std::string> Executor::get_realtime_task_list() const {
     return manager_->get_realtime_executor_names();
+}
+
+bool Executor::register_lockfree_executor(
+    const std::string& name,
+    std::unique_ptr<LockFreeTaskExecutor> executor) {
+    if (name.empty() || !executor || !manager_->register_lockfree_executor(name, std::move(executor))) {
+        record_submit_rejected(name, "facade_register_lockfree_executor",
+                               "Lock-free executor registration failed or duplicate name");
+        return false;
+    }
+    return true;
+}
+
+bool Executor::start_lockfree_executor(const std::string& name) {
+    if (!manager_->start_lockfree_executor(name)) {
+        record_submit_rejected(name, "facade_start_lockfree_executor",
+                               "Lock-free executor not found, already running, or stopped");
+        return false;
+    }
+    return true;
+}
+
+void Executor::stop_lockfree_executor(const std::string& name) {
+    manager_->stop_lockfree_executor(name);
+}
+
+std::vector<std::string> Executor::get_lockfree_executor_names() const {
+    return manager_->get_lockfree_executor_names();
+}
+
+RoutingDecision Executor::route_dispatch(const TaskOptions& options) const {
+    return task_router_.route_dispatch(options, manager_->get_executor_capabilities());
+}
+
+DispatchResult Executor::dispatch_auto(TaskOptions options, std::function<void()> task) {
+    DispatchResult result;
+    result.decision = route_dispatch(options);
+    result.backend = result.decision.selected_backend;
+    result.executor_name = result.decision.selected_executor_name;
+
+    if (!task) {
+        result.decision.reason = RoutingReason::Rejected;
+        result.decision.detail = "dispatch task is empty";
+        result.message = result.decision.detail;
+        record_routing_decision(result.decision);
+        record_submit_rejected(result.executor_name, result.decision.task_name, result.message);
+        return result;
+    }
+
+    if (result.decision.reason == RoutingReason::Rejected ||
+        result.decision.reason == RoutingReason::BackendUnavailable ||
+        result.decision.reason == RoutingReason::BackendNotRunning ||
+        result.decision.reason == RoutingReason::CapacityPressure) {
+        result.message = result.decision.detail;
+        record_routing_decision(result.decision);
+        record_submit_rejected(result.executor_name, result.decision.task_name, result.message);
+        return result;
+    }
+
+    result.accepted = manager_->try_push_lockfree_task(result.executor_name, std::move(task));
+    if (!result.accepted) {
+        result.decision.reason = RoutingReason::Rejected;
+        result.decision.detail = "lock-free executor rejected dispatch (stopped, full, or object pool exhausted)";
+        result.message = result.decision.detail;
+        record_submit_rejected(result.executor_name, result.decision.task_name, result.message);
+    }
+    record_routing_decision(result.decision);
+    return result;
 }
 
 // 获取异步执行器状态
@@ -1202,7 +1270,7 @@ ExecutorResult Executor::register_gpu_executor_ex(
         return validation;
     }
 
-    if (manager_->get_gpu_executor(name) ||
+    if (manager_->get_gpu_executor(name) || manager_->get_lockfree_executor(name) ||
         manager_->get_realtime_executor(name) ||
         manager_->get_blocking_io_executor(name)) {
         auto result = make_failure(

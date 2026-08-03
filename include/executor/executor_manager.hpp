@@ -5,6 +5,7 @@
 #include "config.hpp"
 #include "types.hpp"
 #include "task_options.hpp"
+#include "lockfree_task_executor.hpp"
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -120,6 +121,14 @@ public:
      */
     std::vector<std::string> get_realtime_executor_names() const;
 
+    bool register_lockfree_executor(const std::string& name,
+                                    std::unique_ptr<LockFreeTaskExecutor> executor);
+    LockFreeTaskExecutor* get_lockfree_executor(const std::string& name);
+    std::vector<std::string> get_lockfree_executor_names() const;
+    bool start_lockfree_executor(const std::string& name);
+    void stop_lockfree_executor(const std::string& name);
+    bool try_push_lockfree_task(const std::string& name, std::function<void()> task);
+
     bool register_blocking_io_executor(
         const std::string& name,
         std::unique_ptr<IBlockingIoExecutor> executor);
@@ -230,6 +239,9 @@ private:
 
     // 读写锁（保护实时执行器注册表）
     mutable std::shared_mutex mutex_;
+
+    std::unordered_map<std::string, std::unique_ptr<LockFreeTaskExecutor>> lockfree_executors_;
+    mutable std::shared_mutex lockfree_mutex_;
 
     std::unordered_map<std::string, std::unique_ptr<IBlockingIoExecutor>> blocking_io_executors_;
     mutable std::shared_mutex blocking_io_mutex_;

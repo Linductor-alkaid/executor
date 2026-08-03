@@ -104,6 +104,15 @@ struct RoutingDecision {
         std::chrono::steady_clock::now();
 };
 
+/** @brief Result of a bounded fire-and-forget automatic dispatch attempt. */
+struct DispatchResult {
+    bool accepted = false;
+    ExecutionBackend backend = ExecutionBackend::LockFree;
+    std::string executor_name;
+    RoutingDecision decision;
+    std::string message;
+};
+
 /**
  * @brief 将 callable 与自动路由选项组合的按值 builder。
  *

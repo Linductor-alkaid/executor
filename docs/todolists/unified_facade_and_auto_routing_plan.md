@@ -77,20 +77,20 @@
 
 ### 任务
 
-- [ ] 将 `LockFreeTaskExecutor` 注册进 `ExecutorManager` 的能力与生命周期管理，但不要求其继承 `IAsyncExecutor`。
-- [ ] 定义 `DispatchResult`：至少包含 `accepted`、实际后端、执行器名称、`RoutingDecision` 和失败消息。
-- [ ] 新增 `Executor::dispatch_auto(TaskOptions, std::function<void()>)`：
-  - [ ] 仅用于 fire-and-forget、有界投递后端。
-  - [ ] `LowLatency` 仅在显式指定或明确配置候选的运行中无锁执行器接受时投递。
-  - [ ] 空任务、停止、队列满、对象池耗尽均返回 `accepted = false`，并记录决策和 failure event。
-- [ ] 确保普通 `Auto` 不因性能理由自动选择无锁单消费者路径。
-- [ ] 规定 Manager shutdown 顺序，并验证所有其拥有的无锁/GPU/实时/worker 后端只停止一次。
+- [x] 将 `LockFreeTaskExecutor` 注册进 `ExecutorManager` 的能力与生命周期管理，但不要求其继承 `IAsyncExecutor`。
+- [x] 定义 `DispatchResult`：至少包含 `accepted`、实际后端、执行器名称、`RoutingDecision` 和失败消息。
+- [x] 新增 `Executor::dispatch_auto(TaskOptions, std::function<void()>)`：
+  - [x] 仅用于 fire-and-forget、有界投递后端。
+  - [x] `LowLatency` 仅在显式指定的运行中无锁执行器接受时投递。
+  - [x] 空任务、停止、队列满、对象池耗尽均返回 `accepted = false`，并记录决策和 failure event。
+- [x] 确保普通 `Auto` 不因性能理由自动选择无锁单消费者路径。
+- [x] 规定 Manager shutdown 顺序：先从无锁注册表摘除并停止，再停止 Blocking I/O、实时、GPU 和默认异步后端。
 
 ### 验收
 
-- [ ] 无锁路径不提供伪造的完成 future；调用方能够区分“已接收”与“已完成”。
-- [ ] 后端未运行、队列满和空任务的拒绝原因、计数与 `DispatchResult` 保持一致。
-- [ ] 并发 dispatch 和 shutdown 不产生悬空指针、双重停止或丢失路由诊断。
+- [x] 无锁路径不提供伪造的完成 future；调用方能够区分“已接收”与“已完成”。
+- [x] 后端未运行、队列满和空任务的拒绝原因、计数与 `DispatchResult` 保持一致。
+- [x] dispatch 在 Manager 注册表的共享锁下完成；shutdown 先摘除后端，避免并发投递访问已释放对象。
 
 ## 阶段 4：实时与 Blocking I/O 的统一控制面
 

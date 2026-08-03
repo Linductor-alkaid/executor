@@ -23,6 +23,8 @@ public:
 
     RoutingDecision route(const Request& request,
                           const std::vector<ExecutorCapability>& capabilities) const;
+    RoutingDecision route_dispatch(const TaskOptions& options,
+                                   const std::vector<ExecutorCapability>& capabilities) const;
 };
 
 }  // namespace executor

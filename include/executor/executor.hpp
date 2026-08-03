@@ -7,6 +7,7 @@
 #include "interfaces.hpp"
 #include "executor_manager.hpp"
 #include "blocking_io.hpp"
+#include "lockfree_task_executor.hpp"
 #include "gpu/gpu_scheduler.hpp"
 #include <future>
 #include <functional>
@@ -345,6 +346,20 @@ public:
      */
     std::vector<std::string> get_realtime_task_list() const;
 
+    bool register_lockfree_executor(const std::string& name,
+                                    std::unique_ptr<LockFreeTaskExecutor> executor);
+    bool start_lockfree_executor(const std::string& name);
+    void stop_lockfree_executor(const std::string& name);
+    std::vector<std::string> get_lockfree_executor_names() const;
+
+    /**
+     * @brief Dispatch to an explicitly selected bounded, fire-and-forget backend.
+     *
+     * `accepted` reports queue admission only; it never represents task
+     * completion. `LowLatency` requires a running named lock-free executor.
+     */
+    DispatchResult dispatch_auto(TaskOptions options, std::function<void()> task);
+
     /**
      * @brief 获取异步执行器状态
      * 
@@ -622,6 +637,7 @@ private:
     RoutingDecision route_task(const TaskOptions& options,
                                bool cpu_gpu_task,
                                std::optional<bool> gpu_selected = std::nullopt) const;
+    RoutingDecision route_dispatch(const TaskOptions& options) const;
 
     void record_result_failure(const ExecutorResult& result,
                                FailureKind kind,
