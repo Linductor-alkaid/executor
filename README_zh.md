@@ -37,6 +37,9 @@
 - **统一 API**
   `Executor` Facade 提供 `submit`、`submit_priority`、`submit_delayed`、`submit_periodic`、`submit_batch`、`submit_batch_no_future` 及实时任务注册
 
+- **基于意图的自动路由**
+  `submit_auto()` 为普通 CPU 和显式 CPU/GPU 双路径任务保留 `future` 完成语义；`dispatch_auto()` 为指定无锁或实时后端报告有界队列是否接收；`start_worker()` 管理长期、可中断的 Blocking I/O worker。路由决策、failure event 与 `get_executor_capabilities()` 使后端选择和状态可观察，而不会把不同执行模型伪装成同一种完成契约。
+
 - **批量任务提交**
   `submit_batch()` 和 `submit_batch_no_future()` 可一次性提交大量任务，减少重复提交路径开销。当前版本不承诺固定加速比；收益会随任务数量、任务体、线程数、硬件和构建配置变化，请以本地 benchmark 结果为准。当前记录见 [docs/performance/batch_submit_baseline_2026-07-09.json](docs/performance/batch_submit_baseline_2026-07-09.json)。
 
@@ -171,6 +174,18 @@ int main() {
 ```
 
 > 用户场景式通信示例见 [examples/comm_robot_pipeline.cpp](examples/comm_robot_pipeline.cpp)：在一条传感器采集、规划、实时控制、状态监控流水线中展示 sensor frames、realtime commands、latest config、startup gate、state snapshot、task dependencies 和 comm observability。更多示例见 [examples/](examples/)（需 `-DEXECUTOR_BUILD_EXAMPLES=ON` 构建）；GPU 示例 `gpu_basic`、`gpu_multi_device` 需同时启用 GPU）。
+
+### 提交 API 选择
+
+| 工作类型 | 推荐 API | 返回结果表示 |
+| --- | --- | --- |
+| 普通有限 CPU 工作 | `submit_auto(lambda)` | `future` 的完成或异常 |
+| 独立 CPU 与 GPU 实现 | `submit_auto(cpu_gpu_task(cpu, gpu))` | 已选路径的完成或异常 |
+| 指定 MPSC 无锁低延迟后端 | `dispatch_auto(LowLatency, task)` | 有界队列已接收任务 |
+| 指定周期实时后端 | `dispatch_auto(RealtimeQueue, task)` | 实时队列已接收任务 |
+| 长期可中断 I/O 循环 | `start_worker(BlockingWorkerSpec)` | worker 启动与生命周期 handle |
+
+`Auto` 不会静默选择无锁或实时后端。自动路由不能验证 callable 的实时安全、线程安全、GPU 内存所有权或 I/O 可中断性；应用仍须自行负责这些边界。
 
 ## 文档
 

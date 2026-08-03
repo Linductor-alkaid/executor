@@ -56,6 +56,7 @@ CompletionStatus get_completion_status() const;
 - `try_wait_for_completion(timeout)` 返回 `true` 表示所有已提交异步任务在 `timeout` 内完成；返回 `false` 表示等待超时且仍有任务未完成。超时不是 panic，也不抛异常；调用方可继续通过 `get_failure_status().wait_timeout_count` 或 `get_recent_failures()` 观察。
 - `wait_for_completion_for(timeout)` 是支持任意 `std::chrono::duration` 的 bool 入口；`wait_for_completion_ex(timeout)` 返回 `WaitResult`，其中包含 `completed`、`timed_out`、`timeout`、`message` 和 `CompletionStatus` 快照。
 - `get_completion_status()` 返回默认异步执行器的完成状态快照，包括 `is_initialized`、`is_running`、`is_idle`、`active_tasks`、`queued_tasks`、`pending_tasks`、`completed_tasks` 和 `failed_tasks`；`is_idle()` 是其中 `is_idle` 的便捷入口。状态查询不会触发默认执行器懒初始化。
+- 所有上述等待 API 只覆盖默认异步执行器的 future 型任务；不会等待 GPU、无锁、实时队列或长期 Blocking I/O worker。后者分别使用其返回结果、状态和显式停止接口观察。
 - `initialize_ex(config)` 返回 `ExecutorResult`，可区分 `AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`StartFailed` 等原因；旧 `initialize()` 保持 `bool` 签名，并委托到 `_ex` 后只返回 `ok`。
 
 **注意事项**：懒初始化后不可再通过 `initialize()` 更换配置（已初始化则返回 false）。atexit 使用 `shutdown(false)`，不等待未完成任务。避免在静态析构中使用 Executor。
@@ -302,7 +303,37 @@ if (backpressure_drops > 0) {
 | `failed_pushes` | 所有底层队列失败入队尝试数；静止快照中等于 `queue_full_rejections + contention_rejection + reservation_cancelled_rejections`。仅 `enable_stats=true` 时统计 |
 | `peak_queue_size` / `queue_capacity` | 用于分析实时任务队列水位与背压比例 |
 
-### 3.6 延迟与周期任务
+### 3.7 统一自动路由
+
+自动路由只依据 `TaskOptions`、用户显式意图和后端能力快照；不会检查 lambda 是否阻塞、线程安全、实时安全，或是否正确管理 GPU 内存。默认 `TaskOptions` 为 `ExecutionIntent::Auto` + `FallbackPolicy::NoFallback`。
+
+| 需求 | API | 返回值语义 |
+|------|-----|------------|
+| 普通短 CPU 任务 | `submit_auto([] { return value; })` | `std::future<T>`：任务完成或异常 |
+| 独立 CPU/GPU 实现 | `submit_auto(cpu_gpu_task(cpu, gpu)...)` | `std::future<void>`：已接受路径的完成或异常 |
+| 指定无锁低延迟队列 | `dispatch_auto(TaskOptions{LowLatency, ...}, task)` | `DispatchResult::accepted`：仅表示有界队列已接收 |
+| 指定实时队列 | `dispatch_auto(TaskOptions{RealtimeQueue, ...}, task)` | `DispatchResult::accepted`：仅表示后续周期已接收 |
+| 长期可中断 I/O | `start_worker(BlockingWorkerSpec{...})` | `WorkerHandle`：启动结果与生命周期控制 |
+
+```cpp
+auto decoded = ex.submit_auto(
+    executor::task([] { return decode(); }).name("decode"));
+
+executor::TaskOptions rt;
+rt.intent = executor::ExecutionIntent::RealtimeQueue;
+rt.preferred_executor = "control";
+auto admission = ex.dispatch_auto(rt, [] { apply_control(); });
+if (!admission.accepted) {
+    // 检查 admission.decision、admission.message 和 failure/status counters
+}
+```
+
+- `LowLatency` 与 `RealtimeQueue` 必须显式指定 `preferred_executor` 且后端已运行；不会因 deadline、priority 或队列水位自动选择。
+- `dispatch_auto()` 的接收结果不是完成通知。实时任务的 drop/backpressure 继续由 `RealtimeExecutorStatus` 计数和 failure event 观察。
+- `get_last_routing_decision()`、`get_recent_routing_decisions()` 与 `set_routing_callback()` 提供独立的路由解释；`ExecutorFailureEvent` 仍用于实际拒绝和执行失败。
+- `get_executor_capabilities()` 返回所有已注册后端的建议性状态快照，只用于显示/预检；实际投递仍可能因并发 stop 或满队列被拒绝。
+
+### 3.8 延迟与周期任务
 
 > ⚠️ **API 范围提示**：`submit_delayed`、`submit_periodic`、`cancel_task` **仅在 `Executor` Facade 类（`include/executor/executor.hpp`）中提供**，**不属于** `IAsyncExecutor`、`IExecutor` 或 `ThreadPool` 的接口。用户直接对底层 `ThreadPool` 实例调用这些方法会编译失败。延迟与周期任务统一由 Facade 内部的 `ExecutorManager` 调度，底层 `ThreadPool` 不感知任务时间维度。
 
@@ -407,6 +438,7 @@ ExecutorResult start_blocking_io_worker_ex(const std::string& name);
 void stop_blocking_io_worker(const std::string& name);
 BlockingIoExecutorStatus get_blocking_io_worker_status(const std::string& name) const;
 std::vector<std::string> get_blocking_io_worker_list() const;
+WorkerHandle start_worker(BlockingWorkerSpec spec);
 ```
 
 - `name` 必须在同一 `Executor` 中与 async、RT、GPU 和其他 I/O executor 名称唯一。
@@ -414,6 +446,7 @@ std::vector<std::string> get_blocking_io_worker_list() const;
 - `_ex` 入口以 `InvalidConfig`、`DuplicateName`、`NotFound`、`AlreadyInitialized` 或 `StartFailed` 说明拒绝原因；普通 `bool` 入口保留兼容风格。
 - `stop_blocking_io_worker()` 执行 stop request、`wakeup()` 和 join；不 detach worker。重复停止安全。
 - `Executor::shutdown()` 也会请求停止、唤醒并 join 所有已注册 I/O worker，即使传入 `shutdown(false)`。
+- 新代码可用 `start_worker(BlockingWorkerSpec{name, config, std::move(worker)})` 原子完成注册和启动。返回的 `WorkerHandle` 暴露 `start_result()`、`started()`、`request_stop()`、`stop()` 和 `status()`；它表示长期 worker 的生命周期，绝不是单次任务完成 future。
 
 #### 4.5.3 配置与状态
 

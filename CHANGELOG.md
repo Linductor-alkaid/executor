@@ -4,6 +4,30 @@
 
 ---
 
+## [0.3.1] - 2026-08-03
+
+0.3.1 是统一 `Executor` Facade 与按意图自动路由的向后兼容功能版本。它保留各执行模型真实的完成、接收和生命周期语义，而不将它们统一伪装为 `future`。
+
+### 新增
+
+- **任务意图与 CPU/GPU 双路径**：新增 `TaskOptions`、`TaskBuilder`、`ExecutionIntent`、`FallbackPolicy`、`cpu_gpu_task()` 和 `CpuGpuTask`。普通 `submit_auto(lambda)` 默认选择异步线程池；CPU/GPU 双路径仅在 GPU 可提交时使用 GPU，`AllowCpu` 才允许显式回退。
+- **可解释路由与能力发现**：新增 `RoutingDecision`、routing callback、最近路由决策缓冲及 `get_executor_capabilities()`。路由说明与 failure event 分离：前者解释选择，后者报告实际拒绝或执行失败。
+- **有界 dispatch**：新增 `DispatchResult` 和 `dispatch_auto()`。`LowLatency` 只投递到用户指定、运行中的无锁执行器；`RealtimeQueue` 只投递到指定、运行中的实时队列。返回值只表示队列接收，不表示任务完成。
+- **无锁统一管理**：`ExecutorManager` 现注册、启动、停止并枚举 `LockFreeTaskExecutor`，跨异步、GPU、实时、Blocking I/O 和无锁后端保证名称唯一；关闭时先从无锁注册表摘除并停止。
+- **Blocking I/O 统一控制面**：新增 `BlockingWorkerSpec`、`WorkerHandle` 和 `start_worker()`，封装注册、启动、状态查询及 stop/wakeup/join，同时保留 `IBlockingIoWorker` 的 stop token、启动超时和退出原因契约。
+
+### 测试与文档
+
+- 新增自动路由阶段测试，覆盖默认路由、CPU 回退/拒绝、路由 callback 隔离、路由缓冲语义、无锁队列满、实时未启动/有界接收、Blocking worker 生命周期和能力枚举。
+- `API.md`、`MIGRATION.md`、中英文 README 和 Blocking I/O 教程补充 API 选择表、结果语义、迁移路径及自动路由边界。
+
+### 兼容性
+
+- **无破坏性变更**：`submit()`、`submit_gpu()`、实时和 Blocking I/O 的既有入口保持可用。legacy 四参数 CPU/GPU `submit_auto(TaskCharacteristics, name, kernel, config)` 在 `0.3.x` 保持既有“GPU 未就绪即失败、无隐式 CPU 回退”的行为，暂不添加编译期弃用标记。
+- 带返回值的 CPU/GPU 自动任务、`ExecutionReport<T>` 和 legacy overload 的弃用/移除仅在后续允许破坏性变更的主版本评估。
+
+---
+
 ## [0.3.0] - 2026-07-27
 
 0.3.0 是面向跨线程通信、任务依赖编排和长期阻塞 I/O 生命周期管理的向后兼容功能版本。0.2.3 的公开 API 保持可用；新代码可逐步采用 `executor::comm`、任务图 facade 和 `BlockingIoExecutor`。

@@ -58,19 +58,18 @@ int main() {
 
     auto worker = std::make_unique<MockBlockingWorker>();
     MockBlockingWorker* worker_view = worker.get();
-    const auto registered = executor.register_blocking_io_worker_ex(
-        "tutorial_io", config, std::move(worker));
-    const auto started = registered ? executor.start_blocking_io_worker_ex("tutorial_io")
-                                  : executor::ExecutorResult{};
-    if (!registered || !started || !worker_view->wait_until_started()) {
+    executor::BlockingWorkerSpec spec{
+        "tutorial_io", config, std::move(worker)};
+    auto handle = executor.start_worker(std::move(spec));
+    if (!handle.started() || !worker_view->wait_until_started()) {
         std::cerr << "blocking I/O worker start failed\n";
         executor.shutdown();
         return 1;
     }
 
-    const auto running = executor.get_blocking_io_worker_status("tutorial_io");
-    executor.stop_blocking_io_worker("tutorial_io");
-    const auto stopped = executor.get_blocking_io_worker_status("tutorial_io");
+    const auto running = handle.status();
+    handle.stop();
+    const auto stopped = handle.status();
     const bool worker_stopped = worker_view->stopped();
 
     const bool passed = running.is_running && worker_stopped &&

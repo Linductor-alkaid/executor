@@ -142,6 +142,26 @@ bool test_routing_callback_and_buffer_are_isolated() {
     return true;
 }
 
+bool test_routing_buffer_order_clear_and_failure_separation() {
+    Executor executor;
+    executor.set_recent_routing_capacity(3);
+    executor.submit_auto(task([] {}).name("first")).get();
+    executor.submit_auto(task([] {}).name("second")).get();
+
+    const auto decisions = executor.get_recent_routing_decisions();
+    TEST_ASSERT(decisions.size() == 2 && decisions[0].task_name == "first" &&
+                    decisions[1].task_name == "second",
+                "routing decisions should retain chronological order");
+    TEST_ASSERT(executor.get_failure_status().total_count == 0,
+                "successful routing decisions must not become failure events");
+
+    executor.clear_recent_routing_decisions();
+    TEST_ASSERT(executor.get_recent_routing_decisions().empty(),
+                "clearing routing decisions must only clear the routing buffer");
+    executor.shutdown();
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -152,5 +172,6 @@ int main() {
     passed &= test_require_requested_backend_requires_running_gpu();
     passed &= test_unsupported_generic_intent_rejects();
     passed &= test_routing_callback_and_buffer_are_isolated();
+    passed &= test_routing_buffer_order_clear_and_failure_separation();
     return passed ? 0 : 1;
 }

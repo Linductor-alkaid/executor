@@ -113,24 +113,24 @@
 
 ### 测试任务
 
-- [ ] 为公共类型、builder、双路径 callable 和不兼容 intent 添加编译/单元测试。
+- [x] 为公共类型、builder、双路径 callable 和不兼容 intent 添加编译/单元测试。
 - [ ] 覆盖 CPU/GPU 路由矩阵：无配置、GPU 可用、未注册、已停止、后端错误、硬容量满、真实提交竞争，以及三种 fallback 策略。
-- [ ] 覆盖 routing buffer 的容量、顺序、清理、callback 异常隔离和与 failure event 的分离。
-- [ ] 覆盖无锁 dispatch 的接受、停止、队列满、对象池耗尽、空任务及 shutdown 并发。
-- [ ] 覆盖 Blocking worker 启动超时/停止和实时未启动/背压，验证不会经自动路由改变语义。
-- [ ] 复跑现有 GPU scheduler、facade failure observability、realtime、blocking I/O、lockfree 和 manager 测试，防止回归。
+- [x] 覆盖 routing buffer 的容量、顺序、清理、callback 异常隔离和与 failure event 的分离。
+- [x] 覆盖无锁 dispatch 的接受、停止、队列满、对象池耗尽、空任务及 shutdown 并发。
+- [x] 覆盖 Blocking worker 启动超时/停止和实时未启动/背压，验证不会经自动路由改变语义。
+- [x] 复跑现有 GPU scheduler、facade failure observability、realtime、blocking I/O、lockfree 和 manager 测试，防止回归。（GPU 启用集成测试待 CUDA 主机复跑）
 
 ### 文档与迁移任务
 
-- [ ] 更新 `docs/API.md`，按 `submit_auto`、`dispatch_auto`、`start_worker` 与显式 API 说明返回语义和适用范围。
-- [ ] 更新 `docs/MIGRATION.md`：新 API 默认 `NoFallback`，legacy overload 在 `0.3.x` 不变，后续主版本才进入弃用/移除窗口。
-- [ ] 为 README 和教程加入场景式决策表：普通短任务、CPU/GPU 双路径、无锁低延迟、实时队列、Blocking I/O worker。
-- [ ] 说明自动路由不能验证 callable 的实时安全、线程安全、GPU 内存所有权或 I/O 可中断性。
-- [ ] 记录发布说明和版本兼容策略；带返回值的 CPU/GPU 自动任务和 `ExecutionReport<T>` 仅列为后续主版本评估项。
+- [x] 更新 `docs/API.md`，按 `submit_auto`、`dispatch_auto`、`start_worker` 与显式 API 说明返回语义和适用范围。
+- [x] 更新 `docs/MIGRATION.md`：新 API 默认 `NoFallback`，legacy overload 在 `0.3.x` 不变，后续主版本才进入弃用/移除窗口。
+- [x] 为 README 和教程加入场景式决策表：普通短任务、CPU/GPU 双路径、无锁低延迟、实时队列、Blocking I/O worker。
+- [x] 说明自动路由不能验证 callable 的实时安全、线程安全、GPU 内存所有权或 I/O 可中断性。
+- [x] 记录发布说明和版本兼容策略；带返回值的 CPU/GPU 自动任务和 `ExecutionReport<T>` 仅列为后续主版本评估项。
 
 ### 最终验收
 
-- [ ] 新用户可只使用 `Executor` 和 `submit_auto(lambda)` 完成默认异步任务，并获得可解释的默认路由决策。
-- [ ] 专家用户仍可调用全部既有显式 API，且行为与回归测试基线一致。
-- [ ] 所有后端不可用、拒绝、回退、任务异常和背压状态至少通过 future/返回值、路由决策、failure event 或状态计数之一可观察。
+- [x] 新用户可只使用 `Executor` 和 `submit_auto(lambda)` 完成默认异步任务，并获得可解释的默认路由决策。
+- [x] 专家用户仍可调用全部既有显式 API，且行为与回归测试基线一致。
+- [x] 所有后端不可用、拒绝、回退、任务异常和背压状态至少通过 future/返回值、路由决策、failure event 或状态计数之一可观察。
 - [ ] 全量测试、禁用 GPU 构建和启用 GPU 构建均通过；新增测试不依赖实际 GPU 才能验证不可用/回退路径。

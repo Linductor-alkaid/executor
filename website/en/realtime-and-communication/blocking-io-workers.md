@@ -37,10 +37,10 @@ blocking worker started=yes, stopped=yes, wakeups=1
 
 ## Lifecycle and status
 
-1. Configure a nonempty `BlockingIoConfig::thread_name` and register a `std::unique_ptr<IBlockingIoWorker>`.
-2. Prefer `register_blocking_io_worker_ex()` and `start_blocking_io_worker_ex()` when callers need `ExecutorResult` diagnostics.
-3. Observe `get_blocking_io_worker_status(name)`. `ready` describes executor-thread setup only; it does not mean a protocol, device, or first input is ready.
-4. Call `stop_blocking_io_worker(name)` to request stop, wake the worker, and join it. Repeated calls are safe.
+1. Configure a nonempty `BlockingIoConfig::thread_name` and pass a `std::unique_ptr<IBlockingIoWorker>` in `BlockingWorkerSpec` to `start_worker()`.
+2. Inspect `WorkerHandle::start_result()` when startup diagnostics are needed; `WorkerHandle::started()` is its convenience success check. The explicit register/start APIs remain available for incremental migration.
+3. Observe `WorkerHandle::status()` (or `get_blocking_io_worker_status(name)`). `ready` describes executor-thread setup only; it does not mean a protocol, device, or first input is ready.
+4. Call `WorkerHandle::request_stop()` to wake a blocked worker without joining, or `WorkerHandle::stop()` to request stop, wake it, and join. Repeated calls are safe.
 
 `Executor::shutdown()` applies the same stop/wake/join rule to every registered I/O worker, including `shutdown(false)`. Do not detach a worker or retain references to it after shutdown.
 

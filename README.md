@@ -37,6 +37,9 @@
 - **Unified API**
   `Executor` facade provides `submit`, `submit_priority`, `submit_delayed`, `submit_periodic`, `submit_batch`, `submit_batch_no_future`, and real-time task registration
 
+- **Intent-Based Routing**
+  `submit_auto()` keeps future semantics for ordinary CPU and explicit CPU/GPU dual-path work; `dispatch_auto()` reports bounded queue admission for named lock-free or realtime backends; `start_worker()` owns a long-lived interruptible Blocking I/O worker. Routing decisions, failure events, and `get_executor_capabilities()` make backend selection and state observable without pretending these models share one completion contract.
+
 - **Batch Task Submission**
   `submit_batch()` and `submit_batch_no_future()` submit many tasks through a single batch API and can reduce repeated submission overhead. The current version does not promise a fixed speedup; gains depend on task count, task body, thread count, hardware, and build configuration. Treat local benchmark results as authoritative. Current benchmark record: [docs/performance/batch_submit_baseline_2026-07-09.json](docs/performance/batch_submit_baseline_2026-07-09.json), commands `cmake --build build --target benchmark_batch_scales benchmark_batch_submit_real benchmark_batch_submit_concurrent -j2`, `./build/tests/benchmark_batch_scales`, `./build/tests/benchmark_batch_submit_real`, and `./build/tests/benchmark_batch_submit_concurrent`, date 2026-07-09.
 
@@ -174,6 +177,18 @@ int main() {
 ```
 
 > For a user-scenario communication example, see [examples/comm_robot_pipeline.cpp](examples/comm_robot_pipeline.cpp): sensor frames, realtime commands, latest config, startup gating, state snapshots, task dependencies, and comm observability in one pipeline. Build examples with `-DEXECUTOR_BUILD_EXAMPLES=ON`. GPU examples `gpu_basic` and `gpu_multi_device` also require GPU support to be enabled.
+
+### Choosing a Submission API
+
+| Work type | Recommended API | Result means |
+| --- | --- | --- |
+| Ordinary finite CPU work | `submit_auto(lambda)` | `future` completion or exception |
+| Separate CPU and GPU implementations | `submit_auto(cpu_gpu_task(cpu, gpu))` | selected path completion or exception |
+| Named MPSC low-latency backend | `dispatch_auto(LowLatency, task)` | bounded queue accepted the task |
+| Named periodic realtime backend | `dispatch_auto(RealtimeQueue, task)` | realtime queue accepted the task |
+| Long-lived interruptible I/O loop | `start_worker(BlockingWorkerSpec)` | worker startup and lifecycle handle |
+
+`Auto` does not silently choose lock-free or realtime backends. Automatic routing cannot verify callable realtime safety, thread safety, GPU memory ownership, or I/O interruptibility; applications retain those responsibilities.
 
 ## Documentation
 

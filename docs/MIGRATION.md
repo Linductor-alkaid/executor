@@ -4,6 +4,26 @@
 
 ---
 
+## 从 0.3.0 升级到 0.3.1：统一 Facade 与自动路由
+
+0.3.1 是向后兼容扩展。`submit()`、`submit_gpu()`、四参数 legacy `submit_auto(TaskCharacteristics, name, kernel, config)`、实时和 Blocking I/O 的既有入口及返回类型均保持不变。
+
+### 推荐迁移路径
+
+- 普通短任务可从 `submit()` 逐步迁移到 `submit_auto(lambda)`；它默认只选择异步线程池，并通过 `get_last_routing_decision()` 提供可解释的默认决策。
+- 需要两条独立实现时使用 `cpu_gpu_task(cpu, gpu)`。默认 `FallbackPolicy::NoFallback`：GPU 不可提交会使 future 进入异常；只有显式 `AllowCpu` 才会回退 CPU。带返回值的 CPU/GPU 自动任务尚未提供。
+- 已验证的 MPSC 单消费者路径使用 `dispatch_auto()` + `LowLatency`，周期实时工作使用 `dispatch_auto()` + `RealtimeQueue`。两者必须指定已启动后端，返回的 `DispatchResult` 仅表示接收，不表示完成。
+- 长期可中断 I/O 推荐改用 `start_worker(BlockingWorkerSpec{...})`。`WorkerHandle` 统一启动结果、状态查询和停止，但不改变 `wakeup()`、stop token、启动超时或退出原因契约。
+- 通过 `get_executor_capabilities()` 枚举所有后端状态；它是预检快照，不能替代处理实际投递竞争和背压。
+
+### 兼容与后续版本
+
+- legacy CPU/GPU `submit_auto` 在整个 `0.3.x`（包括 0.3.1）保持现有“GPU 未就绪即失败、无隐式 CPU 回退”的行为，暂不添加编译期弃用标记。
+- 后续允许破坏性变更的主版本才会进入 legacy overload 的弃用/移除窗口；`CpuGpuTask<T>` 的返回值支持和 `ExecutionReport<T>` 也仅在该窗口评估。
+- 自动路由不能证明 callable 的实时安全、线程安全、GPU 内存所有权或 I/O 可中断性；这些仍由应用设计、部署和测试。
+
+---
+
 ## 0.3.0：Blocking I/O worker
 
 `BlockingIoExecutor` 是向后兼容的库级扩展，用于替代由调用方手写、长期阻塞且需要有序停止的 `std::thread` / `std::jthread`。它不提供协议、设备或业务流程迁移：调用方保留自己的 worker 实现、消息数据面和安全策略。

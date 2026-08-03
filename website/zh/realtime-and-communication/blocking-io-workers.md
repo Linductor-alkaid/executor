@@ -37,10 +37,10 @@ blocking worker started=yes, stopped=yes, wakeups=1
 
 ## 生命周期与状态
 
-1. 设置非空的 `BlockingIoConfig::thread_name`，并注册 `std::unique_ptr<IBlockingIoWorker>`。
-2. 调用方需要诊断时，优先使用 `register_blocking_io_worker_ex()` 和 `start_blocking_io_worker_ex()`，读取 `ExecutorResult`。
-3. 通过 `get_blocking_io_worker_status(name)` 读取状态。`ready` 只表示 executor 线程设置完成，不代表协议、设备或第一条输入已就绪。
-4. 调用 `stop_blocking_io_worker(name)` 请求停止、唤醒 worker 并 join；重复调用安全。
+1. 设置非空的 `BlockingIoConfig::thread_name`，将 `std::unique_ptr<IBlockingIoWorker>` 放入 `BlockingWorkerSpec`，并传给 `start_worker()`。
+2. 需要启动诊断时读取 `WorkerHandle::start_result()`；`WorkerHandle::started()` 是其便捷成功判断。显式的注册/启动 API 仍保留，便于渐进迁移。
+3. 通过 `WorkerHandle::status()`（或 `get_blocking_io_worker_status(name)`）读取状态。`ready` 只表示 executor 线程设置完成，不代表协议、设备或第一条输入已就绪。
+4. 调用 `WorkerHandle::request_stop()` 可唤醒阻塞 worker 但不 join；调用 `WorkerHandle::stop()` 则请求停止、唤醒并 join。重复调用安全。
 
 `Executor::shutdown()` 对所有已注册 I/O worker 采用同样的 stop/wake/join 规则，包括 `shutdown(false)`。不要 detach worker，也不要在 shutdown 后保留它的引用。
 
