@@ -857,6 +857,70 @@ void Executor::set_recent_failure_capacity(size_t capacity) {
     }
 }
 
+std::optional<RoutingDecision> Executor::get_last_routing_decision() const {
+    std::lock_guard<std::mutex> lock(routing_mutex_);
+    if (recent_routing_decisions_.empty()) {
+        return std::nullopt;
+    }
+    return recent_routing_decisions_.back();
+}
+
+std::vector<RoutingDecision> Executor::get_recent_routing_decisions(size_t max_count) const {
+    std::lock_guard<std::mutex> lock(routing_mutex_);
+    const size_t count = max_count == 0
+                             ? recent_routing_decisions_.size()
+                             : std::min(max_count, recent_routing_decisions_.size());
+    return {recent_routing_decisions_.end() - static_cast<std::ptrdiff_t>(count),
+            recent_routing_decisions_.end()};
+}
+
+void Executor::clear_recent_routing_decisions() {
+    std::lock_guard<std::mutex> lock(routing_mutex_);
+    recent_routing_decisions_.clear();
+}
+
+void Executor::set_recent_routing_capacity(size_t capacity) {
+    std::lock_guard<std::mutex> lock(routing_mutex_);
+    recent_routing_capacity_ = capacity;
+    while (recent_routing_decisions_.size() > recent_routing_capacity_) {
+        recent_routing_decisions_.pop_front();
+    }
+}
+
+void Executor::set_routing_callback(std::function<void(const RoutingDecision&)> callback) {
+    std::lock_guard<std::mutex> lock(routing_mutex_);
+    routing_callback_ = std::move(callback);
+}
+
+RoutingDecision Executor::route_task(const TaskOptions& options,
+                                     bool cpu_gpu_task,
+                                     std::optional<bool> gpu_selected) const {
+    return task_router_.route(
+        TaskRouter::Request{options, cpu_gpu_task, gpu_selected},
+        manager_->get_executor_capabilities());
+}
+
+void Executor::record_routing_decision(RoutingDecision decision) {
+    std::function<void(const RoutingDecision&)> callback;
+    {
+        std::lock_guard<std::mutex> lock(routing_mutex_);
+        if (recent_routing_capacity_ > 0) {
+            while (recent_routing_decisions_.size() >= recent_routing_capacity_) {
+                recent_routing_decisions_.pop_front();
+            }
+            recent_routing_decisions_.push_back(decision);
+        }
+        callback = routing_callback_;
+    }
+    if (callback) {
+        try {
+            callback(decision);
+        } catch (...) {
+            // Routing observation must not affect submission or worker threads.
+        }
+    }
+}
+
 size_t Executor::recent_failure_capacity() const {
     std::lock_guard<std::mutex> lock(failure_mutex_);
     return recent_failure_capacity_;

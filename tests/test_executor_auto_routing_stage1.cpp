@@ -31,6 +31,12 @@ bool test_plain_submit_auto_uses_default_async_executor() {
     Executor executor;
     auto future = executor.submit_auto([] { return 42; });
     TEST_ASSERT(future.get() == 42, "plain submit_auto should fulfill CPU future");
+    const auto decision = executor.get_last_routing_decision();
+    TEST_ASSERT(decision.has_value(), "plain submit_auto should record a routing decision");
+    TEST_ASSERT(decision->selected_backend == ExecutionBackend::DefaultAsync,
+                "plain submit_auto should select default async");
+    TEST_ASSERT(decision->reason == RoutingReason::DefaultPolicy,
+                "plain submit_auto should use default policy");
     executor.shutdown();
     return true;
 }
@@ -53,6 +59,11 @@ bool test_unavailable_gpu_allow_cpu_falls_back() {
     TEST_ASSERT(gpu_runs == 0, "unavailable GPU path must not execute");
     TEST_ASSERT(executor.get_failure_status().submit_rejected_count == 0,
                 "allowed CPU fallback is not a submission failure");
+    const auto decision = executor.get_last_routing_decision();
+    TEST_ASSERT(decision.has_value() && decision->fell_back,
+                "CPU fallback should be recorded as a fallback decision");
+    TEST_ASSERT(decision->reason == RoutingReason::FallbackPolicy,
+                "CPU fallback should state the fallback policy");
     executor.shutdown();
     return true;
 }
@@ -94,6 +105,39 @@ bool test_unsupported_generic_intent_rejects() {
                 "generic submit_auto should reject LowLatency intent");
     TEST_ASSERT(executor.get_failure_status().submit_rejected_count == 1,
                 "typed API rejection should be observable");
+    const auto decision = executor.get_last_routing_decision();
+    TEST_ASSERT(decision.has_value() && decision->reason == RoutingReason::Rejected,
+                "unsupported intent should record a rejected decision");
+    executor.shutdown();
+    return true;
+}
+
+bool test_routing_callback_and_buffer_are_isolated() {
+    Executor executor;
+    int callback_count = 0;
+    executor.set_routing_callback([&](const RoutingDecision&) {
+        ++callback_count;
+        throw std::runtime_error("routing observer failure");
+    });
+    executor.set_recent_routing_capacity(2);
+
+    TEST_ASSERT(executor.submit_auto([] { return 1; }).get() == 1,
+                "callback exception must not affect first task");
+    TEST_ASSERT(executor.submit_auto([] { return 2; }).get() == 2,
+                "callback exception must not affect second task");
+    TEST_ASSERT(executor.submit_auto([] { return 3; }).get() == 3,
+                "callback exception must not affect third task");
+    TEST_ASSERT(callback_count == 3, "routing callback should receive every decision");
+    TEST_ASSERT(executor.get_recent_routing_decisions().size() == 2,
+                "routing buffer should retain its configured capacity");
+
+    executor.set_recent_routing_capacity(0);
+    TEST_ASSERT(executor.submit_auto([] {}).wait_for(std::chrono::seconds(1)) ==
+                    std::future_status::ready,
+                "routing callback remains active when retention is disabled");
+    TEST_ASSERT(callback_count == 4, "callback remains active with zero retention capacity");
+    TEST_ASSERT(executor.get_recent_routing_decisions().empty(),
+                "zero routing capacity should disable retention");
     executor.shutdown();
     return true;
 }
@@ -107,5 +151,6 @@ int main() {
     passed &= test_unavailable_gpu_without_fallback_rejects();
     passed &= test_require_requested_backend_requires_running_gpu();
     passed &= test_unsupported_generic_intent_rejects();
+    passed &= test_routing_callback_and_buffer_are_isolated();
     return passed ? 0 : 1;
 }

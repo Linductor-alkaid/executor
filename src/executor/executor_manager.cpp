@@ -158,14 +158,16 @@ IAsyncExecutor* ExecutorManager::get_default_async_executor() {
 // 注册实时执行器
 bool ExecutorManager::register_realtime_executor(const std::string& name,
                                                  std::unique_ptr<IRealtimeExecutor> executor) {
-    if (name.empty() || executor == nullptr) {
+    if (name.empty() || name == "default" || executor == nullptr) {
         return false;
     }
 
+    std::lock_guard<std::mutex> registration_lock(registration_mutex_);
     std::unique_lock<std::shared_mutex> lock(mutex_);
     
     // 检查名称是否已存在
-    if (realtime_executors_.find(name) != realtime_executors_.end()) {
+    if (realtime_executors_.find(name) != realtime_executors_.end() ||
+        get_blocking_io_executor(name) || get_gpu_executor(name)) {
         return false;  // 名称已存在
     }
 
@@ -223,12 +225,14 @@ std::vector<std::string> ExecutorManager::get_realtime_executor_names() const {
 bool ExecutorManager::register_blocking_io_executor(
     const std::string& name,
     std::unique_ptr<IBlockingIoExecutor> executor) {
-    if (name.empty() || !executor) {
+    if (name.empty() || name == "default" || !executor) {
         return false;
     }
 
+    std::lock_guard<std::mutex> registration_lock(registration_mutex_);
     std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
-    if (blocking_io_executors_.find(name) != blocking_io_executors_.end()) {
+    if (blocking_io_executors_.find(name) != blocking_io_executors_.end() ||
+        get_realtime_executor(name) || get_gpu_executor(name)) {
         return false;
     }
     blocking_io_executors_[name] = std::move(executor);
@@ -268,14 +272,16 @@ std::vector<std::string> ExecutorManager::get_blocking_io_executor_names() const
 // 注册 GPU 执行器
 bool ExecutorManager::register_gpu_executor(const std::string& name,
                                              std::unique_ptr<IGpuExecutor> executor) {
-    if (name.empty() || executor == nullptr) {
+    if (name.empty() || name == "default" || executor == nullptr) {
         return false;
     }
 
+    std::lock_guard<std::mutex> registration_lock(registration_mutex_);
     std::unique_lock<std::shared_mutex> lock(gpu_mutex_);
     
     // 检查名称是否已存在
-    if (gpu_executors_.find(name) != gpu_executors_.end()) {
+    if (gpu_executors_.find(name) != gpu_executors_.end() ||
+        get_realtime_executor(name) || get_blocking_io_executor(name)) {
         return false;  // 名称已存在
     }
 
@@ -357,6 +363,82 @@ ExecutorManager::get_all_gpu_executor_statuses() const {
         }
     }
     return result;
+}
+
+std::vector<ExecutorCapability> ExecutorManager::get_executor_capabilities() const {
+    std::vector<ExecutorCapability> capabilities;
+
+    {
+        std::lock_guard<std::mutex> lock(default_async_mutex_);
+        ExecutorCapability capability;
+        capability.backend = ExecutionBackend::DefaultAsync;
+        capability.name = default_async_executor_ ? default_async_executor_->get_name() : "default";
+        capability.registered = default_async_executor_ != nullptr;
+        capability.supports_future_submission = true;
+        if (default_async_executor_) {
+            const auto status = default_async_executor_->get_status();
+            capability.running = status.is_running;
+            capability.pending_work = status.active_tasks + status.queue_size;
+        }
+        capabilities.push_back(std::move(capability));
+    }
+
+    {
+        std::shared_lock<std::shared_mutex> lock(gpu_mutex_);
+        capabilities.reserve(capabilities.size() + gpu_executors_.size());
+        for (const auto& [name, executor] : gpu_executors_) {
+            ExecutorCapability capability;
+            capability.backend = ExecutionBackend::Gpu;
+            capability.name = name;
+            capability.registered = executor != nullptr;
+            capability.supports_future_submission = true;
+            capability.supports_gpu_kernel = true;
+            if (executor) {
+                const auto status = executor->get_status();
+                capability.running = status.is_running && status.last_error_message.empty();
+                capability.pending_work = status.queue_size + status.active_kernels;
+                capability.capacity_hint = status.queue_capacity;
+            }
+            capabilities.push_back(std::move(capability));
+        }
+    }
+
+    {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        capabilities.reserve(capabilities.size() + realtime_executors_.size());
+        for (const auto& [name, executor] : realtime_executors_) {
+            ExecutorCapability capability;
+            capability.backend = ExecutionBackend::Realtime;
+            capability.name = name;
+            capability.registered = executor != nullptr;
+            capability.supports_bounded_dispatch = true;
+            if (executor) {
+                const auto status = executor->get_status();
+                capability.running = status.is_running;
+                // Realtime status deliberately exposes only bounded-capacity
+                // diagnostics, not an instantaneous queue-length snapshot.
+                capability.pending_work = 0;
+                capability.capacity_hint = status.queue_capacity;
+            }
+            capabilities.push_back(std::move(capability));
+        }
+    }
+
+    {
+        std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
+        capabilities.reserve(capabilities.size() + blocking_io_executors_.size());
+        for (const auto& [name, executor] : blocking_io_executors_) {
+            ExecutorCapability capability;
+            capability.backend = ExecutionBackend::BlockingIo;
+            capability.name = name;
+            capability.registered = executor != nullptr;
+            if (executor) {
+                capability.running = executor->get_status().is_running;
+            }
+            capabilities.push_back(std::move(capability));
+        }
+    }
+    return capabilities;
 }
 
 void ExecutorManager::enable_monitoring(bool enable) {

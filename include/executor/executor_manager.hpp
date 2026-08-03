@@ -4,6 +4,7 @@
 #include "blocking_io.hpp"
 #include "config.hpp"
 #include "types.hpp"
+#include "task_options.hpp"
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -177,6 +178,14 @@ public:
     std::map<std::string, gpu::GpuExecutorStatus> get_all_gpu_executor_statuses() const;
 
     /**
+     * @brief Advisory snapshots used for routing and diagnostics.
+     *
+     * These values are not a submission reservation; callers must still handle
+     * concurrent shutdown and capacity changes in the concrete backend.
+     */
+    std::vector<ExecutorCapability> get_executor_capabilities() const;
+
+    /**
      * @brief 关闭所有执行器
      * 
      * @param wait_for_tasks 是否等待任务完成（默认：true）
@@ -230,6 +239,9 @@ private:
 
     // 读写锁（保护 GPU 执行器注册表）
     mutable std::shared_mutex gpu_mutex_;
+
+    // Serializes cross-backend name uniqueness checks and registrations.
+    mutable std::mutex registration_mutex_;
 
     // 统计收集器（任务监控）
     std::unique_ptr<monitor::StatisticsCollector> statistics_collector_;

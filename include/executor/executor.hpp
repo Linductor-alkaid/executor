@@ -3,6 +3,7 @@
 #include "config.hpp"
 #include "types.hpp"
 #include "task_options.hpp"
+#include "task_router.hpp"
 #include "interfaces.hpp"
 #include "executor_manager.hpp"
 #include "blocking_io.hpp"
@@ -394,6 +395,12 @@ public:
      */
     void set_recent_failure_capacity(size_t capacity);
 
+    std::optional<RoutingDecision> get_last_routing_decision() const;
+    std::vector<RoutingDecision> get_recent_routing_decisions(size_t max_count = 0) const;
+    void clear_recent_routing_decisions();
+    void set_recent_routing_capacity(size_t capacity);
+    void set_routing_callback(std::function<void(const RoutingDecision&)> callback);
+
     /**
      * @brief 启用或禁用任务监控
      */
@@ -611,6 +618,10 @@ private:
      * @brief 记录 facade 失败事件
      */
     void record_failure(ExecutorFailureEvent event);
+    void record_routing_decision(RoutingDecision decision);
+    RoutingDecision route_task(const TaskOptions& options,
+                               bool cpu_gpu_task,
+                               std::optional<bool> gpu_selected = std::nullopt) const;
 
     void record_result_failure(const ExecutorResult& result,
                                FailureKind kind,
@@ -727,12 +738,19 @@ private:
     std::function<std::thread(std::function<void()>)> timer_thread_factory_for_test_;
 
     static constexpr size_t kDefaultRecentFailureCapacity = 128;
+    static constexpr size_t kDefaultRecentRoutingCapacity = 128;
 
     mutable std::mutex failure_mutex_;
     ExecutorFailureStatus failure_status_;
     std::deque<ExecutorFailureEvent> recent_failures_;
     size_t recent_failure_capacity_ = kDefaultRecentFailureCapacity;
     ExecutorFailureCallback failure_callback_;
+
+    mutable std::mutex routing_mutex_;
+    std::deque<RoutingDecision> recent_routing_decisions_;
+    size_t recent_routing_capacity_ = kDefaultRecentRoutingCapacity;
+    std::function<void(const RoutingDecision&)> routing_callback_;
+    TaskRouter task_router_;
 
     mutable std::mutex task_graph_mutex_;
     std::condition_variable task_graph_cv_;
@@ -1370,6 +1388,15 @@ auto Executor::submit_auto(
     const gpu::GpuTaskConfig& gpu_config)
     -> std::future<void> {
 
+    TaskOptions routing_options;
+    routing_options.name = "facade_submit_auto_legacy";
+    routing_options.intent = ExecutionIntent::CpuOrGpu;
+    routing_options.preferred_executor = gpu_executor_name;
+    record_routing_decision(route_task(
+        routing_options,
+        true,
+        scheduler_.decide(characteristics) == gpu::ExecutorChoice::GPU));
+
     auto choice = scheduler_.decide(characteristics);
 
     if (choice == gpu::ExecutorChoice::GPU) {
@@ -1385,6 +1412,8 @@ auto Executor::submit_auto(
 template<typename F, typename... Args>
 auto Executor::submit_auto(F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
+    TaskOptions options;
+    record_routing_decision(route_task(options, false));
     return submit(std::forward<F>(f), std::forward<Args>(args)...);
 }
 
@@ -1392,10 +1421,10 @@ template<typename Function>
 auto Executor::submit_auto(TaskBuilder<Function> task)
     -> std::future<typename std::invoke_result<Function&>::type> {
     const auto& options = task.options();
-    if (options.intent != ExecutionIntent::Auto &&
-        options.intent != ExecutionIntent::GeneralCpu) {
-        const std::string message =
-            "submit_auto: task intent requires a typed submission API";
+    const auto decision = route_task(options, false);
+    record_routing_decision(decision);
+    if (decision.reason == RoutingReason::Rejected) {
+        const std::string message = "submit_auto: " + decision.detail;
         record_submit_rejected("default", options.name, message);
         std::promise<typename std::invoke_result<Function&>::type> promise;
         promise.set_exception(std::make_exception_ptr(std::runtime_error(message)));
@@ -1419,54 +1448,47 @@ std::future<void> Executor::submit_auto(CpuGpuTask<CpuFunction, GpuFunction> tas
 
     const auto& options = task.options();
     const auto task_name = options.name.empty() ? "facade_submit_auto" : options.name;
-    const auto gpu_names = get_gpu_executor_names();
-    const std::string gpu_name = options.preferred_executor
-                                     ? *options.preferred_executor
-                                     : (gpu_names.size() == 1 ? gpu_names.front() : std::string{});
-    auto* gpu_executor = gpu_name.empty() ? nullptr : get_gpu_executor(gpu_name);
-    const auto gpu_status = gpu_executor ? gpu_executor->get_status() : gpu::GpuExecutorStatus{};
-    const bool gpu_capacity_available = gpu_status.queue_capacity == 0 ||
-                                        gpu_status.queue_size < gpu_status.queue_capacity;
-    const bool gpu_running = gpu_executor && gpu_status.is_running && gpu_capacity_available;
+    auto decision = route_task(options, true);
+    if (decision.selected_backend == ExecutionBackend::Gpu &&
+        options.fallback != FallbackPolicy::RequireRequestedBackend) {
+        decision = route_task(
+            options, true, scheduler_.decide(task.characteristics()) == gpu::ExecutorChoice::GPU);
+    }
+    record_routing_decision(decision);
 
-    const auto reject = [this, &task_name, &gpu_name](const std::string& message) {
-        record_submit_rejected(gpu_name.empty() ? "gpu" : gpu_name, task_name, message);
+    const auto reject = [this, &task_name, &decision](const std::string& message) {
+        record_submit_rejected(decision.selected_executor_name.empty()
+                                   ? "gpu" : decision.selected_executor_name,
+                               task_name, message);
         std::promise<void> promise;
         promise.set_exception(std::make_exception_ptr(std::runtime_error(message)));
         return promise.get_future();
     };
 
-    if (options.fallback == FallbackPolicy::RequireRequestedBackend) {
-        if (!options.preferred_executor) {
-            return reject("submit_auto: RequireRequestedBackend requires preferred_executor");
-        }
-        if (!gpu_running) {
-            return reject("submit_auto: requested GPU executor is unavailable, stopped, or at capacity");
-        }
-        try {
-            auto gpu_config = task.gpu_config();
-            return submit_gpu(gpu_name, std::move(task).take_gpu(), gpu_config);
-        } catch (const std::exception& error) {
-            return reject(std::string("submit_auto: GPU submission rejected: ") + error.what());
-        }
+    if (decision.reason == RoutingReason::Rejected ||
+        (decision.selected_backend == ExecutionBackend::DefaultAsync && !decision.fell_back &&
+         options.fallback != FallbackPolicy::AllowCpu)) {
+        return reject("submit_auto: " + decision.detail);
     }
 
-    if (!gpu_running) {
-        if (options.fallback == FallbackPolicy::AllowCpu) {
-            return submit(std::move(task).take_cpu());
-        }
-        return reject("submit_auto: no GPU executor is available for CpuOrGpu task");
-    }
-
-    if (scheduler_.decide(task.characteristics()) == gpu::ExecutorChoice::CPU) {
+    if (decision.selected_backend == ExecutionBackend::DefaultAsync) {
         return submit(std::move(task).take_cpu());
     }
 
+    const auto& gpu_name = decision.selected_executor_name;
     try {
         auto gpu_config = task.gpu_config();
         return submit_gpu(gpu_name, std::move(task).take_gpu(), gpu_config);
     } catch (const std::exception& error) {
         if (options.fallback == FallbackPolicy::AllowCpu) {
+            RoutingDecision fallback = decision;
+            fallback.selected_backend = ExecutionBackend::DefaultAsync;
+            fallback.selected_executor_name = "default";
+            fallback.reason = RoutingReason::FallbackPolicy;
+            fallback.fell_back = true;
+            fallback.detail = std::string("GPU submission rejected; falling back to CPU: ") + error.what();
+            fallback.timestamp = std::chrono::steady_clock::now();
+            record_routing_decision(std::move(fallback));
             return submit(std::move(task).take_cpu());
         }
         return reject(std::string("submit_auto: GPU submission rejected: ") + error.what());

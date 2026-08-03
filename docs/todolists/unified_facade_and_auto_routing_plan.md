@@ -37,7 +37,7 @@
 - [x] 实现 `CpuGpuTask<void>` 与 `cpu_gpu_task(cpu, gpu)`：CPU callable 和 GPU callable 可使用不同签名。
 - [x] 增加 `.name()`、`.priority()`、`.data_size()`、`.compute_intensity()`、`.preferred_executor()`、`.fallback()` 等配置入口，并映射为 `TaskOptions` / `GpuTaskConfig`。
 - [x] 在首版静态限制 CPU/GPU 自动任务为 `void` 返回；对带返回值需求给出明确编译期诊断或拒绝说明。
-- [ ] 新增 `Executor::submit_auto()` 重载：
+- [x] 新增 `Executor::submit_auto()` 重载：
   - [x] 普通 callable / `GeneralCpu` 委托默认异步线程池并返回 `future<T>`。
   - [x] CPU/GPU 任务只在 GPU 可提交时交由 `GpuScheduler` 决策。
   - [x] GPU 路径提交失败时，按 fallback 重新处理或让返回 future 立即带异常，绝不遗留未兑现 future。
@@ -55,23 +55,23 @@
 
 ### 任务
 
-- [ ] 在 `ExecutorManager` 建立内部 capability snapshot，包含后端类型、名称、注册/运行状态、支持的提交协议、GPU 能力、pending work 与 capacity hint。
-- [ ] 统一 Manager 所有后端的名称唯一性检查，覆盖默认异步、GPU、无锁、实时和 Blocking I/O 注册表。
-- [ ] 新增内部 `TaskRouter`，由 `Executor` 持有；输入为不可变任务请求与 capability snapshot，输出 `RoutingDecision`。
-- [ ] 实现第一阶段规则：
-  - [ ] `Auto` 和 `GeneralCpu` 选择默认异步后端。
-  - [ ] `CpuOrGpu` 依次处理强制指定后端、偏好执行器、GPU scheduler 与 CPU fallback。
-  - [ ] `LowLatency`、`RealtimeQueue`、`BlockingWorker` 经泛型 `submit_auto()` 必须拒绝，并说明应使用 typed API。
-- [ ] 实现 facade 路由诊断：最近决策环形缓冲、`get_last_routing_decision()`、`get_recent_routing_decisions()` 和 `set_routing_callback()`。
-- [ ] 路由回调隔离异常；缓冲区默认容量为 128，允许容量为 0 时关闭保留但保留 callback。
-- [ ] 对回退与拒绝写入准确的 `RoutingReason`、`fell_back` 和详情；允许回退不计为用户任务失败。
+- [x] 在 `ExecutorManager` 建立内部 capability snapshot，包含后端类型、名称、注册/运行状态、支持的提交协议、GPU 能力、pending work 与 capacity hint。
+- [x] 统一 Manager 所有当前已注册后端的名称唯一性检查，覆盖默认异步、GPU、实时和 Blocking I/O 注册表；无锁注册表留待阶段 3。
+- [x] 新增内部 `TaskRouter`，由 `Executor` 持有；输入为不可变任务请求与 capability snapshot，输出 `RoutingDecision`。
+- [x] 实现第一阶段规则：
+  - [x] `Auto` 和 `GeneralCpu` 选择默认异步后端。
+  - [x] `CpuOrGpu` 依次处理强制指定后端、偏好执行器、GPU scheduler 与 CPU fallback。
+  - [x] `LowLatency`、`RealtimeQueue`、`BlockingWorker` 经泛型 `submit_auto()` 必须拒绝，并说明应使用 typed API。
+- [x] 实现 facade 路由诊断：最近决策环形缓冲、`get_last_routing_decision()`、`get_recent_routing_decisions()` 和 `set_routing_callback()`。
+- [x] 路由回调隔离异常；缓冲区默认容量为 128，允许容量为 0 时关闭保留但保留 callback。
+- [x] 对回退与拒绝写入准确的 `RoutingReason`、`fell_back` 和详情；允许回退不计为用户任务失败。
 
 ### 验收
 
-- [ ] 每一次 `submit_auto()` 均产生可查询的决策，包括默认线程池选择。
-- [ ] 显式目标优先于启发式；不存在、未运行或任务形态不支持时严格遵循 fallback。
-- [ ] scheduler 不会把不可提交 GPU 当作候选；预检与真实提交间发生的竞争能留下拒绝/回退诊断。
-- [ ] callback 抛异常不影响投递、worker、future 或 failure buffer。
+- [x] 每一次 `submit_auto()` 均产生可查询的决策，包括默认线程池选择。
+- [x] 显式目标优先于启发式；不存在、未运行或任务形态不支持时严格遵循 fallback。
+- [x] scheduler 不会把不可提交 GPU 当作候选；预检与真实提交间发生的竞争能留下拒绝/回退诊断。
+- [x] callback 抛异常不影响投递、worker、future 或 failure buffer。
 
 ## 阶段 3：无锁执行器统一注册与有界 dispatch
 

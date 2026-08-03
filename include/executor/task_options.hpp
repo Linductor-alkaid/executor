@@ -9,6 +9,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 namespace executor {
 
@@ -75,6 +76,32 @@ struct TaskOptions {
     std::optional<std::string> preferred_executor;
     FallbackPolicy fallback = FallbackPolicy::NoFallback;
     std::optional<std::chrono::steady_clock::time_point> deadline;
+};
+
+/** @brief A routable executor's advisory capability snapshot. */
+struct ExecutorCapability {
+    ExecutionBackend backend = ExecutionBackend::DefaultAsync;
+    std::string name;
+    bool registered = false;
+    bool running = false;
+    bool supports_future_submission = false;
+    bool supports_bounded_dispatch = false;
+    bool supports_gpu_kernel = false;
+    size_t pending_work = 0;
+    size_t capacity_hint = 0;
+};
+
+/** @brief Explanation of one automatic routing decision. */
+struct RoutingDecision {
+    std::string task_name;
+    ExecutionIntent requested_intent = ExecutionIntent::Auto;
+    ExecutionBackend selected_backend = ExecutionBackend::DefaultAsync;
+    std::string selected_executor_name;
+    RoutingReason reason = RoutingReason::DefaultPolicy;
+    bool fell_back = false;
+    std::string detail;
+    std::chrono::steady_clock::time_point timestamp =
+        std::chrono::steady_clock::now();
 };
 
 /**
