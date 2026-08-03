@@ -82,4 +82,4 @@ Slow the frame consumer with capacity `1`; fail `load_map`; lower control consum
 
 Recommended order: stop external start/config requests; stop the sensor owner; close `sensor_frames`; let planner drain and stop commands; drain or discard commands; stop real-time work; let monitor read the final snapshot; close gates/channels to wake waiters; bounded-wait ordinary tasks; shutdown Executor; then destroy communication objects and business state.
 
-An architecture review should identify each one-time task, long-running role, real-time need, data-loss/overwrite policy, component owner, failure observation path, overload boundary, and the shutdown lifetime of every captured object. Detailed real-time and communication pages are currently available in Chinese.
+An architecture review should identify each one-time task, long-running role, real-time need, data-loss/overwrite policy, component owner, failure observation path, overload boundary, and the shutdown lifetime of every captured object. For specialist constraints, continue with [Real-Time and Communication](/en/realtime-and-communication/) only after the required result model is explicit.

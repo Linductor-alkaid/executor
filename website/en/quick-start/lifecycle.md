@@ -18,7 +18,7 @@ if (!initialized) {
     throw std::runtime_error(initialized.message);
 }
 
-// submit() ... future.get() ...
+// submit_auto(lambda) ... future.get() ...
 executor.shutdown(true);
 ```
 
@@ -28,7 +28,7 @@ The singleton has a `shutdown(false)` process-exit fallback, and independent `Ex
 
 ## Common mistakes
 
-- Changing initialization configuration after the first `submit()` completed lazy initialization.
+- Changing initialization configuration after the first `submit_auto()` or `submit()` completed lazy initialization.
 - Exiting without waiting for owned futures or choosing a shutdown policy.
 - Treating initialization errors and task errors as the same signal: inspect `ExecutorResult` for setup and futures for task execution.
 

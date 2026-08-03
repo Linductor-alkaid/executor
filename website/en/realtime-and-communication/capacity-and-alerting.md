@@ -5,6 +5,8 @@ description: Derive window rates, queue utilization, consumption margin, and cyc
 
 # Capacity and Alerts
 
+This page is for experts who have already chosen bounded communication or a real-time queue. Ordinary background tasks need not choose a backend from these metrics; first use [Execution Models and Routing Boundaries](/en/guides/execution-models-and-routing) to determine whether the business needs completion or admission. `dispatch_auto(RealtimeQueue).accepted` is one enqueue result, not a replacement for cycle, drop, or capacity monitoring.
+
 ## Answer three capacity questions first
 
 Capacity is more than “is the queue large enough?” Before deployment, answer:
@@ -131,4 +133,4 @@ Every rule names data semantics, window/threshold, user impact, automatic action
 
 Run an idle baseline, long target-rate steady state, a short burst, persistent overload, slow/throwing consumer, and shutdown race. Save before/after snapshots, configuration, input distribution, window formula, alert time, automated action, and recovery time. “The process did not crash” is not capacity validation.
 
-For field sources, revisit [communication observability](/en/realtime-and-communication/observability). Detailed troubleshooting and platform deployment guidance remains available in Chinese.
+For field sources, revisit [communication observability](/en/realtime-and-communication/observability), [troubleshooting](/en/reliability/troubleshooting), and [Linux and Windows deployment](/en/reliability/platform-deployment).

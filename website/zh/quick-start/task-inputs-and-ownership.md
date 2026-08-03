@@ -1,15 +1,25 @@
 ---
 title: 提交自己的函数与数据
-description: 把自由函数、成员函数、lambda、参数和资源安全地提交给 Executor。
+description: 通过 submit_auto 或显式 future 接口，安全传递函数、lambda、输入和资源。
 ---
 
 # 提交自己的函数与数据
 
 ## 学习目标
 
-把项目中已经实现的函数交给 `submit()`，理解参数何时被复制、移动或引用，并让任务执行期间所需对象保持有效。
+普通有限工作优先把拥有输入的 lambda 交给 `submit_auto(lambda)`；理解输入何时被复制、移动或引用，并让任务执行期间所需对象保持有效。`submit(fn, args...)` 仍是显式线程池入口，适用于需要其参数包便利性或维护兼容代码的场景。
 
-## `submit()` 接受什么
+## 默认入口：`submit_auto(lambda)`
+
+普通路径使用按值捕获的 lambda：
+
+```cpp
+auto future = executor.submit_auto([frame] { return score_frame(frame, 2); });
+```
+
+闭包拥有 `frame`，future 表示完成或异常。`submit_auto(lambda)` 安全地选择默认异步后端，不会从 callable 推断应走 GPU、无锁或实时路径。`get_last_routing_decision()` 可解释选路，但不预约后端，也不取代 future。
+
+## 显式函数与参数形式
 
 `submit()` 的调用形式是：
 
@@ -17,7 +27,7 @@ description: 把自由函数、成员函数、lambda、参数和资源安全地�
 auto future = executor.submit(可调用对象, 参数...);
 ```
 
-“可调用对象”可以是自由函数、lambda、函数对象或成员函数指针。Executor 根据函数返回类型生成对应的 `std::future<T>`；参数不需要预先包装成无参数函数。
+“可调用对象”可以是自由函数、lambda、函数对象或成员函数指针。Executor 根据函数返回类型生成对应的 `std::future<T>`；参数不需要预先包装成无参数函数。只有需要显式默认线程池语义或迁移既有代码时，才主动选择这一形式。
 
 最直接的情况是把已有函数和实参分别传入：
 
@@ -45,7 +55,7 @@ lambda 适合在提交点组合多个输入、执行少量预处理，或调用�
 
 ```cpp
 auto model = std::make_shared<const Model>(load_model());
-auto result = executor.submit([model, frame] {
+auto result = executor.submit_auto([model, frame] {
     return infer(*model, frame);
 });
 ```
@@ -78,7 +88,7 @@ auto result = executor.submit([model, frame] {
 
 | 需求 | 推荐写法 | 任务实际依赖 | 主要风险 |
 | --- | --- | --- | --- |
-| 小型输入，任务读取即可 | `submit(fn, value)` 或 `[value]` | 自己的副本 | 复制成本 |
+| 小型输入，任务读取即可 | `submit_auto([value] { ... })` 或 `submit(fn, value)` | 自己的副本 | 复制成本 |
 | 独占资源交给任务 | `[value = std::move(value)]` | 独占所有权 | 提交方不能继续使用已移动对象 |
 | 多任务共享只读大对象 | 捕获 `shared_ptr<const T>` | 共享生命周期 | 共享计数与对象常驻成本 |
 | 调用成员函数 | 成员函数指针 + `shared_ptr` | 对象至少活到完成 | 不要用可能悬空的裸对象指针 |

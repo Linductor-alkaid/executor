@@ -22,7 +22,7 @@ if (!initialized) {
     throw std::runtime_error(initialized.message);
 }
 
-// submit() ... future.get() ...
+// submit_auto(lambda) ... future.get() ...
 executor.shutdown(true);
 ```
 
@@ -32,7 +32,7 @@ executor.shutdown(true);
 
 ## 常见错误
 
-- 首次 `submit()` 后再修改初始化配置：已完成懒初始化时，配置不会按预期替换。
+- 首次 `submit_auto()` 或 `submit()` 后再修改初始化配置：已完成懒初始化时，配置不会按预期替换。
 - 进程退出前既不等待 future，也不调用关闭，使业务完成顺序不清楚。
 - 把任务异常和初始化失败混为一谈：前者通常经 future 观察，后者由 `ExecutorResult` 表达。
 

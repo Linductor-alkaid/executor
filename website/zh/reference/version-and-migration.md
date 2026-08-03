@@ -35,6 +35,20 @@ description: 当前开发快照、发布版本和 API 迁移的入口。
 
 `_ex` 不是“总是更好”的第二套业务 API：若调用方只需布尔结果，兼容入口仍有效。迁移的价值在于把失败原因接到业务日志、告警或降级策略，而非改变任务执行模型。
 
+## 0.3.1：从后端优先到意图优先
+
+新代码的默认阅读和接入顺序是先使用 `submit_auto(lambda)`，再在业务明确需要 CPU/GPU 双实现、有界 admission 或长期 worker 生命周期时进入专用路径：
+
+| 已有写法/需求 | 0.3.1 推荐入口 | 保持不变的边界 |
+| --- | --- | --- |
+| 普通 `submit(lambda)` | 可逐步改为 `submit_auto(lambda)` | 两者都返回 future；`submit()` 仍是显式线程池入口。 |
+| 一个 callable 用 `nullptr` 分支 CPU/GPU | `cpu_gpu_task(cpu, gpu)` + `submit_auto()` | legacy 四参数 overload 在 `0.3.x` 保持可用且不隐式回退。 |
+| 直接无锁 `push_task()` | 注册后使用 `dispatch_auto(LowLatency)` | `accepted` 只表示接收，单消费者和背压语义不变。 |
+| 直接实时 `push_task()` | 已启动后使用 `dispatch_auto(RealtimeQueue)` | `accepted` 不表示后续周期完成，不会回退线程池。 |
+| 分别注册、启动 I/O worker | `start_worker(BlockingWorkerSpec)` | `WorkerHandle` 保留 wakeup、stop token、启动超时和退出原因。 |
+
+自动路由不会推断 callable 的实时安全、线程安全、GPU 内存所有权或 I/O 可中断性。`get_executor_capabilities()` 只提供建议性状态快照；所有实际投递仍须处理停止竞争和背压。
+
 ## 升级检查
 
 1. 阅读目标版本 CHANGELOG，并确认本页所述能力已经在目标 tag 中存在。

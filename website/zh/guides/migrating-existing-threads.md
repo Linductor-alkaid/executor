@@ -5,7 +5,7 @@ description: 以数据解析服务为例，把 std::thread、std::async 和手�
 
 # 从现有线程代码迁移
 
-迁移的目标不是消灭所有 `std::thread`，而是把短时、可排队的工作交给共享执行资源，并让结果、失败、过载和关闭变得可观察。永久循环、设备阻塞读取和有严格周期要求的工作仍可能需要专用线程或实时任务。
+迁移的目标不是消灭所有 `std::thread`，而是把普通有限工作交给 `submit_auto(lambda)`，并让结果、失败、过载和关闭变得可观察。永久循环、设备阻塞读取和有严格周期要求的工作需要进入不同的显式路径。
 
 长期阻塞循环若需要 Facade 管理和 join 语义，可实现 `IBlockingIoWorker` 并阅读[阻塞 I/O worker](/zh/realtime-and-communication/blocking-io-workers)。该库路径只管理生命周期；协议和设备行为仍由调用方负责。
 
@@ -51,7 +51,7 @@ void ParserService::accept(Frame frame) {
 - `parse()` 或 `publish()` 抛异常时，没有调用方结果通道；
 - 退出时无法知道哪些帧仍在处理。
 
-不要从“把 `std::thread` 改成 `submit()`”开始。第一步应先禁止新输入，并决定已接收工作的 owner。
+不要从“把 `std::thread` 改成 `submit()`”开始。第一步应先禁止新输入，并决定已接收工作的 owner；普通短任务的默认迁移入口是 `submit_auto(lambda)`。
 
 ## 第一步：让服务借用 Executor
 
@@ -76,7 +76,7 @@ private:
 
 ```cpp
 std::future<ParsedFrame> ParserService::accept(Frame frame) {
-    return executor_.submit(
+    return executor_.submit_auto(
         [frame = std::move(frame)]() mutable {
             return parse(frame);
         });
@@ -110,7 +110,9 @@ try {
 return std::async(std::launch::async, parse, std::move(frame));
 
 // 迁移后
-return executor_.submit(parse, std::move(frame));
+return executor_.submit_auto([frame = std::move(frame)]() mutable {
+    return parse(std::move(frame));
+});
 ```
 
 需要注意的不是语法，而是生命周期变化：Executor 的线程池由应用统一持有，future 析构不能替你定义服务关闭。请求仍应消费 future，进程退出仍应先停止生产者再排空执行器。
@@ -122,7 +124,7 @@ return executor_.submit(parse, std::move(frame));
 现有系统若已有 `queue + mutex + condition_variable + workers`，不要一次删除全部实现。按以下顺序迁移更容易验证：
 
 1. 冻结旧队列入口，记录现有容量、拒绝和关闭语义。
-2. 先把一类独立短任务切到 `submit()`，保留相同业务结果。
+2. 先把一类独立短任务切到 `submit_auto(lambda)`，保留相同业务结果。
 3. 用 `get_completion_status()` 对比旧系统的 active/queued 指标。
 4. 注入异常、队列积压和退出竞争，确认新路径有明确返回与计数。
 5. 所有生产者迁完后，再删除旧 workers 和 condition variable。
@@ -160,7 +162,7 @@ auto result = plan.get();
 下列代码不适合普通共享线程池：
 
 ```cpp
-executor_.submit([this] {
+executor_.submit_auto([this] {
     while (running_) {
         auto frame = device_.blocking_read();
         process(frame);
@@ -170,7 +172,7 @@ executor_.submit([this] {
 
 它永久占用一个 worker，I/O 可能无限阻塞，`shutdown(true)` 也无法安全中断它。按需求选择：
 
-- 设备阻塞读取：由组件拥有可停止的 `std::jthread`，读取后将短计算提交给 Executor；
+- 设备阻塞读取：需要 Executor 管理 stop/wake/join 时用 `start_worker(BlockingWorkerSpec)`；否则由组件拥有可停止的 `std::jthread`，读取后以 `submit_auto(lambda)` 提交短计算；
 - 软周期刷新：`submit_periodic()`，保存 task ID 并在退出时取消；
 - 有 jitter 预算的控制循环：专用实时任务；
 - 长期线程间传数据：`executor::comm` 中与数据语义匹配的组件。
@@ -186,7 +188,9 @@ std::future<ParsedFrame> ParserService::accept(Frame frame) {
     if (!accepting_.load(std::memory_order_acquire)) {
         throw std::runtime_error("parser is draining");
     }
-    return executor_.submit(parse, std::move(frame));
+    return executor_.submit_auto([frame = std::move(frame)]() mutable {
+        return parse(std::move(frame));
+    });
 }
 
 void ParserService::stop_accepting() {
@@ -229,9 +233,9 @@ executor.shutdown(drained.completed);
 
 | 需求 | 默认选择 | 原因 |
 | --- | --- | --- |
-| 一个长期、可停止的阻塞 I/O owner | `std::jthread` | 生命周期与停止协议直接，避免占用共享 worker |
+| 一个长期、可停止的阻塞 I/O owner | `start_worker(BlockingWorkerSpec)` 或 `std::jthread` | 前者由 Facade 管理 stop/wake/join；两者都避免占用共享 worker |
 | 一个局部作用域内少量并行计算 | `std::async` 或同步算法 | 不一定需要引入共享运行时 |
-| 多模块短任务、统一容量与诊断 | Executor `submit()` | 共享执行资源、future、状态和关闭入口 |
+| 多模块短任务、统一容量与诊断 | Executor `submit_auto(lambda)` | 共享执行资源、future、路由解释、状态和关闭入口 |
 | 数量可控、完成关系明确的多阶段计算 | Executor 任务依赖 | 显式校验关系并统一传播前置失败 |
 | 严格周期循环 | Executor 实时任务 | 专用线程、周期配置与状态 |
 | 跨线程持续传递数据 | `executor::comm` | 数据语义、背压与关闭比任务提交更重要 |

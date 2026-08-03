@@ -7,7 +7,7 @@ description: Entry points for the development snapshot, releases, and API migrat
 
 ## Current scope
 
-The CMake project and latest release are `v0.3.0`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
+The latest release record is `v0.3.1`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
 
 | What to check | Source of truth |
 | --- | --- |
@@ -30,6 +30,20 @@ The legacy entry points remain compatible when a caller only needs success or fa
 
 `_ex` is not a second business API that is always superior. Its value is connecting a failure reason to logs, alerts, or a fallback path.
 
+## 0.3.1: from backend-first to intent-first
+
+New code begins with `submit_auto(lambda)`, then enters a specialist path only when the business explicitly requires independent CPU/GPU implementations, bounded admission, or a long-lived worker lifecycle:
+
+| Existing style or requirement | 0.3.1 recommended entry | Boundary that remains unchanged |
+| --- | --- | --- |
+| Ordinary `submit(lambda)` | Gradually adopt `submit_auto(lambda)` | Both return futures; `submit()` remains the explicit default-pool entry. |
+| One callable branches on a null CPU/GPU stream | `cpu_gpu_task(cpu, gpu)` plus `submit_auto()` | The legacy four-argument overload remains available in `0.3.x` without implicit fallback. |
+| Direct lock-free `push_task()` | Register, start, then use `dispatch_auto(LowLatency)` | `accepted` means admission only; single-consumer and backpressure semantics remain. |
+| Direct real-time `push_task()` | Use `dispatch_auto(RealtimeQueue)` after start | `accepted` does not mean a later cycle completed and never falls back to the pool. |
+| Register and start an I/O worker separately | `start_worker(BlockingWorkerSpec)` | `WorkerHandle` retains wakeup, stop token, startup timeout, and exit reason. |
+
+Automatic routing does not infer callable real-time safety, thread safety, GPU-memory ownership, or I/O interruptibility. `get_executor_capabilities()` is only an advisory snapshot; each actual submission must still handle stop races and backpressure.
+
 ## Upgrade checklist
 
 1. Read the target version's CHANGELOG and verify that each used capability exists in that tag.
@@ -38,4 +52,4 @@ The legacy entry points remain compatible when a caller only needs success or fa
 4. Recheck real-time affinity, memory locking, timer slack, GPU backend, driver, and device status.
 5. Run tests and tutorial smoke tests, then retest timeout, backpressure, and performance behavior under target load.
 
-The Chinese guide contains the complete currently published topic set. Each new Chinese capability is listed in the [translation status](/translation-status) until its English counterpart is available.
+Chinese and English guides share the published information architecture. Check [translation status](/translation-status) whenever a new public page or language counterpart is added.

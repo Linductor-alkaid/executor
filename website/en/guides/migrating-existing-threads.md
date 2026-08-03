@@ -5,7 +5,7 @@ description: Gradually migrate std::thread, std::async, and a hand-written queue
 
 # Migrate Existing Thread Code
 
-Migration does not mean eliminating every `std::thread`. Move short, queueable work to shared execution resources and make results, failure, overload, and shutdown observable. Permanent loops, blocking device reads, and work with a strict period can still require a dedicated thread or real-time task.
+Migration does not mean eliminating every `std::thread`. Move ordinary finite work to `submit_auto(lambda)` and make results, failure, overload, and shutdown observable. Permanent loops, blocking device reads, and work with a strict period require a different explicit path.
 
 For a permanent blocking loop that needs Facade ownership and join semantics, implement `IBlockingIoWorker` and follow [blocking I/O workers](/en/realtime-and-communication/blocking-io-workers). That library path owns lifecycle only; protocol and device behavior remain with the consumer.
 
@@ -57,7 +57,7 @@ Use `Executor::instance()` for ordinary process-wide sharing, or an independent 
 
 ```cpp
 std::future<ParsedFrame> ParserService::accept(Frame frame) {
-    return executor_.submit([frame = std::move(frame)]() mutable {
+    return executor_.submit_auto([frame = std::move(frame)]() mutable {
         return parse(frame);
     });
 }
@@ -80,12 +80,14 @@ For applications that used `std::async`, the surface change is usually direct:
 // Before
 return std::async(std::launch::async, parse, std::move(frame));
 // After
-return executor_.submit(parse, std::move(frame));
+return executor_.submit_auto([frame = std::move(frame)]() mutable {
+    return parse(std::move(frame));
+});
 ```
 
 The important change is lifecycle: application-owned Executor resources outlive a future destructor, so requests still consume futures and shutdown still stops producers before draining. Do not blindly replace code that depended on an unspecified/deferred `std::async` policy; decide whether it needed asynchronous work or lazy caller-thread evaluation.
 
-For a `queue + mutex + condition_variable + workers` implementation, freeze the old entry point and record its capacity/rejection/exit behavior. Migrate one independent short-work class to `submit()`, compare active/queued state, inject exceptions/backlog/shutdown races, then remove old workers only after every producer moves. Do not use one giant Executor queue to mimic every data path: FIFO messages need a bounded channel; latest-only state needs a mailbox; computations needing results need tasks.
+For a `queue + mutex + condition_variable + workers` implementation, freeze the old entry point and record its capacity/rejection/exit behavior. Migrate one independent short-work class to `submit_auto(lambda)`, compare active/queued state, inject exceptions/backlog/shutdown races, then remove old workers only after every producer moves. Do not use one giant Executor queue to mimic every data path: FIFO messages need a bounded channel; latest-only state needs a mailbox; computations needing results need tasks.
 
 ## Make dependencies explicit
 
@@ -103,7 +105,7 @@ The Facade now validates the relationship and propagates prerequisite failure. A
 
 ## Keep permanent loops in the right place
 
-Do not submit a never-ending blocking read loop to the shared pool. Use an owned, stoppable `std::jthread` for device I/O and submit only short post-read computation; use `submit_periodic()` for soft maintenance; use a dedicated real-time task for a jitter-budgeted loop; use `executor::comm` for sustained cross-thread data transfer.
+Do not submit a never-ending blocking read loop to the shared pool. Use `start_worker(BlockingWorkerSpec)` when Executor should own stop/wake/join lifecycle, or an owned stoppable `std::jthread` otherwise; submit only short post-read computation with `submit_auto(lambda)`. Use `submit_periodic()` for soft maintenance, a dedicated real-time task for a jitter-budgeted loop, and `executor::comm` for sustained cross-thread data transfer.
 
 ## Establish a shutdown protocol
 
@@ -114,7 +116,9 @@ std::future<ParsedFrame> ParserService::accept(Frame frame) {
     if (!accepting_.load(std::memory_order_acquire)) {
         throw std::runtime_error("parser is draining");
     }
-    return executor_.submit(parse, std::move(frame));
+    return executor_.submit_auto([frame = std::move(frame)]() mutable {
+        return parse(std::move(frame));
+    });
 }
 
 parser.stop_accepting();
@@ -141,9 +145,9 @@ Use low worker counts, small queues, and deliberately blocking work. A normal-pa
 
 | Need | Default choice |
 | --- | --- |
-| Long-lived stoppable blocking-I/O owner | `std::jthread` |
+| Long-lived stoppable blocking-I/O owner | `start_worker(BlockingWorkerSpec)` or an owned `std::jthread` |
 | Few local parallel calculations | `std::async` or a synchronous algorithm |
-| Short work across modules with unified capacity/diagnostics | Executor `submit()` |
+| Short work across modules with unified capacity/diagnostics | Executor `submit_auto(lambda)` |
 | Bounded multistage work with clear completion relations | Executor task dependencies |
 | Strict periodic loop | Executor real-time task |
 | Sustained cross-thread data | `executor::comm` |

@@ -9,6 +9,8 @@ description: 使用 Executor Facade 注册、诊断启动、推送和停止一�
 
 从 CAN 或控制循环的固定周期需求出发，使用 `register_realtime_task_ex()`、`start_realtime_task_ex()`、`try_push_realtime_task()` 和状态查询完成最小的可诊断路径。
 
+这是专家专题：普通有限工作继续使用 `submit_auto(lambda)`；只有已有固定周期、周期预算与有界背压语义时才注册专用实时线程。若只需向已启动的实时队列投递一次工作，可使用 `dispatch_auto(RealtimeQueue)`，但它同样只报告接收，不报告完成。
+
 ## 何时需要专用线程
 
 `submit_periodic()` 适合健康检查、刷新和允许抖动的后台工作。控制循环若需要固定周期、周期预算、优先级或 CPU 亲和性，应使用一个专用实时线程；它仍受操作系统、权限和硬件约束，不是绝对时限保证。
@@ -41,6 +43,17 @@ realtime started=yes, command=queued, cycles=observed, command ran=yes
 4. 用 `get_realtime_executor_status()` 和 `get_realtime_task_list()` 观察运行状态，完成后调用 `stop_realtime_task()`。
 
 实时队列是有界入口：入队成功只表示将在后续周期处理，并不表示任务已完成。`max_tasks_per_cycle` 默认是 `64`；剩余工作会留给下一周期，以保护周期预算。周期回调超时后，运行时会跳过已错过的节拍并重新以“当前时间加一个周期”调相，避免追赶造成抖动风暴；通过 `cycle_timeout_count` 观察超时。紧急停止必须走应用自己的硬件或安全控制旁路，不能等待实时队列消费。
+
+若调用方在统一控制面投递，必须声明名称和 intent：
+
+```cpp
+TaskOptions options;
+options.intent = ExecutionIntent::RealtimeQueue;
+options.preferred_executor = "control";
+auto admission = executor.dispatch_auto(options, [] { apply_control(); });
+```
+
+`admission.accepted` 与 `try_push_realtime_task()` 的 `true` 含义相同：仅表示队列接收。未启动、队列满、对象池耗尽或关闭竞争会拒绝，绝不改投默认线程池。
 
 ## 实时线程如何接收函数与输入
 

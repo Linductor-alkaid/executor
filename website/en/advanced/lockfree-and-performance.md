@@ -11,7 +11,17 @@ Decide whether `LockFreeTaskExecutor` is appropriate, understand its current que
 
 ## When to use it
 
-Use the public Facade by default. Consider `LockFreeTaskExecutor` only when a single consumer, bounded queue, explicitly handled rejection, and measured producer-contention benefit outweigh the additional lifecycle/capacity responsibility. It does not replace task graph, future semantics, service failure protocol, or application backpressure design.
+Use `submit_auto(lambda)` for ordinary finite work. Consider `LockFreeTaskExecutor` only when a single consumer, bounded queue, explicitly handled rejection, and measured producer-contention benefit outweigh the additional lifecycle/capacity responsibility. In the unified control plane, register and start a named backend, then use `dispatch_auto(LowLatency)`; its return is admission, not a future-completion promise. It does not replace task graph, future semantics, service failure protocol, or application backpressure design.
+
+```cpp
+TaskOptions options;
+options.intent = ExecutionIntent::LowLatency;
+options.preferred_executor = "telemetry";
+auto admission = executor.dispatch_auto(options, [] { process_event(); });
+if (!admission.accepted) {
+    // stopped, queue full, pool exhausted, or shutdown competition
+}
+```
 
 ## Current internal structure and “lock-free” scope
 

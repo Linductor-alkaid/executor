@@ -9,11 +9,16 @@ description: 将 future、failure callback、状态计数和最近事件组合�
 
 区分结果、失败趋势和最近诊断事件；即使调用方暂时不消费 `future`，任务异常仍不会静默消失。
 
-## 四条观察路径
+## 路由与失败是两条观察路径
+
+自动路由增加“为什么选择该后端”的解释，但不改变失败模型。`RoutingDecision` 不表示任务已完成或被接收；failure event 不负责解释允许的 CPU fallback。先按问题选择观察对象：
 
 | 你要回答的问题 | 默认入口 | 适用范围 |
 | --- | --- | --- |
 | 这次调用成功了吗，结果是什么？ | `future.get()` | 单个有返回值的任务；异常在此重新抛出。 |
+| 为什么选择或拒绝这条路由？ | `get_last_routing_decision()` / routing callback | `submit_auto()`、`dispatch_auto()` 的意图、回退与预检解释。 |
+| 有界队列接收了吗？ | `DispatchResult::accepted` | 无锁或实时的单次 admission；不表示完成。 |
+| 长期 worker 启动或停止了吗？ | `WorkerHandle` 与 worker status | 启动结果、生命周期与退出原因；不表示协议就绪。 |
 | 服务刚发生了什么失败？ | `set_failure_callback()` | 立即桥接日志、告警或自己的遥测系统。 |
 | 某类失败累计了多少？ | `get_failure_status()` | 健康检查、仪表盘和阈值告警。 |
 | 最近几次失败的上下文是什么？ | `get_recent_failures()` | 故障诊断、支持包和有限历史查看。 |
@@ -36,7 +41,9 @@ description: 将 future、failure callback、状态计数和最近事件组合�
 failures=1, callback=1, recent=1
 ```
 
-`future.get()` 仍是单次任务的结果和异常边界；callback、计数和最近事件是额外的服务级观察，不应取代它。
+`future.get()` 仍是单次任务的结果和异常边界；routing decision、callback、计数和最近事件各自提供解释或服务级观察，不能互相替代。
+
+`set_routing_callback()` 与 failure callback 一样会隔离回调异常。routing buffer 的容量独立于 failure buffer；允许 CPU fallback 应保留 `fell_back = true` 和 `FallbackPolicy` 解释，但不增加用户任务失败计数。
 
 ## 最近事件的保留策略
 
@@ -52,7 +59,7 @@ failure callback 运行在 Executor 的失败记录路径上。保持它短小�
 
 ## 不同失败不是同一件事
 
-`TaskException`、`SubmitRejected`、`WaitTimeout`、实时 drop、GPU failure 和安全调优回退都可进入 `ExecutorFailureStatus`，但含义不同。任务异常需要处理业务结果；等待超时表示尚未完成；调优回退可能仍然安全运行。通信组件事件默认停留在 `executor::comm` 本地 callback 与统计中，不会自动触发这个 callback。
+`TaskException`、`SubmitRejected`、`WaitTimeout`、实时 drop、GPU failure 和安全调优回退都可进入 `ExecutorFailureStatus`，但含义不同。任务异常需要处理业务结果；等待超时表示尚未完成；调优回退可能仍然安全运行。路由预检快照也不是投递 reservation：实际的 stop、队列满和对象池耗尽仍应产生 `DispatchResult` / future 拒绝及相应 failure event。通信组件事件默认停留在 `executor::comm` 本地 callback 与统计中，不会自动触发这个 callback。
 
 ## 下一步阅读
 

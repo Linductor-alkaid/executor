@@ -9,6 +9,8 @@ description: Register, diagnose, start, push to, and stop a dedicated periodic t
 
 Starting from a fixed-period CAN or control-loop requirement, use `register_realtime_task_ex()`, `start_realtime_task_ex()`, `try_push_realtime_task()`, and status queries to establish a minimal diagnosable path.
 
+This is an expert topic: ordinary finite work continues to use `submit_auto(lambda)`. Register a dedicated real-time thread only when fixed periods, a cycle budget, and bounded backpressure are already required. For one item sent to a running real-time queue through the unified control plane, use `dispatch_auto(RealtimeQueue)`; it reports admission, not completion.
+
 ## When a dedicated thread is needed
 
 `submit_periodic()` fits health checks, refresh work, and background work that tolerates jitter. A control loop needing a fixed period, cycle budget, priority, or CPU affinity needs a dedicated real-time thread. It remains constrained by OS scheduling, permissions, and hardware; it is not an absolute deadline guarantee.
@@ -37,6 +39,17 @@ realtime started=yes, command=queued, cycles=observed, command ran=yes
 4. Inspect `get_realtime_executor_status()` and `get_realtime_task_list()`, then call `stop_realtime_task()`.
 
 A real-time queue is bounded. Successful enqueue only means a later cycle may process the item; it does not mean completion. `max_tasks_per_cycle` defaults to `64`, leaving excess work for later cycles to protect the period. After a cycle timeout, missed ticks are skipped and timing is rephased from the current time to avoid a catch-up jitter storm; inspect `cycle_timeout_count`. Emergency stop must use the application's safety/hardware bypass, not wait for this queue.
+
+When submitting through the unified control plane, name the target and intent:
+
+```cpp
+TaskOptions options;
+options.intent = ExecutionIntent::RealtimeQueue;
+options.preferred_executor = "control";
+auto admission = executor.dispatch_auto(options, [] { apply_control(); });
+```
+
+`admission.accepted` has the same meaning as `try_push_realtime_task()` returning `true`: queue admission only. A stopped backend, full queue, exhausted object pool, or shutdown race rejects; none falls back to the default pool.
 
 ## Bind inputs before the real-time path
 

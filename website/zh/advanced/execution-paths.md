@@ -22,9 +22,9 @@ flowchart LR
     G --> H[worker 执行]
 ```
 
-### 从 `submit()` 到 worker
+### 从默认 Facade 路径到 worker
 
-1. `Executor::submit()` 先向默认 `IAsyncExecutor` 提交一个包装任务。包装任务兑现 `promise`，在用户函数抛异常时把异常写回 future，并把异常继续抛给底层执行器，使 future 与服务级 failure 观察保持一致。
+1. 普通工作由 `submit_auto(lambda)` 选择这条默认异步路径。它与显式兼容入口 `Executor::submit()` 一样，会提交包装任务来兑现 `promise`；用户函数抛异常时把异常写回 future，并继续抛给底层执行器，使 future 与服务级 failure 观察保持一致。
 2. 默认 manager 首次取得异步执行器时可用 `std::call_once` 进行懒初始化；显式初始化已经发生或 shutdown 后，Facade 将相应拒绝变成可诊断结果。
 3. `ThreadPoolExecutor` 在自身 mutex 下取得一个 `shared_ptr<ThreadPool>` 快照，再把任务交给线程池。这一快照使 stop 与提交并发时，提交路径不会解引用已释放的线程池对象。
 4. `ThreadPool` 把任务按 `CRITICAL → HIGH → NORMAL → LOW` 放入 `PriorityScheduler`。当前实现为四个优先级队列分别设置 mutex；优先级保证的是取队列顺序，不是运行中抢占。
@@ -35,7 +35,7 @@ Facade 负责 future、failure event、任务图和生命周期入口；manager 
 
 ### future 为什么一定要被兑现
 
-`Executor::submit()` 没有直接使用底层线程池返回的 future。Facade 自己创建 `std::promise<return_type>`，再把用户 callable、promise 和失败记录逻辑包装成一个 `void()` 任务交给 `IAsyncExecutor`。这样所有后端都能提供一致的用户 future 和失败观察语义。
+`submit_auto(lambda)` 的默认 future 路径与 `Executor::submit()` 一样，没有直接使用底层线程池返回的 future。Facade 自己创建 `std::promise<return_type>`，再把用户 callable、promise 和失败记录逻辑包装成一个 `void()` 任务交给 `IAsyncExecutor`。这样所有后端都能提供一致的用户 future 和失败观察语义。
 
 promise 有三条竞争路径：
 
@@ -105,7 +105,7 @@ worker 优先 pop 自己的本地队列；没有任务时才尝试从其他 work
 
 等待完整性的核心不变量是：已接受任务最终要么执行并计入完成/失败，要么在拒绝/超时路径让其 future 成为就绪异常；dispatcher 的回入队逻辑正是为维护这一不变量。`wait_for_completion_ex()` 观察的是默认异步执行器的快照，不是全进程所有后台活动。
 
-这些内部模块帮助解释“为什么队列堆积”或“为什么任务在另一 worker 执行”，但不是替代 `submit()`、`get_completion_status()` 和监控 API 的用户入口。
+这些内部模块帮助解释“为什么队列堆积”或“为什么任务在另一 worker 执行”，但不是替代 `submit_auto(lambda)`、`get_completion_status()` 和监控 API 的用户入口。
 
 ### 等待完成为什么检查四个条件
 

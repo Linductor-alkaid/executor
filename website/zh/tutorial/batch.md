@@ -11,7 +11,7 @@ description: 在需要或不需要逐项结果时选择 submit_batch、submit_ba
 
 ## 场景问题
 
-一个采集周期收到了多帧独立数据。逐个 `submit()` 当然可行，但提交端明确知道这些工作是一批，应该先表达这一语义，再决定是否需要结果。
+一个采集周期收到了多帧独立数据。逐个 `submit_auto(lambda)` 当然可行，但提交端明确知道这些工作是一批，应该先表达这一语义，再决定是否需要结果。
 
 ## 推荐方案
 
@@ -57,7 +57,7 @@ auto futures = executor.submit_batch(tasks);
 
 这里每个 lambda 各自拥有一个 `frame` 副本，并共享 `processor` 的生命周期。不要写 `[&frame]` 捕获循环变量；循环进入下一轮或离开作用域后，任务可能读到同一对象或悬空引用。大型帧可捕获有明确归还协议的 buffer handle，或捕获 `shared_ptr<const FrameData>`，但不能只传一个无法证明存活时间的 view。
 
-任务列表和其中的 callable 当前需要可复制；move-only 资源应由可复制的共享 owner 间接持有，或改用逐项 `submit()` 的移动捕获 lambda。batch future 只表示每个 `void()` callable 是否完成，不自动收集业务返回值。
+任务列表和其中的 callable 当前需要可复制；move-only 资源应由可复制的共享 owner 间接持有，或改用逐项 `submit_auto(lambda)` 的移动捕获 lambda。batch future 只表示每个 `void()` callable 是否完成，不自动收集业务返回值。
 
 ## 运行假设与所有权
 
@@ -90,7 +90,7 @@ batch 适合由同一生产者同时产生、相互独立且调度语义一致�
 
 | 新需求 | 下一步选择 |
 | --- | --- |
-| 每项要返回不同结果 | 循环 `submit()`，或在业务层为结果建立索引容器 |
+| 每项要返回不同结果 | 循环 `submit_auto(lambda)`，或在业务层为结果建立索引容器 |
 | 一项失败后其余项必须停止 | 设计共享停止标志和幂等任务；普通 batch 默认独立执行 |
 | 数据太大，不宜复制到每个 lambda | 使用所有权明确的 buffer/view，并保证底层存储活到完成 |
 | 批次持续到达并造成积压 | 上游限流、分块和容量预算，不无限扩大队列 |

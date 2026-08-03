@@ -1,15 +1,25 @@
 ---
 title: Submit Functions and Data
-description: Safely submit free functions, member functions, lambdas, arguments, and resources to Executor.
+description: Safely pass functions, lambdas, inputs, and resources through submit_auto or explicit future APIs.
 ---
 
 # Submit Functions and Data
 
 ## Goal
 
-Submit functions already implemented by your project with `submit()`. Understand when task inputs are copied, moved, or referenced, and keep every required object alive until the task has finished.
+For ordinary finite work, pass a lambda with owned inputs to `submit_auto(lambda)`. Understand when inputs are copied, moved, or referenced, and keep every required object alive until the task has finished. Direct `submit(fn, args...)` remains the explicit thread-pool form when its argument-pack convenience or compatibility matters.
 
-## What `submit()` accepts
+## Default: `submit_auto(lambda)`
+
+Use a value-capturing lambda for the normal path:
+
+```cpp
+auto future = executor.submit_auto([frame] { return score_frame(frame, 2); });
+```
+
+The closure owns `frame`, and the future represents completion or exception. `submit_auto(lambda)` safely selects the default asynchronous backend; it does not infer a GPU, lock-free, or real-time route from the callable. `get_last_routing_decision()` can explain the selected path but does not reserve it or replace the future.
+
+## Explicit function-and-argument form
 
 `submit()` has this shape:
 
@@ -17,7 +27,7 @@ Submit functions already implemented by your project with `submit()`. Understand
 auto future = executor.submit(callable, arguments...);
 ```
 
-The callable may be a free function, lambda, function object, or member-function pointer. Executor derives the matching `std::future<T>` from its return type. Arguments do not need to be wrapped in a zero-argument function first.
+It accepts a free function, lambda, function object, or member-function pointer and derives `std::future<T>` from the return type. Arguments do not need to be wrapped in a zero-argument function first. Use this form deliberately when you need its explicit default-pool semantics or are migrating existing code.
 
 Pass an existing function and its arguments directly:
 
@@ -45,7 +55,7 @@ For large inputs, first establish that copying is actually a bottleneck. Typical
 
 ```cpp
 auto model = std::make_shared<const Model>(load_model());
-auto result = executor.submit([model, frame] {
+auto result = executor.submit_auto([model, frame] {
     return infer(*model, frame);
 });
 ```
@@ -78,11 +88,17 @@ If you cannot prove all three, pass a value, move ownership, or use a `shared_pt
 
 | Need | Recommended form | What the task depends on | Main risk |
 | --- | --- | --- | --- |
-| Small read-only input | `submit(fn, value)` or `[value]` | Its own copy | Copying cost |
+| Small read-only input | `submit_auto([value] { ... })` or `submit(fn, value)` | Its own copy | Copying cost |
 | Transfer an exclusive resource | `[value = std::move(value)]` | Exclusive ownership | Submitter cannot reuse the moved value |
 | Share a large immutable object | Capture `shared_ptr<const T>` | Shared lifetime | Reference-count and residency cost |
 | Invoke a member function | Member pointer plus `shared_ptr` | Object survives completion | A raw object pointer can dangle |
 | Modify the caller's object | `std::ref(value)` | External object and synchronization protocol | Dangling reference, race, shutdown order |
+
+## API-specific input shapes
+
+The explicit future APIs—`submit_priority(priority, fn, args...)`, `submit_delayed(delay, fn, args...)`, `submit_with_handle(fn, args...)`, and `submit_after(handle, fn, args...)`—use the same callable and argument model. Longer delays and dependency chains make borrowed inputs more dangerous because execution begins later.
+
+Periodic tasks and batches have different shapes: `submit_periodic()` takes repeatable `void()` work, and batches take independently bound `void()` callables. Real-time callbacks and queue entries also use pre-bound `void()` work. CPU/GPU routing requires the separate CPU and GPU callables of `cpu_gpu_task()`; it is not an ordinary argument-pack variant. Read the corresponding [real-time](/en/realtime-and-communication/realtime-control), [GPU](/en/gpu/register-and-submit), and [communication](/en/realtime-and-communication/channels) contracts before using those paths.
 
 ## Build and run
 
@@ -98,4 +114,4 @@ score=42, plan=local-frame-7, adjusted=26, owned=9
 processed=1
 ```
 
-Next, read [return values and errors](/en/quick-start/return-values-and-errors) to see how these inputs return control through a future after success or failure.
+Next, read [return values and errors](/en/quick-start/return-values-and-errors) to see how these inputs return control through a future after success or failure; use [Choose a Submission API](/en/guides/choosing-submit-api) when timing or result-model requirements change.

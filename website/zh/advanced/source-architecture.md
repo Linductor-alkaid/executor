@@ -42,7 +42,7 @@ flowchart TD
 
 | 你看到的行为 | 首先读 | 然后读 | 验证证据 |
 | --- | --- | --- | --- |
-| `submit()` 返回 future | `include/executor/executor.hpp` 模板实现 | `src/executor/thread_pool_executor.cpp`、`thread_pool.cpp` | `tests/test_executor_facade.cpp`、异常/超时测试 |
+| `submit_auto(lambda)` 返回 future | `include/executor/executor.hpp` 的路由和模板 API | `src/executor/thread_pool_executor.cpp`、`thread_pool.cpp` | Facade/routing、异常和超时测试 |
 | 依赖任务未执行 | Facade 的 `TaskGraphState` 和 `submit_after_with_handle` | `src/executor/task/task_dependency_manager.cpp` | `tests/test_executor_facade*`、依赖教程 smoke |
 | 优先级没有抢占 | `PriorityScheduler::dequeue()` | `TaskDispatcher::dispatch()`、worker loop | 优先级测试和队列状态 |
 | resize 后任务没有丢失 | `ThreadPool::resize_local_queues()` | `TaskDispatcher::dispatch_batch()` 回入队分支 | resize/并发停止测试 |

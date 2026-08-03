@@ -9,9 +9,23 @@ description: 在明确的单消费者高频场景评估 LockFreeTaskExecutor，�
 
 判断 `LockFreeTaskExecutor` 是否比 Facade 更适合一个高频聚合场景，并用正确的统计、压力测试和 benchmark 验证结论。
 
+这是性能专家路径，不是普通任务的默认优化。普通有限工作使用 `submit_auto(lambda)`；只有业务已经确认 MPSC、单消费者和有界拒绝就是正确语义时才进入本页。若希望在统一控制面完成命名、生命周期和接收诊断，先使用 `dispatch_auto(LowLatency)`；它返回 admission，不提供 future 完成承诺。
+
 ## 何时使用 LockFreeTaskExecutor
 
-它面向多生产者、单消费者的任务聚合，例如高频日志、异步事件或性能敏感的单消费者分发：
+它面向多生产者、单消费者的任务聚合，例如高频日志、异步事件或性能敏感的单消费者分发。Facade 路径要求先注册、启动并显式指定目标：
+
+```cpp
+TaskOptions options;
+options.intent = ExecutionIntent::LowLatency;
+options.preferred_executor = "telemetry";
+auto admission = executor.dispatch_auto(options, [] { process_event(); });
+if (!admission.accepted) {
+    // stopped、queue full、pool exhausted 或 shutdown competition
+}
+```
+
+直接操作执行器仍适合需要精细生命周期或 benchmark 控制的场景：
 
 ```cpp
 executor::LockFreeTaskExecutor queue(1024);

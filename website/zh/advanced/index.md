@@ -5,7 +5,7 @@ description: 在 Facade 的默认道路不够用时，再进入资源隔离和�
 
 # 高级与原理
 
-大多数应用从 `Executor` Facade 开始。需要独立资源隔离时使用独立 `Executor` 实例；需要自定义周期源、直接控制实时/GPU 执行器或分析队列实现时，再进入公开高级接口。
+大多数应用从 `Executor` Facade 的 `submit_auto(lambda)` 开始。需要独立资源隔离时使用独立 `Executor` 实例；需要自定义周期源、直接控制实时/GPU 执行器或分析队列实现时，再进入公开高级接口。
 
 先从[源码架构与阅读地图](/zh/advanced/source-architecture)建立模块、所有权和同步域的全局图，再按一条执行路径深入：
 

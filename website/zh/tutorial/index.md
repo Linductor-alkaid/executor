@@ -23,4 +23,4 @@ description: 通过机器人数据流水线与服务端数据导入逐步学习 
 
 服务端案例不是第二套 API 教程，而是对教学模型的交叉验证：机器人场景强调长期角色、通信和实时边界；数据导入场景强调请求生命周期、部分失败、事务、幂等和下游容量。
 
-需要直接按问题选接口时，进入[场景指南](/zh/guides/choosing-submit-api)；需要逐项深入控制循环和通信组件时，进入[实时与通信](/zh/realtime-and-communication/)。
+需要直接按问题选接口时，先阅读[执行模型与路由边界](/zh/guides/execution-models-and-routing)，再进入[场景指南](/zh/guides/choosing-submit-api)；只有约束明确时才逐项深入[实时与通信](/zh/realtime-and-communication/)、GPU 或高级专题。

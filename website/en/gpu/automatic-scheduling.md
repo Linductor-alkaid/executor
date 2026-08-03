@@ -1,13 +1,34 @@
 ---
 title: CPU/GPU Automatic Selection
-description: Use submit_auto and GpuScheduler configuration to choose CPU or GPU from task characteristics.
+description: Use cpu_gpu_task to express independent paths, configure fallback, and understand the legacy submit_auto boundary.
 ---
 
 # CPU/GPU Automatic Selection
 
 ## Goal
 
-Understand how `submit_auto()` chooses a path from task characteristics, when to adjust `GpuScheduler::Config`, and why choosing GPU does not automatically handle an unavailable backend.
+Understand how `cpu_gpu_task()` plus `submit_auto()` chooses a CPU or GPU path from task characteristics, when to adjust `GpuScheduler::Config`, and why choosing GPU does not automatically handle an unavailable backend.
+
+If you have only an ordinary CPU lambda, return to [Execution Models and Routing Boundaries](/en/guides/execution-models-and-routing): default `Auto` does not implicitly move it to GPU.
+
+## Recommended path: independent CPU and GPU callables
+
+New code gives CPU and GPU separate callables instead of asking one callable to infer its environment from a null stream:
+
+```cpp
+auto future = executor.submit_auto(
+    executor::cpu_gpu_task(
+        [data] { run_cpu(*data); },
+        [data](void* stream) { run_gpu(stream, *data); })
+        .name("segment")
+        .data_size(bytes)
+        .compute_intensity(3.0F)
+        .preferred_executor("cuda0")
+        .fallback(executor::FallbackPolicy::AllowCpu));
+future.get();
+```
+
+`AllowCpu` permits CPU execution when GPU is unregistered, stopped, in error, or at known hard capacity, and records `RoutingDecision::fell_back`. Default `NoFallback` makes the future ready with an exception; `RequireRequestedBackend` requires a named submit-capable GPU executor. Submission still competes with stop and capacity changes, so handle future exceptions and failure events.
 
 ## Default selection rules
 
@@ -18,21 +39,11 @@ The scheduler decides in order:
 3. Otherwise choose GPU when data size meets `data_size_threshold` (default 1 MiB) and compute intensity meets `compute_intensity_threshold` (default 2.0).
 4. Choose CPU otherwise.
 
-```cpp
-executor::gpu::TaskCharacteristics work;
-work.data_size_bytes = bytes;
-work.compute_intensity = 3.0F;
+`CpuGpuTask` supplies `data_size`, `compute_intensity`, and `prefer_gpu()` task characteristics. A GPU enters the candidate set only when it is registered, running, error-free, and below known hard capacity.
 
-auto future = executor.submit_auto(work, "cuda0",
-    [](void* stream) { run_work(stream); }, gpu_task_config);
-future.get();
-```
+## Compatibility path: legacy four-argument overload
 
-The CPU branch invokes the same callable with a null stream; the GPU branch calls `submit_gpu()`. The callable must correctly handle CPU `nullptr`, and the named executor must already be registered before the GPU branch runs.
-
-## One callable spans two execution environments
-
-Unlike `submit_gpu()`, which may accept a no-argument callable, `submit_auto()` requires a callable that accepts `void*`, since CPU explicitly calls `kernel(nullptr)`:
+`0.3.x` retains this overload for existing code. Its CPU branch invokes one callable with a null stream, and an unready GPU does not implicitly fall back to CPU:
 
 ```cpp
 auto data = std::make_shared<WorkData>(prepare_work());
@@ -46,11 +57,11 @@ auto future = executor.submit_auto(work, "cuda0",
     }, gpu_task_config);
 ```
 
-Captured input must meet both CPU and GPU lifetime/thread-safety requirements. Do not let the null branch use a device pointer or the GPU branch use a host view valid only in the submitter stack. Both branches must produce the same business semantics. When inputs are fundamentally different, explicitly selecting `submit()` or `submit_gpu()` is often clearer.
+Use it only for incremental migration. When the paths need different inputs or lifetimes, use `cpu_gpu_task()` above. This overload receives no compile-time deprecation marker before the next breaking major version.
 
 ## No implicit fallback
 
-`submit_auto()` decides only from characteristics and scheduler history. If it chooses GPU but `cuda0` is unregistered/unavailable, submission fails explicitly—it does not secretly use CPU. First call `register_gpu_executor_ex()` and inspect status before admitting GPU characteristics or `prefer_gpu`; if registration fails, use `submit()` directly for CPU fallback.
+The new dual-path `submit_auto()` follows `FallbackPolicy`: only `AllowCpu` falls back; `NoFallback` and the legacy overload fail explicitly. First call `register_gpu_executor_ex()` and inspect status before admitting GPU characteristics or `prefer_gpu`.
 
 ## Tune configuration from measurement
 

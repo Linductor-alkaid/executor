@@ -7,7 +7,7 @@ description: Own, wake, and join a long-lived blocking worker through the Execut
 
 ## Use this path for a long-lived wait
 
-Use `BlockingIoExecutor` when a component owns one long-lived loop that can block and must still stop cleanly. It is not a task queue, a real-time control loop, a protocol adapter, or a device-integration framework.
+Use `start_worker(BlockingWorkerSpec)` when a component owns one long-lived loop that can block and must still stop cleanly. It returns a `WorkerHandle` for startup and lifecycle management; it is not a task queue, a real-time control loop, a protocol adapter, or a device-integration framework. The explicit `BlockingIoExecutor` APIs remain available for incremental migration and diagnostics.
 
 Use the thread pool for finite queueable work. Use a dedicated real-time thread for fixed-period control. The worker's protocol, inputs, outputs, retry policy, and safety behavior remain the library consumer's responsibility.
 

@@ -15,7 +15,7 @@ aside: false
 | Toolchain | VitePress 1.6.3, Node.js 20 LTS, npm | Static generation, built-in search, and low maintenance. |
 | URL | GitHub Pages project site at `/executor/`; no custom domain initially | Matches `Linductor-alkaid/executor` and avoids launch DNS dependency. |
 | Language policy | Chinese root home page; `/zh/` and `/en/` content trees | Root never redirects by browser language, preserving predictable deep links. |
-| Version policy | Stable `v0.3.0` baseline | Pages follow current repository API; unreleased features are not stable-version promises. |
+| Version policy | Stable `v0.3.1` baseline | Pages follow current repository API; unreleased features are not stable-version promises. |
 | Diagram policy | Markdown text diagrams initially | Avoids extra Mermaid dependency and build risk. |
 | Code source | `examples/tutorial/`, embedded with VitePress `<<< @` | Core page snippets point at compiled examples, avoiding duplicate facts. |
 | English launch | Publish only complete English counterparts | Never publish empty translations; maintain one-to-one published routes. |
@@ -42,7 +42,7 @@ aside: false
 | What is Executor? | `docs/design/user_guide_website.md` | — | Architecture maintainer |
 | Build and install | `docs/BUILD.md`, root `CMakeLists.txt` | `01_first_task.cpp` | Build maintainer |
 | Your first task | `include/executor/executor.hpp` | `01_first_task.cpp` | Tutorial maintainer |
-| Return values and errors | `Executor::submit()`, future | `01_first_task.cpp` | Tutorial maintainer |
+| Return values and errors | `Executor::submit_auto()`, future | `01_first_task.cpp` | Tutorial maintainer |
 | Initialization and shutdown | `Executor::initialize_ex()`, `shutdown()` | `01_first_task.cpp` | API maintainer |
 | Versions and migration | `docs/MIGRATION.md`, `CHANGELOG.md` | — | Release maintainer |
 
@@ -52,7 +52,7 @@ New navigable pages must identify a fact source, example where applicable, and a
 
 The tutorial sequence shares a robot data pipeline: `SensorFrame`, `ParsedFrame`, `Plan`, `ControlCommand`, `ControlConfig`, and `SystemState`.
 
-1. Parse `SensorFrame` in the background with `submit()`.
+1. Parse `SensorFrame` in the background with `submit_auto(lambda)`.
 2. Let `ControlCommand` queue before ordinary analysis with `submit_priority()`.
 3. Retry an unavailable device and run health checks with `submit_delayed()` / `submit_periodic()`.
 4. Process frames in parallel and combine `Plan` using batch, `TaskHandle`, and `when_all()`.

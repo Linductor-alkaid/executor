@@ -1,13 +1,34 @@
 ---
 title: CPU/GPU 自动选择
-description: 使用 submit_auto 和 GpuScheduler 配置基于任务特征选择 CPU 或 GPU。
+description: 用 cpu_gpu_task 表达独立路径、配置回退，并理解 legacy submit_auto 的兼容边界。
 ---
 
 # CPU/GPU 自动选择
 
 ## 学习目标
 
-理解 `submit_auto()` 如何依据任务特征选择路径，何时调整 `GpuScheduler::Config`，以及为什么“选择 GPU”不等于自动处理后端不可用。
+理解 `cpu_gpu_task()` + `submit_auto()` 如何依据任务特征选择 CPU 或 GPU，何时调整 `GpuScheduler::Config`，以及为什么“选择 GPU”不等于自动处理后端不可用。
+
+如果你只有普通 CPU lambda，请返回[执行模型与路由边界](/zh/guides/execution-models-and-routing)：默认 `Auto` 不会隐式把它改投 GPU。
+
+## 推荐路径：独立 CPU/GPU callable
+
+新代码为 CPU 与 GPU 路径提供独立 callable，不再用 `nullptr` stream 在一个 callable 中猜测执行环境：
+
+```cpp
+auto future = executor.submit_auto(
+    executor::cpu_gpu_task(
+        [data] { run_cpu(*data); },
+        [data](void* stream) { run_gpu(stream, *data); })
+        .name("segment")
+        .data_size(bytes)
+        .compute_intensity(3.0F)
+        .preferred_executor("cuda0")
+        .fallback(executor::FallbackPolicy::AllowCpu));
+future.get();
+```
+
+`AllowCpu` 在 GPU 未注册、未运行、错误或达到已知硬容量时允许 CPU 路径，并由 `RoutingDecision::fell_back` 解释；默认 `NoFallback` 则让 future 就绪为异常。`RequireRequestedBackend` 必须显式指定可提交的 GPU executor。实际提交仍可能与 stop 或容量竞争，调用方仍要处理 future 异常和 failure event。
 
 ## 默认选择规则
 
@@ -18,25 +39,14 @@ description: 使用 submit_auto 和 GpuScheduler 配置基于任务特征选择 
 3. 否则，当数据大小达到 `data_size_threshold`（默认 1 MiB）且计算强度达到 `compute_intensity_threshold`（默认 2.0）时选择 GPU。
 4. 其余情况选择 CPU。
 
-```cpp
-executor::gpu::TaskCharacteristics work;
-work.data_size_bytes = bytes;
-work.compute_intensity = 3.0F;
+`CpuGpuTask` 以 `data_size`、`compute_intensity` 和 `prefer_gpu()` 传递任务特征；调度器仍按显式 GPU 偏好、自适应历史和阈值选择候选。GPU 必须已注册、运行、无后端错误且未达到已知硬容量，才会进入候选。
 
-auto future = executor.submit_auto(work, "cuda0",
-    [](void* stream) { run_work(stream); }, gpu_task_config);
-future.get();
-```
+## 兼容路径：legacy 四参数 overload
 
-CPU 路径以空 stream 调用同一个 callable；GPU 路径调用 `submit_gpu()`。因此 callable 必须能正确处理 CPU 的 `nullptr` stream，也必须在 GPU 路径调用前已成功注册指定 executor。
-
-## 一个 callable 必须覆盖两种输入环境
-
-与 `submit_gpu()` 可接受无参数 callable 不同，`submit_auto()` 的 callable 必须能够以 `void*` 参数调用，因为 CPU 分支会明确执行 `kernel(nullptr)`：
+`0.3.x` 保留以下 overload 以兼容既有代码；它的 CPU 路径仍以空 stream 调用同一个 callable，GPU 未就绪时也不会隐式 CPU 回退：
 
 ```cpp
-auto data = std::make_shared<WorkData>(prepare_work());
-auto future = executor.submit_auto(work, "cuda0",
+auto future = executor.submit_auto(characteristics, "cuda0",
     [data](void* stream) {
         if (stream == nullptr) {
             run_cpu(*data);
@@ -46,11 +56,11 @@ auto future = executor.submit_auto(work, "cuda0",
     }, gpu_task_config);
 ```
 
-捕获的数据必须同时满足 CPU 与 GPU 路径的生命周期和线程安全要求。不要让 `nullptr` 分支误用设备指针，也不要让 GPU 分支访问只在提交栈帧有效的 host view。两条路径应产生相同业务语义；若它们需要完全不同的输入结构，应用显式选择 `submit()` 或 `submit_gpu()` 往往更清晰。
+该模式仅用于渐进迁移。若两条路径需要不同输入或生命周期，新代码使用前一节的 `cpu_gpu_task()`；在下一个允许破坏性变更的主版本前，此 overload 不添加编译期弃用标记。
 
 ## 不会隐式回退的情况
 
-`submit_auto()` 的决策只依据特征和调度器历史；若它选择 GPU 而 `cuda0` 未注册或不可用，提交会明确失败，不会偷偷改走 CPU。推荐流程是先完成 `register_gpu_executor_ex()`、检查状态，再允许 GPU 特征或 `prefer_gpu` 进入调度器；注册失败时由应用直接使用 `submit()` 处理 CPU 回退。
+新双路径 `submit_auto()` 会按 `FallbackPolicy` 处理不可用 GPU：仅 `AllowCpu` 会回退 CPU；`NoFallback` 和 legacy overload 都会明确失败，不会偷偷改走 CPU。推荐流程是先完成 `register_gpu_executor_ex()`、检查状态，再允许 GPU 特征或 `prefer_gpu` 进入调度器。
 
 ## 调整配置
 

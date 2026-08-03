@@ -78,4 +78,4 @@ Real-time or GPU degradation:
 Failure scenarios validated:
 ```
 
-Use this record with the tutorial's [bounded waiting and status](/en/tutorial/waiting-and-status). Detailed reliability and real-time/communication material currently remains available in Chinese.
+Use this record with the tutorial's [bounded waiting and status](/en/tutorial/waiting-and-status), [Failure Observability](/en/reliability/failure-observability), and [Real-Time and Communication](/en/realtime-and-communication/).

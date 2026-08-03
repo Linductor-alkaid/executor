@@ -5,7 +5,7 @@ description: Move beyond the Facade only when resource isolation or lower-level 
 
 # Advanced and Internals
 
-Most applications begin with the `Executor` Facade. Use an independent `Executor` only for isolated resources; enter public advanced interfaces only for custom cycle sources, direct real-time/GPU control, or queue-implementation analysis.
+Most applications begin with `submit_auto(lambda)` on the `Executor` Facade. Use an independent `Executor` only for isolated resources; enter public advanced interfaces only for custom cycle sources, direct real-time/GPU control, or queue-implementation analysis.
 
 Start with the [source architecture map](/en/advanced/source-architecture) to establish modules, ownership, and synchronization domains, then follow one path:
 

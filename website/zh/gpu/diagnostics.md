@@ -43,7 +43,7 @@ gpu backend=unavailable, submit=diagnosed, failures=2
 
 ## 降级策略
 
-注册失败后，不要继续向同名 GPU executor 提交任务。明确选择 CPU `submit()` 路径，或在自动调度前确保 GPU executor 已注册且运行。无 GPU 的用户不需要安装 CUDA/OpenCL，也不应因此无法完成普通教程。
+注册失败后，不要继续向同名 GPU executor 提交任务。普通 CPU 工作继续使用 `submit_auto(lambda)`；需要双路径回退时，阅读[CPU/GPU 自动选择](/zh/gpu/automatic-scheduling)后使用带 `AllowCpu` 的 `cpu_gpu_task()`。无 GPU 的用户不需要安装 CUDA/OpenCL，也不应因此无法完成普通教程。
 
 ## 硬件验证边界
 

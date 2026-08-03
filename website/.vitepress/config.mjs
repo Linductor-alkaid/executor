@@ -20,16 +20,20 @@ export default defineConfig({
           { text: 'Quick Start', link: '/en/quick-start/build' },
           { text: 'Tutorials', link: '/en/tutorial/' },
           { text: 'Guides', link: '/en/guides/choosing-submit-api' },
-          { text: 'API Reference', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' },
-          { text: 'Release v0.3.0', link: '/en/reference/version-and-migration' },
+          {
+            text: 'Reference',
+            items: [
+              { text: 'Versions and Migration · v0.3.1', link: '/en/reference/version-and-migration' },
+              { text: 'Complete API Reference', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' }
+            ]
+          },
           {
             text: 'Topics',
             items: [
               { text: 'Reliability', link: '/en/reliability/' },
               { text: 'Real-Time & Communication', link: '/en/realtime-and-communication/' },
               { text: 'GPU', link: '/en/gpu/' },
-              { text: 'Advanced', link: '/en/advanced/' },
-              { text: 'Versions and Migration', link: '/en/reference/version-and-migration' }
+              { text: 'Advanced', link: '/en/advanced/' }
             ]
           },
           { text: 'GitHub', link: 'https://github.com/Linductor-alkaid/executor' }
@@ -85,6 +89,7 @@ export default defineConfig({
             {
               text: 'Guides',
               items: [
+                { text: 'Execution Models and Routing Boundaries', link: '/en/guides/execution-models-and-routing' },
                 { text: 'Choose a Submission API', link: '/en/guides/choosing-submit-api' },
                 { text: 'Choose a Communication Component', link: '/en/guides/choosing-communication' },
                 { text: 'Migrate Existing Thread Code', link: '/en/guides/migrating-existing-threads' },
@@ -181,16 +186,20 @@ export default defineConfig({
       { text: '快速开始', link: '/zh/quick-start/build' },
       { text: '循序教程', link: '/zh/tutorial/' },
       { text: '场景指南', link: '/zh/guides/choosing-submit-api' },
-      { text: 'API 参考', link: '/zh/reference/api' },
-      { text: '稳定版 v0.3.1', link: '/zh/reference/version-and-migration' },
+      {
+        text: '参考',
+        items: [
+          { text: '版本与迁移 · v0.3.1', link: '/zh/reference/version-and-migration' },
+          { text: '完整 API 参考', link: '/zh/reference/api' }
+        ]
+      },
       {
         text: '专题',
         items: [
           { text: '可靠性', link: '/zh/reliability/' },
           { text: '实时与通信', link: '/zh/realtime-and-communication/' },
           { text: 'GPU', link: '/zh/gpu/' },
-          { text: '高级与原理', link: '/zh/advanced/' },
-          { text: '版本与迁移', link: '/zh/reference/version-and-migration' }
+          { text: '高级与原理', link: '/zh/advanced/' }
         ]
       },
       { text: 'GitHub', link: 'https://github.com/Linductor-alkaid/executor' }

@@ -15,7 +15,7 @@ This is the current source organization. Facade/types in `include/executor/` are
 
 ```mermaid
 flowchart TD
-    A[Application\nsubmit / future / status / shutdown] --> B[Public Facade\ninclude/executor/executor.hpp]
+    A[Application\nsubmit_auto / future / status / shutdown] --> B[Public Facade\ninclude/executor/executor.hpp]
     B --> C[Resource owner\nexecutor_manager.cpp]
     C --> D[ThreadPoolExecutor]
     C --> E[RealtimeThreadExecutor]
@@ -40,7 +40,7 @@ flowchart TD
 
 | Behavior | Read first | Then read | Verification |
 | --- | --- | --- | --- |
-| `submit()` returns a future | Template in `include/executor/executor.hpp` | `src/executor/thread_pool_executor.cpp`, `thread_pool.cpp` | `tests/test_executor_facade.cpp`, exception/timeout tests |
+| `submit_auto(lambda)` returns a future | Routing and template APIs in `include/executor/executor.hpp` | `src/executor/thread_pool_executor.cpp`, `thread_pool.cpp` | Facade/routing, exception, and timeout tests |
 | Dependent task does not run | Facade `TaskGraphState`, `submit_after_with_handle` | `src/executor/task/task_dependency_manager.cpp` | Facade/dependency tests and tutorial smoke |
 | Priority does not preempt | `PriorityScheduler::dequeue()` | `TaskDispatcher::dispatch()`, worker loop | Priority tests and queue status |
 | Resize does not lose tasks | `ThreadPool::resize_local_queues()` | `TaskDispatcher::dispatch_batch()` requeue branch | Resize/concurrent-stop tests |

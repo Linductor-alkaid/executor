@@ -22,9 +22,9 @@ flowchart LR
     G --> H[worker executes]
 ```
 
-### From `submit()` to worker
+### From the default Facade path to a worker
 
-1. `Executor::submit()` wraps user work to fulfill a `promise`, writes exceptions to its future, and rethrows them to the underlying executor so future and service-level failure observation agree.
+1. `submit_auto(lambda)` selects this default asynchronous path for ordinary work. Its future-producing implementation, like the explicit `Executor::submit()` compatibility entry, wraps user work to fulfill a `promise`, writes exceptions to its future, and rethrows them to the underlying executor so future and service-level failure observation agree.
 2. Default manager access can lazily initialize with `std::call_once`; explicit initialization or post-shutdown use becomes diagnosable rejection.
 3. `ThreadPoolExecutor` snapshots `shared_ptr<ThreadPool>` under its mutex before submission, preventing a stop/submit race from dereferencing freed pool memory.
 4. `ThreadPool` places work in `PriorityScheduler` from `CRITICAL` through `LOW`. Current queues have separate mutexes; priority selects waiting work and does not preempt running work.

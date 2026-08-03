@@ -33,7 +33,7 @@ If your program only has one or two long-lived threads with clear ownership, `st
 
 ```cpp
 auto& executor = executor::Executor::instance();
-auto result = executor.submit([] { return parse_frame(); });
+auto result = executor.submit_auto([] { return parse_frame(); });
 
 try {
     consume(result.get());
@@ -42,6 +42,6 @@ try {
 }
 ```
 
-`submit()` queues work on the default asynchronous executor. A worker stores either the return value or exception in the future, and the caller observes it at `get()`. Submitting work successfully and completing work successfully are different events.
+`submit_auto(lambda)` safely selects the default asynchronous executor for ordinary finite work. A worker stores either the return value or exception in the future, and the caller observes it at `get()`. `submit()` remains the explicit default-thread-pool entry for compatibility and expert control. Submitting work successfully and completing work successfully are different events.
 
 Continue with [build and install](/en/quick-start/build) when you are ready to run the first example.

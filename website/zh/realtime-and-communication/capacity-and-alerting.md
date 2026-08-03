@@ -5,6 +5,8 @@ description: 从通信和实时累计统计计算窗口速率、队列占用、�
 
 # 容量判断与告警落地
 
+本页面向已选择有界通信或实时队列的专家。普通后台任务无需据此选择后端；先从[执行模型与路由边界](/zh/guides/execution-models-and-routing)确认业务需要的是 completion 还是 admission。`dispatch_auto(RealtimeQueue)` 的 `accepted` 是本次入队结果，不能用它替代本页的周期、drop 和容量监控。
+
 ## 先回答三个容量问题
 
 容量配置不是“队列够不够大”一个问题。上线前分别回答：

@@ -19,4 +19,4 @@ Start with [your first task](/en/quick-start/first-task) and [submitting functio
 
 Every page identifies scale and concurrency assumptions, ownership of asynchronous objects, failure injection, in-flight work during exit, and when changing requirements require a different abstraction. Treat those sections as an architecture-review checklist.
 
-For API selection by problem, see the Chinese [scenario guide](/zh/guides/choosing-submit-api); detailed real-time and communication material currently remains in Chinese.
+For API selection by problem, see [Choose a Submission API](/en/guides/choosing-submit-api) and [Execution Models and Routing Boundaries](/en/guides/execution-models-and-routing). Enter real-time, GPU, lock-free, or Blocking I/O topics only when their constraints are explicit.

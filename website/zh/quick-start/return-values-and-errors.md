@@ -7,21 +7,21 @@ description: 使用 future.get 获取任务结果，并在调用方观察任务�
 
 ## 学习目标
 
-理解 `submit()` 对有返回值和 `void` 任务都返回 future，以及异常如何传播。
+理解 `submit_auto(lambda)` 与显式 future 型接口都会通过 future 返回值和任务异常。
 
 ## 推荐方案
 
 对需要结果或需要确认成功的任务，保存 future 并调用 `get()`：
 
 ```cpp
-auto value = executor.submit([] { return 42; });
+auto value = executor.submit_auto([] { return 42; });
 std::cout << value.get() << '\n';
 
-auto work = executor.submit([] { /* side effect */ });
+auto work = executor.submit_auto([] { /* side effect */ });
 work.get(); // 仍然必须观察异常
 ```
 
-任务内部抛出的异常不会在 worker 线程直接终止程序，而会在对应 `get()` 调用处重新抛出。教程示例的第二个任务展示了这一点。
+任务内部抛出的异常不会在 worker 线程直接终止程序，而会在对应 `get()` 调用处重新抛出。`submit()` 以及显式 priority、delay、batch 和 dependency 接口仍保留各自的 future 语义。教程示例的第二个任务展示了这一点。
 
 ```cpp
 try {
@@ -32,6 +32,8 @@ try {
 ```
 
 不要把异常误当作初始化失败：`initialize_ex()` 的失败通过 `ExecutorResult` 的 `ok`、`error_code` 与 `message` 表达；任务失败则由 future、failure callback 或 failure status 观察。
+
+`DispatchResult::accepted` 和 `WorkerHandle` 不是 future：前者表示有界队列接收，后者表示 worker 生命周期。不要把它们当作完成；先阅读[执行模型与路由边界](/zh/guides/execution-models-and-routing)。
 
 ## 不适用场景
 

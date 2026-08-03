@@ -13,7 +13,7 @@ hero:
       link: /en/getting-started/what-is-executor
 features:
   - title: Finish one task first
-    details: Start with submit() and future.get(); you do not need to understand thread pools, GPUs, or real-time scheduling first.
+    details: Start with submit_auto(lambda) and future.get(); you do not need to understand thread pools, GPUs, or real-time scheduling first.
   - title: Choose APIs by scenario
     details: Introduce priority, delayed, periodic, batch, and dependency APIs only when the workload requires them.
   - title: Examples stay verified
@@ -24,7 +24,7 @@ features:
 
 ```cpp
 auto& executor = executor::Executor::instance();
-auto answer = executor.submit([] { return 42; });
+auto answer = executor.submit_auto([] { return 42; });
 std::cout << answer.get() << '\n';
 executor.shutdown();
 ```
@@ -45,7 +45,7 @@ executor.shutdown();
 | Platform | Linux, Windows |
 | Language | C++20 |
 | Build system | CMake 3.16+ |
-| Version | `v0.3.0` |
+| Version | `v0.3.1` |
 | License | [MIT](https://github.com/Linductor-alkaid/executor/blob/master/LICENSE) |
 
-<div class="version-note">This guide corresponds to `v0.3.0`; later `master` capabilities become stable promises only after their release tag.</div>
+<div class="version-note">This guide corresponds to `v0.3.1`; later `master` capabilities become stable promises only after their release tag.</div>

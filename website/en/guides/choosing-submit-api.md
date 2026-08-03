@@ -1,50 +1,74 @@
 ---
 title: Choose a Submission API
-description: Choose an Executor Facade API for one-off, periodic, batch, and dependent work by timing, order, results, and failure semantics.
+description: Choose by completion, bounded admission, or worker lifecycle before entering default or expert Executor paths.
 ---
 
 # Choose a Submission API
 
-Describe the business constraint before comparing function names: when may work start, does it depend on other work, does the caller need each result, and what happens when a time budget is missed? For callable and argument ownership, first read [submit functions and data](/en/quick-start/task-inputs-and-ownership).
+Do not start with an executor class name. First ask what the caller must confirm: a piece of work completed, a bounded queue accepted it, or a long-lived worker started and can be managed. That answer matters before a backend's speed. For the full boundary, read [Execution Models and Routing Boundaries](/en/guides/execution-models-and-routing).
 
 ## 30-second selection table
 
-| Problem | Default API | Control to retain | Failure observation |
+| Problem | Default API | Result means | When to go deeper |
 | --- | --- | --- | --- |
-| Run one background operation now | `submit()` | `future` | `future.get()` |
-| Queue a small amount of control work first | `submit_priority()` | `future`, priority | `future.get()` |
-| Retry after a relative delay | `submit_delayed()` | `future`, delay | `future.get()` |
-| Ordinary background health check | `submit_periodic()` | Task ID | Periodic status, callback |
-| Independent batch with per-item results | `submit_batch()` | All futures | `get()` on every future |
-| Independent batch without per-item results | `submit_batch_no_future()` | Business batch ID | Failure status/callback, wait state |
-| Urgent independent batch | `submit_batch_priority()` | Futures, priority | `get()` for every item |
-| Work must follow successful prerequisites | `submit_after()` / `when_all()` | `TaskHandle` and future | Dependency failure reaches dependent future |
+| One finite background operation | `submit_auto(lambda)` | Future completion or exception | Priority, delay, batch, or dependencies |
+| Independent CPU/GPU implementations | `submit_auto(cpu_gpu_task(...))` | Future completion or exception on selected path | Registration, diagnostics, or GPU tuning |
+| Verified lock-free single-consumer path | `dispatch_auto(LowLatency)` | Bounded queue admission | Capacity, object pool, shutdown |
+| Existing periodic real-time queue | `dispatch_auto(RealtimeQueue)` | Bounded queue admission | Cycle budget, drops, permissions |
+| Long-lived wakeable I/O loop | `start_worker(BlockingWorkerSpec)` | Worker startup and lifecycle | Protocol, reconnect, device deployment |
+| Soft periodic maintenance | `submit_periodic()` | Task ID and periodic status | Strict period or low jitter |
+| Dependencies, delays, priorities, batches | Matching explicit Facade API | Future, handle, or task ID | Composite scheduling semantics |
+
+`submit_auto(lambda)` is the ordinary developer's default entry. It safely uses the default asynchronous pool; it does not infer that pressure, a deadline, or priority should select GPU, lock-free, or real-time work.
 
 Complex policies should express correctness first. For “after two successful prerequisites, then urgent work,” build the dependency, then decide whether priority is actually needed; queue order is not a dependency mechanism.
 
 ```mermaid
 flowchart TD
-    A{Fixed period and jitter budget?}
-    A -- Yes --> B[Dedicated real-time task\nnot ordinary submit_*]
-    A -- No --> C{Repeats?}
-    C -- Yes --> D[Soft periodic maintenance\nsubmit_periodic]
-    C -- No --> E{Wait for other tasks?}
-    E -- Yes --> F[submit_with_handle +\nsubmit_after / when_all]
-    E -- No --> G{Many independent similar tasks?}
-    G -- Yes --> H[submit_batch\nretain futures by default]
-    G -- No --> I[submit / submit_priority / submit_delayed]
+    A{What must the caller confirm?}
+    A -- Completion or exception --> B[Future path]
+    B --> C[Default: submit_auto(lambda)]
+    C --> D{Explicit constraint?}
+    D -- priority/delay/batch/dependency --> E[Matching explicit Facade API]
+    D -- independent CPU/GPU paths --> F[cpu_gpu_task + submit_auto]
+    A -- Queue admission --> G[dispatch_auto]
+    G --> H[Name a running LowLatency or RealtimeQueue backend]
+    A -- Long-lived worker lifecycle --> I[start_worker]
+    I --> J[WorkerHandle lifecycle]
 ```
 
-## Default: `submit()`
+The paths are not interchangeable: a ready future does not prove a real-time cycle ran; `DispatchResult::accepted` does not prove execution; and `WorkerHandle::started()` does not prove a device, protocol, or first input is ready.
 
-Use `submit()` when work can enter the shared pool immediately and has no dependency, periodic, or batch meaning.
+## Default: `submit_auto(lambda)`
+
+For finite one-off work that needs a result or exception, begin here:
 
 ```cpp
-auto future = executor.submit([frame] { return decode(frame); });
+auto future = executor.submit_auto([frame] { return decode(frame); });
 auto decoded = future.get();
 ```
 
-Value capture gives the task stable input. A reference, raw pointer, or `this` must be proven to outlive the task. Do not submit permanent blocking loops or service listeners to the shared pool: they occupy workers needed by short work. Use an owned `std::jthread`, or a real-time path when the work has true periodic semantics.
+Value capture gives the task stable input. `future.get()` is the completion and exception boundary; `get_last_routing_decision()` explains why the default Facade selected its path. `submit()` remains a valid explicit entry when existing thread-pool semantics or compatibility require it. A reference, raw pointer, or `this` must be proven to outlive the task.
+
+## Bounded admission: `dispatch_auto()` only for known constraints
+
+`dispatch_auto()` is not an acceleration switch for ordinary work. Use it only when the application has already verified lock-free single-consumer or real-time periodic-queue semantics:
+
+```cpp
+TaskOptions options;
+options.intent = ExecutionIntent::RealtimeQueue;
+options.preferred_executor = "control";
+const auto result = executor.dispatch_auto(options, [] { apply_control(); });
+if (!result.accepted) {
+    // Inspect result.decision, result.message, failure events, and status counters.
+}
+```
+
+Stopped backends, full queues, exhausted object pools, and concurrent stopping can reject. There is no silent fallback to the default pool. `accepted` means admission, never completion.
+
+## Long-lived work: `start_worker()`
+
+Permanent listeners, blocking reads, polls, and protocol loops must not occupy the shared pool. When a loop responds to a stop token and `wakeup()` can release its current wait, use `start_worker(BlockingWorkerSpec{...})` and manage startup, `request_stop()`, `stop()`, and status through `WorkerHandle`. See [Blocking I/O workers](/en/realtime-and-communication/blocking-io-workers).
 
 ## Priority, delay, and periodic work
 
@@ -63,5 +87,7 @@ Use `submit_with_handle()`, `submit_after()`, and `when_all()` for “model load
 ## Time budgets are not cancellation
 
 `wait_for_completion_ex(timeout)` reports incomplete work and a snapshot; it does not safely kill a running C++ function. Make I/O bounded, let long work check a stop signal or deadline, and split interruptible work into steps. Likewise, `shutdown(true)` is an orderly-exit policy, not a guarantee that an arbitrary permanent task ends promptly.
+
+Automatic routing does not prove callable real-time safety, thread safety, GPU memory ownership, or I/O interruptibility. `get_executor_capabilities()` is an advisory snapshot, not a backend reservation. For CPU/GPU fallback, declare separate callable paths and a `FallbackPolicy`; an allowed fallback is explained by `RoutingDecision`, not reported as a user-task exception.
 
 Before production, assign an owner to every future/task ID, keep periodic cancellation and failure policies, avoid using priority for correctness, make batch work independent, ensure all tasks are bounded or cooperatively stoppable, and observe queue growth, rejection, and wait timeout. For continuous data between threads, use a [communication component](/en/guides/choosing-communication), not task submission semantics.

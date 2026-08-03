@@ -40,7 +40,7 @@ plan score=42
 
 ## 依赖任务的输入何时保存
 
-`submit_with_handle(fn, args...)`、`submit_after(handle, fn, args...)` 与普通 `submit()` 使用相同的 callable 和参数模型，但 dependent 的输入在**提交依赖任务时**就被保存，不是等前置成功后才从调用方读取：
+`submit_with_handle(fn, args...)`、`submit_after(handle, fn, args...)` 与显式 `submit(fn, args...)` 使用相同的 callable 和参数模型，但 dependent 的输入在**提交依赖任务时**就被保存，不是等前置成功后才从调用方读取。普通无依赖有限工作仍从 `submit_auto(lambda)` 开始：
 
 ```cpp
 PlanConfig config = load_plan_config();

@@ -43,4 +43,4 @@ Capacity is a pressure-relief contract, not an implementation detail. For `MpscC
 
 `RealtimeChannel` and `DoubleBuffer` currently use mutexes internally. Their APIs express bounded cycle consumption and complete value snapshots, respectively; neither is a lock-free or hard-real-time guarantee.
 
-See the [complete robot pipeline](/en/tutorial/complete-robot-pipeline) for a connected example. Detailed capacity and alerting guidance currently remains in Chinese; ordinary background-work selection is covered by [choose a submission API](/en/guides/choosing-submit-api).
+See the [complete robot pipeline](/en/tutorial/complete-robot-pipeline) for a connected example. For capacity and alerting, read [Capacity and Alerts](/en/realtime-and-communication/capacity-and-alerting); ordinary background-work selection is covered by [Choose a Submission API](/en/guides/choosing-submit-api).

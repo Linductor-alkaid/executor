@@ -26,7 +26,7 @@ description: 从排队变长、关闭卡住、悬空引用和失败静默等症�
 ### 典型写法
 
 ```cpp
-executor.submit([&] {
+executor.submit_auto([&] {
     while (running) {
         consume(socket.read());
     }
@@ -53,8 +53,8 @@ executor.submit([&] {
 ### 典型写法
 
 ```cpp
-executor.submit([&] {
-    auto child = executor.submit(load_part);
+executor.submit_auto([&] {
+    auto child = executor.submit_auto(load_part);
     return combine(child.get());
 });
 ```
@@ -101,7 +101,7 @@ executor.submit([&] {
 
 ```cpp
 void Controller::update(const Command& command) {
-    executor_.submit([&] { apply(command, state_); });
+    executor_.submit_auto([&] { apply(command, state_); });
 }
 ```
 
@@ -125,7 +125,7 @@ void Controller::update(const Command& command) {
 ### 典型写法
 
 ```cpp
-executor.submit(write_record);
+executor.submit_auto(write_record);
 return Accepted;
 ```
 

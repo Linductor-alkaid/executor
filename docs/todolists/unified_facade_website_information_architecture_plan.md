@@ -81,18 +81,18 @@
 
 ### 阶段 B：中文专家专题重定位
 
-- [ ] 更新 `website/zh/gpu/automatic-scheduling.md` 和 GPU 索引：主写 `CpuGpuTask`，隔离 legacy overload 的兼容说明。
-- [ ] 更新 `website/zh/realtime-and-communication/realtime-control.md`、`capacity-and-alerting.md`：补 `RealtimeQueue` 有界接收与不等于完成的语义。
-- [ ] 更新 `website/zh/advanced/lockfree-and-performance.md`：补 `LowLatency` 显式 opt-in、单消费者和 admission 边界。
-- [ ] 更新 `website/zh/realtime-and-communication/blocking-io-workers.md`：以 `start_worker` 为首选（已完成），并检查索引页与教程链接。
-- [ ] 更新 `website/zh/reliability/failure-observability.md` 和 `website/zh/reference/version-and-migration.md`：路由/失败职责边界与 `0.3.1` 迁移策略。
+- [x] 更新 `website/zh/gpu/automatic-scheduling.md` 和 GPU 索引：主写 `CpuGpuTask`，隔离 legacy overload 的兼容说明。
+- [x] 更新 `website/zh/realtime-and-communication/realtime-control.md`、`capacity-and-alerting.md`：补 `RealtimeQueue` 有界接收与不等于完成的语义。
+- [x] 更新 `website/zh/advanced/lockfree-and-performance.md`：补 `LowLatency` 显式 opt-in、单消费者和 admission 边界。
+- [x] 更新 `website/zh/realtime-and-communication/blocking-io-workers.md`：以 `start_worker` 为首选（已完成），并检查索引页与教程链接。
+- [x] 更新 `website/zh/reliability/failure-observability.md` 和 `website/zh/reference/version-and-migration.md`：路由/失败职责边界与 `0.3.1` 迁移策略。
 
 ### 阶段 C：英文同步与发布准备
 
-- [ ] 将阶段 A、B 的信息架构和事实同步到对应 `website/en/` 页面；不逐字翻译，但保持 API 语义与路径一致。
-- [ ] 更新英文导航的 release 标识至 `v0.3.1`，前提是版本已正式发布。
-- [ ] 在 `website/translation-status.md` 中更新每个改动页面的 published/needs-translation 状态；不得把未同步页面标为 Complete。
-- [ ] 检查网站内链、侧边栏顺序、代码片段来源和中英文切换目标。
+- [x] 将阶段 A、B 的信息架构和事实同步到对应 `website/en/` 页面；不逐字翻译，但保持 API 语义与路径一致。
+- [x] 更新英文导航的 release 标识至 `v0.3.1`，前提是版本已正式发布。
+- [x] 在 `website/translation-status.md` 中更新每个改动页面的 published/needs-translation 状态；不得把未同步页面标为 Complete。
+- [x] 检查网站内链、侧边栏顺序、代码片段来源和中英文切换目标。
 
 ## 内容规则与示例策略
 

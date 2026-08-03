@@ -24,18 +24,18 @@ An antipattern is not an API that is always forbidden. It is locally plausible c
 ## 1. Permanent loop in the shared pool
 
 ```cpp
-executor.submit([&] {
+executor.submit_auto([&] {
     while (running) consume(socket.read());
 });
 ```
 
-It occupies a worker indefinitely, and blocking I/O may ignore application stop. Active stays full and queued rises even when CPU is low; `shutdown(true)` can wait but cannot safely kill arbitrary C++ code. Use a [blocking I/O worker](/en/realtime-and-communication/blocking-io-workers) when the loop needs Executor-owned stop/wake/join lifecycle, `submit_periodic()` for soft maintenance, and a real-time task for jitter-budgeted loops. Verify that active count falls within budget after producers stop.
+It occupies a worker indefinitely, and blocking I/O may ignore application stop. Active stays full and queued rises even when CPU is low; `shutdown(true)` can wait but cannot safely kill arbitrary C++ code. Use `start_worker()` through the [Blocking I/O worker](/en/realtime-and-communication/blocking-io-workers) path when the loop needs Executor-owned stop/wake/join lifecycle, `submit_periodic()` for soft maintenance, and a real-time task for jitter-budgeted loops. Verify that active count falls within budget after producers stop.
 
 ## 2. Synchronous pool wait inside a worker
 
 ```cpp
-executor.submit([&] {
-    auto child = executor.submit(load_part);
+executor.submit_auto([&] {
+    auto child = executor.submit_auto(load_part);
     return combine(child.get());
 });
 ```
@@ -50,7 +50,7 @@ Parents consume workers while children wait for a worker, causing starvation whe
 
 ```cpp
 void Controller::update(const Command& command) {
-    executor_.submit([&] { apply(command, state_); });
+    executor_.submit_auto([&] { apply(command, state_); });
 }
 ```
 
@@ -59,7 +59,7 @@ void Controller::update(const Command& command) {
 ## 5. Discarded future with no second failure path
 
 ```cpp
-executor.submit(write_record);
+executor.submit_auto(write_record);
 return Accepted;
 ```
 

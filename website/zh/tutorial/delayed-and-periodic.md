@@ -44,7 +44,7 @@ periodic status=running, cancelled=yes
 
 ## 周期任务如何接收业务输入
 
-`submit_delayed(delay, fn, args...)` 与普通 `submit()` 一样，可以把函数和参数分别传入。`submit_periodic(period, task)` 不同：它只接收可重复调用的 `std::function<void()>`，没有单独的参数列表，也没有逐次返回值。需要输入时，应先用 lambda 把输入绑定到这个无参数 callback：
+`submit_delayed(delay, fn, args...)` 与显式 `submit(fn, args...)` 一样，可以把函数和参数分别传入。`submit_periodic(period, task)` 不同：它只接收可重复调用的 `std::function<void()>`，没有单独的参数列表，也没有逐次返回值。需要输入时，应先用 lambda 把输入绑定到这个无参数 callback：
 
 ```cpp
 auto device = std::make_shared<DeviceClient>(endpoint);

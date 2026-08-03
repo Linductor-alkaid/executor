@@ -5,7 +5,7 @@ description: Choose dedicated real-time threads and cross-thread communication c
 
 # Real-Time and Communication
 
-Ordinary `submit_periodic()` is soft periodic work on a thread pool. Fixed-period control, cycle budgets, and real-time queues require a dedicated real-time thread; these are different abstraction layers.
+Ordinary `submit_auto(lambda)` and `submit_periodic()` use the default asynchronous path. Enter this topic only for fixed-period control, cycle budgets, real-time queues, or long-lived interruptible I/O; these are different abstraction layers.
 
 Start with the [complete robot pipeline](/en/tutorial/complete-robot-pipeline), which establishes roles, data ownership, and shutdown protocol before mapping each edge to a component.
 
