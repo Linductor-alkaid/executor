@@ -2,6 +2,7 @@
 
 #include "config.hpp"
 #include "types.hpp"
+#include "task_options.hpp"
 #include "interfaces.hpp"
 #include "executor_manager.hpp"
 #include "blocking_io.hpp"
