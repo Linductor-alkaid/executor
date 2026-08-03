@@ -13,7 +13,7 @@ Executor 是一个面向 C++20 应用的任务执行与线程管理库。它把�
 2. 调用方需要结果、逐项完成确认，还是只需要服务级失败告警？
 3. 数据应该随任务参数传入，还是需要在长期运行的线程之间持续传递？
 
-这些答案决定该使用普通任务、实时线程还是通信组件。Executor 提供这些能力，但不会替应用替代业务建模。
+这些答案决定是否继续使用默认任务路径，还是进入实时、通信、GPU 或长期 worker 专题。Executor 提供这些能力，但不会替应用替代业务建模。
 
 ## 先判断它是否适合你的项目
 
@@ -36,34 +36,35 @@ Executor 是一个面向 C++20 应用的任务执行与线程管理库。它把�
 
 如果你只有一两个生命周期清晰的长期线程，线程之间也没有共享调度、诊断或动态任务需求，直接使用 `std::jthread` 可能更简单。引入库应减少系统责任，而不是只为了隐藏一次 `std::thread` 创建。
 
-## 五类问题，五条默认路径
+## 先从默认 Facade 开始
 
-| 用户需求 | 默认入口 | 它解决的问题 | 它不保证什么 |
+| 用户需求 | 默认入口 | 调用方得到什么 | 何时下钻 |
 | --- | --- | --- | --- |
-| 一次性后台计算 | `submit()` | 在线程池执行，返回结果或异常 | 立即开始、固定完成时间 |
-| 紧急、延迟、批量或依赖工作 | 对应 `submit_*` Facade | 表达排队和编排语义 | 优先级抢占、固定加速比 |
-| 刷新、重试、健康检查 | `submit_periodic()` | 普通线程池上的软周期执行 | 严格周期、低 jitter |
-| 控制循环、周期采集 | 实时任务 Facade | 独立周期线程与有界队列消费 | 跨平台硬实时保证 |
-| 长期线程间的数据交换 | `executor::comm` | FIFO、最新值、快照或阶段同步 | 自动选择数据语义 |
+| 一次性后台计算 | `submit_auto(lambda)` | `future` 中的返回值或异常 | 需要 priority、delay、batch、dependency 时 |
+| 独立 CPU/GPU 实现 | `cpu_gpu_task()` + `submit_auto()` | 已选路径的 future 完成或异常 | 需要 GPU 注册、诊断或调参时 |
+| 有界低延迟或实时投递 | `dispatch_auto()` | 队列是否接收，不是完成 | 需要容量、drop、周期与性能细节时 |
+| 长期可中断 I/O | `start_worker()` | worker 启动结果和生命周期 | 需要协议、wakeup 与部署细节时 |
+| 跨线程传递数据 | `executor::comm` | FIFO、最新值、快照或阶段同步 | 需要按数据语义选择组件时 |
 
-GPU 是另一条可选执行后端：只有工作已经适合 GPU、数据规模足以覆盖传输与启动成本，并且部署环境具备可诊断后端时才应使用。它不是普通任务变慢后的自动答案。
+默认 `Auto` 不会为了性能偷偷选择无锁、实时或 GPU 后端。GPU 也不是普通任务变慢后的自动答案：只有业务明确拥有独立 CPU/GPU 实现、数据规模足以覆盖传输与启动成本，且部署环境可诊断时才应进入该路径。
 
 ## 最常用的心智模型
 
 ```text
 业务请求
-├─ 提交一次工作 ──> Executor Facade ──> 共享线程池 ──> future / failure status
-├─ 维护周期循环 ──> 实时任务 Facade ──> 专用线程 ──> realtime status
-└─ 在线程间传值 ──> executor::comm ──> channel / mailbox / snapshot / phase
+├─ 默认提交一次工作 ──> submit_auto ──> 默认异步 ──> future / routing decision
+├─ 明确有界投递约束 ──> dispatch_auto ──> 指定后端 ──> admission / status
+├─ 管理长期可中断循环 ──> start_worker ──> 专属 worker ──> lifecycle handle
+└─ 在线程间传值 ──────> executor::comm ──> channel / mailbox / snapshot / phase
 ```
 
-大多数新用户只需要第一行。先通过 `Executor::instance()` 和 `submit()` 完成一个真实业务任务；出现明确的周期、背压或数据所有权问题后，再进入对应专题。不要因为库提供底层 Manager、无锁队列或 GPU executor，就从这些类型开始集成。
+大多数新用户只需要第一行。先通过 `Executor::instance()` 和 `submit_auto()` 完成一个真实业务任务；出现明确的周期、背压、长期 I/O 或数据所有权问题后，再进入对应专题。不要因为库提供底层 Manager、无锁队列或 GPU executor，就从这些类型开始集成。
 
 ## 一次普通任务发生了什么
 
 ```cpp
 auto& executor = executor::Executor::instance();
-auto result = executor.submit([] { return parse_frame(); });
+auto result = executor.submit_auto([] { return parse_frame(); });
 
 try {
     consume(result.get());
@@ -98,9 +99,9 @@ try {
 
 ## 第一次接入的推荐顺序
 
-1. 用默认配置运行[第一个任务](/zh/quick-start/first-task)，确认构建、链接、返回值和异常路径。
+1. 用默认配置运行[第一个任务](/zh/quick-start/first-task)，确认构建、链接、默认路由、返回值和异常路径。
 2. 在真实组件边界确定[初始化与关闭](/zh/quick-start/lifecycle)的 owner。
-3. 按自然语言需求阅读[如何选择提交接口](/zh/guides/choosing-submit-api)，不要从 API 名称反推设计。
+3. 先阅读[执行模型与路由边界](/zh/guides/execution-models-and-routing)，再按自然语言需求阅读[如何选择提交接口](/zh/guides/choosing-submit-api)，不要从 API 名称反推设计。
 4. 现有项目先按[从线程代码迁移](/zh/guides/migrating-existing-threads)划清所有权，再用[生产接入检查清单](/zh/guides/production-readiness)补齐有界等待与失败观察。
 5. 只有需求明确时，再进入实时与通信、GPU 或高级逃生口。
 

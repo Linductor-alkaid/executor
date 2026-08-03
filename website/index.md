@@ -3,7 +3,7 @@ layout: home
 hero:
   name: Executor 使用手册
   text: 为 C++20 程序提供可靠的任务执行与线程管理
-  tagline: 十分钟完成构建、提交任务、获取结果并观察异常。
+  tagline: 十分钟完成构建、自动提交第一个任务、获取结果并观察异常。
   actions:
     - theme: brand
       text: 十分钟开始使用
@@ -13,9 +13,9 @@ hero:
       link: /zh/getting-started/what-is-executor
 features:
   - title: 先完成一个任务
-    details: 从 submit() 和 future.get() 开始，不要求先理解线程池、GPU 或实时调度器。
-  - title: 按场景选择接口
-    details: 需要优先级、延迟、周期、批量或依赖时，再逐步引入对应的 Facade API。
+    details: 从 submit_auto() 和 future.get() 开始，不要求先理解线程池、GPU 或实时调度器。
+  - title: 约束明确后再下钻
+    details: 需要有界接收、长期 I/O、实时周期或 GPU 双路径时，再进入相应的专家专题。
   - title: 示例可验证
     details: 页面核心代码对应仓库中的教程示例，并由根 CMake 工程持续编译和 smoke test。
 ---
@@ -24,7 +24,7 @@ features:
 
 ```cpp
 auto& executor = executor::Executor::instance();
-auto answer = executor.submit([] { return 42; });
+auto answer = executor.submit_auto([] { return 42; });
 std::cout << answer.get() << '\n';
 executor.shutdown();
 ```
@@ -34,7 +34,7 @@ executor.shutdown();
 ## 从这里继续
 
 - 第一次使用：从[构建与安装](/zh/quick-start/build)到[第一个任务](/zh/quick-start/first-task)。
-- 按场景选型：[选择提交接口](/zh/guides/choosing-submit-api)。
+- 按业务约束选型：[选择提交接口](/zh/guides/choosing-submit-api)，再理解[执行模型与路由边界](/zh/guides/execution-models-and-routing)。
 - 改造现有项目：[从线程代码迁移](/zh/guides/migrating-existing-threads)，并检查[并发架构反模式](/zh/guides/concurrency-antipatterns)。
 - 验证服务端模型：[数据导入案例](/zh/tutorial/service-data-import)讲清部分失败、幂等与请求排空。
 - 准备接入服务：[生产接入检查清单](/zh/guides/production-readiness)。

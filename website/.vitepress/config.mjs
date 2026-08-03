@@ -182,7 +182,7 @@ export default defineConfig({
       { text: '循序教程', link: '/zh/tutorial/' },
       { text: '场景指南', link: '/zh/guides/choosing-submit-api' },
       { text: 'API 参考', link: '/zh/reference/api' },
-      { text: '稳定版 v0.3.0', link: '/zh/reference/version-and-migration' },
+      { text: '稳定版 v0.3.1', link: '/zh/reference/version-and-migration' },
       {
         text: '专题',
         items: [
@@ -222,6 +222,7 @@ export default defineConfig({
         {
           text: '场景指南',
           items: [
+            { text: '执行模型与路由边界', link: '/zh/guides/execution-models-and-routing' },
             { text: '如何选择提交接口', link: '/zh/guides/choosing-submit-api' },
             { text: '如何选择通信组件', link: '/zh/guides/choosing-communication' },
             { text: '从现有线程代码迁移', link: '/zh/guides/migrating-existing-threads' },
