@@ -719,22 +719,46 @@ ExecutorResult Executor::start_blocking_io_worker_ex(const std::string& name) {
 }
 
 void Executor::stop_blocking_io_worker(const std::string& name) {
-    if (auto* executor = manager_->get_blocking_io_executor(name)) {
-        executor->stop();
-    }
+    manager_->stop_blocking_io_executor(name);
 }
 
 BlockingIoExecutorStatus Executor::get_blocking_io_worker_status(const std::string& name) const {
-    if (auto* executor = manager_->get_blocking_io_executor(name)) {
-        return executor->get_status();
-    }
-    BlockingIoExecutorStatus status;
-    status.name = name;
-    return status;
+    return manager_->get_blocking_io_executor_status(name);
 }
 
 std::vector<std::string> Executor::get_blocking_io_worker_list() const {
     return manager_->get_blocking_io_executor_names();
+}
+
+WorkerHandle Executor::start_worker(BlockingWorkerSpec spec) {
+    const std::string name = spec.name;
+    auto result = register_blocking_io_worker_ex(
+        spec.name, spec.config, std::move(spec.worker));
+    if (result.ok) {
+        result = start_blocking_io_worker_ex(name);
+    }
+    return WorkerHandle(manager_, name, std::move(result));
+}
+
+void WorkerHandle::request_stop() noexcept {
+    if (manager_) {
+        manager_->request_stop_blocking_io_executor(name_);
+    }
+}
+
+void WorkerHandle::stop() {
+    if (manager_) {
+        manager_->stop_blocking_io_executor(name_);
+    }
+}
+
+BlockingIoExecutorStatus WorkerHandle::status() const {
+    if (manager_) {
+        return manager_->get_blocking_io_executor_status(name_);
+    }
+    BlockingIoExecutorStatus status;
+    status.name = name_;
+    return status;
 }
 
 bool Executor::push_realtime_task(const std::string& name, std::function<void()> task) {
@@ -844,15 +868,21 @@ DispatchResult Executor::dispatch_auto(TaskOptions options, std::function<void()
         return result;
     }
 
-    result.accepted = manager_->try_push_lockfree_task(result.executor_name, std::move(task));
+    result.accepted = result.backend == ExecutionBackend::LockFree
+                          ? manager_->try_push_lockfree_task(result.executor_name, std::move(task))
+                          : manager_->try_push_realtime_task(result.executor_name, std::move(task));
     if (!result.accepted) {
         result.decision.reason = RoutingReason::Rejected;
-        result.decision.detail = "lock-free executor rejected dispatch (stopped, full, or object pool exhausted)";
+        result.decision.detail = "bounded executor rejected dispatch (stopped, full, or object pool exhausted)";
         result.message = result.decision.detail;
         record_submit_rejected(result.executor_name, result.decision.task_name, result.message);
     }
     record_routing_decision(result.decision);
     return result;
+}
+
+std::vector<ExecutorCapability> Executor::get_executor_capabilities() const {
+    return manager_->get_executor_capabilities();
 }
 
 // 获取异步执行器状态

@@ -320,6 +320,14 @@ public:
     std::vector<std::string> get_blocking_io_worker_list() const;
 
     /**
+     * @brief Register and start a dedicated Blocking I/O worker in one facade call.
+     *
+     * The returned handle controls the worker lifecycle; it does not represent
+     * completion of a one-shot task or transfer worker ownership.
+     */
+    WorkerHandle start_worker(BlockingWorkerSpec spec);
+
+    /**
      * @brief 通过 facade 推送任务到指定实时执行器
      *
      * 失败会同时通过返回值、RealtimeExecutorStatus 计数和 facade failure event 可见。
@@ -359,6 +367,9 @@ public:
      * completion. `LowLatency` requires a running named lock-free executor.
      */
     DispatchResult dispatch_auto(TaskOptions options, std::function<void()> task);
+
+    /** @brief Enumerate advisory state snapshots for every registered backend. */
+    std::vector<ExecutorCapability> get_executor_capabilities() const;
 
     /**
      * @brief 获取异步执行器状态
@@ -438,7 +449,7 @@ public:
     std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
     /**
-     * @brief 等待所有已提交的异步任务完成
+     * @brief 等待默认异步后端已提交的 future 型任务完成
      *
      * 兼容旧调用方，最多等待 kDefaultWaitForCompletionTimeout。
      * 超时时不抛异常，但会记录 FailureKind::WaitTimeout。
@@ -446,7 +457,7 @@ public:
     void wait_for_completion();
 
     /**
-     * @brief 等待所有已提交的异步任务完成并返回是否完成
+     * @brief 等待默认异步后端已提交的 future 型任务完成并返回是否完成
      *
      * @param timeout 最长等待时间
      * @return true 表示所有任务在 timeout 内完成；false 表示等待超时。
@@ -456,14 +467,14 @@ public:
     bool try_wait_for_completion(std::chrono::milliseconds timeout);
 
     /**
-     * @brief 等待所有已提交的异步任务完成并返回是否完成
+     * @brief 等待默认异步后端已提交的 future 型任务完成并返回是否完成
      */
     template<typename Rep, typename Period>
     bool wait_for_completion_for(
         const std::chrono::duration<Rep, Period>& timeout);
 
     /**
-     * @brief 等待所有已提交的异步任务完成并返回诊断结果
+     * @brief 等待默认异步后端已提交的 future 型任务完成并返回诊断结果
      */
     WaitResult wait_for_completion_ex(std::chrono::milliseconds timeout);
 

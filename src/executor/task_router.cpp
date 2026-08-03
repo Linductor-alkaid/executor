@@ -115,27 +115,32 @@ RoutingDecision TaskRouter::route_dispatch(
         decision.detail = std::move(detail);
         return decision;
     };
-    if (options.intent != ExecutionIntent::LowLatency) {
+    if (options.intent != ExecutionIntent::LowLatency &&
+        options.intent != ExecutionIntent::RealtimeQueue) {
         return reject(RoutingReason::Rejected,
-                      "dispatch_auto only supports LowLatency; use the corresponding typed API");
+                      "dispatch_auto only supports LowLatency or RealtimeQueue");
     }
     if (!options.preferred_executor || options.preferred_executor->empty()) {
         return reject(RoutingReason::Rejected,
-                      "LowLatency dispatch requires preferred_executor");
+                      "bounded dispatch requires preferred_executor");
     }
     decision.selected_executor_name = *options.preferred_executor;
+    const ExecutionBackend backend = options.intent == ExecutionIntent::LowLatency
+                                         ? ExecutionBackend::LockFree
+                                         : ExecutionBackend::Realtime;
+    decision.selected_backend = backend;
     const auto* capability = find_capability(
-        capabilities, ExecutionBackend::LockFree, decision.selected_executor_name);
+        capabilities, backend, decision.selected_executor_name);
     if (!capability || !capability->registered) {
-        return reject(RoutingReason::BackendUnavailable, "requested lock-free executor is not registered");
+        return reject(RoutingReason::BackendUnavailable, "requested bounded executor is not registered");
     }
     if (!capability->running) {
-        return reject(RoutingReason::BackendNotRunning, "requested lock-free executor is not running");
+        return reject(RoutingReason::BackendNotRunning, "requested bounded executor is not running");
     }
     if (capability->capacity_hint != 0 && capability->pending_work >= capability->capacity_hint) {
-        return reject(RoutingReason::CapacityPressure, "requested lock-free executor is at capacity");
+        return reject(RoutingReason::CapacityPressure, "requested bounded executor is at capacity");
     }
-    return reject(RoutingReason::PreferredExecutor, "requested lock-free executor selected");
+    return reject(RoutingReason::PreferredExecutor, "requested bounded executor selected");
 }
 
 }  // namespace executor

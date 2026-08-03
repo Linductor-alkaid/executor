@@ -8,7 +8,7 @@
 namespace executor {
 
 /**
- * @brief Internal policy component for automatic future-based submission.
+ * @brief Internal policy component for automatic submission and dispatch.
  *
  * It only evaluates immutable task options and advisory capability snapshots;
  * the facade remains responsible for the actual backend submission.

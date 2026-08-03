@@ -303,6 +303,37 @@ IBlockingIoExecutor* ExecutorManager::get_blocking_io_executor(const std::string
     return it == blocking_io_executors_.end() ? nullptr : it->second.get();
 }
 
+void ExecutorManager::request_stop_blocking_io_executor(const std::string& name) noexcept {
+    try {
+        std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
+        const auto it = blocking_io_executors_.find(name);
+        if (it != blocking_io_executors_.end() && it->second) {
+            it->second->request_stop();
+        }
+    } catch (...) {
+    }
+}
+
+void ExecutorManager::stop_blocking_io_executor(const std::string& name) {
+    std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
+    const auto it = blocking_io_executors_.find(name);
+    if (it != blocking_io_executors_.end() && it->second) {
+        it->second->stop();
+    }
+}
+
+BlockingIoExecutorStatus ExecutorManager::get_blocking_io_executor_status(
+    const std::string& name) const {
+    std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
+    const auto it = blocking_io_executors_.find(name);
+    if (it != blocking_io_executors_.end() && it->second) {
+        return it->second->get_status();
+    }
+    BlockingIoExecutorStatus status;
+    status.name = name;
+    return status;
+}
+
 std::unique_ptr<IBlockingIoExecutor> ExecutorManager::create_blocking_io_executor(
     const std::string& name,
     const BlockingIoConfig& config,
@@ -517,6 +548,14 @@ std::vector<ExecutorCapability> ExecutorManager::get_executor_capabilities() con
         }
     }
     return capabilities;
+}
+
+bool ExecutorManager::try_push_realtime_task(const std::string& name,
+                                              std::function<void()> task) {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    const auto it = realtime_executors_.find(name);
+    return it != realtime_executors_.end() && it->second &&
+           it->second->push_task_ex(std::move(task));
 }
 
 void ExecutorManager::enable_monitoring(bool enable) {

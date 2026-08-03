@@ -96,18 +96,18 @@
 
 ### 任务
 
-- [ ] 为 Blocking I/O 设计并实现 `BlockingWorkerSpec`、`WorkerHandle` 与 `start_worker()` facade：封装注册、启动、状态查询和停止。
-- [ ] `WorkerHandle` 保留 `IBlockingIoWorker::wakeup()`、`stop_token`、启动超时和退出原因的既有契约。
-- [ ] 评估并按需添加 `RealtimeHandle`；它只统一生命周期和状态，不承诺与 worker 相同的完成语义。
-- [ ] 扩展统一状态/能力查询，使用户能从一个 facade API 枚举所有已注册后端及其运行状态。
-- [ ] 为未来 `dispatch_auto(... RealtimeQueue ...)` 预留 typed 路由入口：只选择用户指定且已启动的实时后端，绝不按 deadline、priority 或压力自动推断。
-- [ ] 明确 `wait_for_completion()` 仅表示 future 型异步工作完成，不表示实时周期或长期 worker 已退出。
+- [x] 为 Blocking I/O 设计并实现 `BlockingWorkerSpec`、`WorkerHandle` 与 `start_worker()` facade：封装注册、启动、状态查询和停止。
+- [x] `WorkerHandle` 保留 `IBlockingIoWorker::wakeup()`、`stop_token`、启动超时和退出原因的既有契约。
+- [x] 评估并按需添加 `RealtimeHandle`；现有实时 API 已覆盖生命周期和状态，避免引入伪造 worker/future 完成模型的 handle。
+- [x] 扩展统一状态/能力查询，使用户能从一个 facade API 枚举所有已注册后端及其运行状态。
+- [x] 为未来 `dispatch_auto(... RealtimeQueue ...)` 预留 typed 路由入口：只选择用户指定且已启动的实时后端，绝不按 deadline、priority 或压力自动推断。
+- [x] 明确 `wait_for_completion()` 仅表示 future 型异步工作完成，不表示实时周期或长期 worker 已退出。
 
 ### 验收
 
-- [ ] Blocking worker 的 wakeup、停止、启动失败和超时语义与当前实现一致。
-- [ ] 实时队列仍明确暴露有界背压/drop，未启动时不静默转投线程池。
-- [ ] 用户可发现全部后端状态，同时不会误解统一 facade 为同一种完成模型。
+- [x] Blocking worker 的 wakeup、停止、启动失败和超时语义与当前实现一致。
+- [x] 实时队列仍明确暴露有界背压/drop，未启动时不静默转投线程池。
+- [x] 用户可发现全部后端状态，同时不会误解统一 facade 为同一种完成模型。
 
 ## 阶段 5：测试、文档与发布
 

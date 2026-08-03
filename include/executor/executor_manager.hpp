@@ -135,6 +135,10 @@ public:
 
     IBlockingIoExecutor* get_blocking_io_executor(const std::string& name);
 
+    void request_stop_blocking_io_executor(const std::string& name) noexcept;
+    void stop_blocking_io_executor(const std::string& name);
+    BlockingIoExecutorStatus get_blocking_io_executor_status(const std::string& name) const;
+
     std::unique_ptr<IBlockingIoExecutor> create_blocking_io_executor(
         const std::string& name,
         const BlockingIoConfig& config,
@@ -193,6 +197,8 @@ public:
      * concurrent shutdown and capacity changes in the concrete backend.
      */
     std::vector<ExecutorCapability> get_executor_capabilities() const;
+
+    bool try_push_realtime_task(const std::string& name, std::function<void()> task);
 
     /**
      * @brief 关闭所有执行器
