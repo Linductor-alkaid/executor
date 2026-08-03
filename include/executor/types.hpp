@@ -401,6 +401,7 @@ struct GpuExecutorStatus {
     size_t completed_kernels = 0;                 // 已完成kernel数
     size_t failed_kernels = 0;                    // 失败kernel数
     size_t queue_size = 0;                        // 任务队列大小
+    size_t queue_capacity = 0;                    // 队列硬容量，0表示未知/不适用
     double avg_kernel_time_ms = 0.0;              // 平均kernel执行时间（毫秒）
     size_t memory_used_bytes = 0;                  // 已使用内存（字节）
     size_t memory_total_bytes = 0;                 // 总内存（字节）

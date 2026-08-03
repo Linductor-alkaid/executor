@@ -1322,6 +1322,7 @@ GpuExecutorStatus CudaExecutor::get_status() const {
     status.active_kernels = active_kernels_.load();
     status.completed_kernels = completed_kernels_.load();
     status.failed_kernels = failed_kernels_.load();
+    status.queue_capacity = config_.max_queue_size;
     status.last_error_message = get_last_error();
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);

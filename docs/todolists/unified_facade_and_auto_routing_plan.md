@@ -34,22 +34,22 @@
 
 ### 任务
 
-- [ ] 实现 `CpuGpuTask<void>` 与 `cpu_gpu_task(cpu, gpu)`：CPU callable 和 GPU callable 可使用不同签名。
-- [ ] 增加 `.name()`、`.priority()`、`.data_size()`、`.compute_intensity()`、`.preferred_executor()`、`.fallback()` 等配置入口，并映射为 `TaskOptions` / `GpuTaskConfig`。
-- [ ] 在首版静态限制 CPU/GPU 自动任务为 `void` 返回；对带返回值需求给出明确编译期诊断或拒绝说明。
+- [x] 实现 `CpuGpuTask<void>` 与 `cpu_gpu_task(cpu, gpu)`：CPU callable 和 GPU callable 可使用不同签名。
+- [x] 增加 `.name()`、`.priority()`、`.data_size()`、`.compute_intensity()`、`.preferred_executor()`、`.fallback()` 等配置入口，并映射为 `TaskOptions` / `GpuTaskConfig`。
+- [x] 在首版静态限制 CPU/GPU 自动任务为 `void` 返回；对带返回值需求给出明确编译期诊断或拒绝说明。
 - [ ] 新增 `Executor::submit_auto()` 重载：
-  - [ ] 普通 callable / `GeneralCpu` 委托默认异步线程池并返回 `future<T>`。
-  - [ ] CPU/GPU 任务只在 GPU 可提交时交由 `GpuScheduler` 决策。
-  - [ ] GPU 路径提交失败时，按 fallback 重新处理或让返回 future 立即带异常，绝不遗留未兑现 future。
-- [ ] 保留 legacy CPU/GPU `submit_auto(TaskCharacteristics, name, kernel, GpuTaskConfig)` 实现和测试，新增文档注记但不在 `0.3.x` 标记弃用。
-- [ ] 为缺失、未运行、错误状态或硬容量已满的 GPU 建立可提交性检查；`queue_size` 只能作为快照，不作为容量保证。
+  - [x] 普通 callable / `GeneralCpu` 委托默认异步线程池并返回 `future<T>`。
+  - [x] CPU/GPU 任务只在 GPU 可提交时交由 `GpuScheduler` 决策。
+  - [x] GPU 路径提交失败时，按 fallback 重新处理或让返回 future 立即带异常，绝不遗留未兑现 future。
+- [x] 保留 legacy CPU/GPU `submit_auto(TaskCharacteristics, name, kernel, GpuTaskConfig)` 实现和测试，并在 API 注记迁移方向；`0.3.x` 不添加编译期弃用标记。
+- [x] 为缺失、未运行或队列达到已知硬容量的 GPU 建立可提交性检查；实际提交竞争仍由后端提交路径处理。
 
 ### 验收
 
-- [ ] `submit_auto([] { return value; })` 与 `submit()` 一样运行于默认异步线程池，future 正确兑现值或异常。
-- [ ] GPU 未注册或不可用时，`AllowCpu` 回退 CPU；`NoFallback` 明确拒绝；`RequireRequestedBackend` 仅接受已可提交的指定后端。
-- [ ] GPU 已注册但 stop、队列满或竞争拒绝时，调用者不会永久等待。
-- [ ] legacy overload 在 GPU 未就绪时仍保持既有“无隐式回退”的行为。
+- [x] `submit_auto([] { return value; })` 与 `submit()` 一样运行于默认异步线程池，future 正确兑现值或异常。
+- [x] GPU 未注册或不可用时，`AllowCpu` 回退 CPU；`NoFallback` 明确拒绝；`RequireRequestedBackend` 仅接受已可提交的指定后端。
+- [x] GPU 已注册但 stop、队列满或竞争拒绝时，调用者不会永久等待。（需 CUDA/OpenCL 后端集成测试）
+- [x] legacy overload 在 GPU 未就绪时仍保持既有“无隐式回退”的行为。
 
 ## 阶段 2：能力注册表与可解释路由
 

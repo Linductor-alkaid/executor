@@ -68,6 +68,40 @@ bool test_public_enums_are_available_from_facade_header() {
     return true;
 }
 
+bool test_cpu_gpu_task_builder_preserves_both_paths() {
+    bool cpu_called = false;
+    bool gpu_called = false;
+    auto configured = cpu_gpu_task(
+                          [&cpu_called] { cpu_called = true; },
+                          [&gpu_called](void*) { gpu_called = true; })
+                          .name("segment")
+                          .priority(TaskPriority::CRITICAL)
+                          .preferred_executor("cuda0")
+                          .fallback(FallbackPolicy::AllowCpu)
+                          .data_size(2 * 1024 * 1024)
+                          .compute_intensity(3.0F)
+                          .prefer_gpu();
+
+    TEST_ASSERT(configured.options().intent == ExecutionIntent::CpuOrGpu,
+                "CPU/GPU task should always declare CpuOrGpu intent");
+    TEST_ASSERT(configured.options().priority == TaskPriority::CRITICAL,
+                "CPU/GPU task should retain task priority");
+    TEST_ASSERT(configured.gpu_config().priority == 3,
+                "CPU/GPU task should map priority to GPU config");
+    TEST_ASSERT(configured.characteristics().data_size_bytes == 2 * 1024 * 1024,
+                "CPU/GPU task should retain data size");
+    TEST_ASSERT(configured.characteristics().compute_intensity == 3.0F,
+                "CPU/GPU task should retain compute intensity");
+    TEST_ASSERT(configured.characteristics().prefer_gpu,
+                "CPU/GPU task should retain GPU preference");
+
+    configured.take_cpu()();
+    configured.take_gpu()(nullptr);
+    TEST_ASSERT(cpu_called, "CPU path should remain independently callable");
+    TEST_ASSERT(gpu_called, "GPU path should remain independently callable");
+    return true;
+}
+
 }  // namespace
 
 int main() {
@@ -75,6 +109,7 @@ int main() {
     passed &= test_task_options_defaults();
     passed &= test_task_builder_preserves_callable_and_options();
     passed &= test_public_enums_are_available_from_facade_header();
+    passed &= test_cpu_gpu_task_builder_preserves_both_paths();
 
     if (!passed) {
         return 1;

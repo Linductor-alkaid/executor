@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hpp"
+#include "gpu/gpu_scheduler.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -148,6 +149,89 @@ private:
 template <typename Function>
 auto task(Function&& function) -> TaskBuilder<std::decay_t<Function>> {
     return TaskBuilder<std::decay_t<Function>>(std::forward<Function>(function));
+}
+
+/**
+ * @brief CPU/GPU 自动路由任务的双路径 callable。
+ *
+ * CPU 与 GPU 路径彼此独立：CPU callable 不接收 stream，GPU callable 可接收
+ * `void* stream` 或不接收参数。首版仅支持 `void` 返回，以避免混淆设备同步与
+ * GPU callback 的返回值语义。
+ */
+template <typename CpuFunction, typename GpuFunction>
+class CpuGpuTask {
+public:
+    CpuGpuTask(CpuFunction cpu, GpuFunction gpu)
+        : cpu_(std::move(cpu)), gpu_(std::move(gpu)) {
+        options_.intent = ExecutionIntent::CpuOrGpu;
+    }
+
+    CpuGpuTask& name(std::string value) {
+        options_.name = std::move(value);
+        return *this;
+    }
+
+    CpuGpuTask& priority(TaskPriority value) noexcept {
+        options_.priority = value;
+        gpu_config_.priority = static_cast<int>(value);
+        return *this;
+    }
+
+    CpuGpuTask& preferred_executor(std::string value) {
+        options_.preferred_executor = std::move(value);
+        return *this;
+    }
+
+    CpuGpuTask& fallback(FallbackPolicy value) noexcept {
+        options_.fallback = value;
+        return *this;
+    }
+
+    CpuGpuTask& deadline(std::chrono::steady_clock::time_point value) noexcept {
+        options_.deadline = value;
+        return *this;
+    }
+
+    CpuGpuTask& data_size(size_t value) noexcept {
+        characteristics_.data_size_bytes = value;
+        return *this;
+    }
+
+    CpuGpuTask& compute_intensity(float value) noexcept {
+        characteristics_.compute_intensity = value;
+        return *this;
+    }
+
+    CpuGpuTask& prefer_gpu(bool value = true) noexcept {
+        characteristics_.prefer_gpu = value;
+        return *this;
+    }
+
+    CpuGpuTask& gpu_config(gpu::GpuTaskConfig value) noexcept {
+        gpu_config_ = std::move(value);
+        return *this;
+    }
+
+    const TaskOptions& options() const noexcept { return options_; }
+    const gpu::TaskCharacteristics& characteristics() const noexcept { return characteristics_; }
+    const gpu::GpuTaskConfig& gpu_config() const noexcept { return gpu_config_; }
+
+    CpuFunction&& take_cpu() noexcept { return std::move(cpu_); }
+    GpuFunction&& take_gpu() noexcept { return std::move(gpu_); }
+
+private:
+    CpuFunction cpu_;
+    GpuFunction gpu_;
+    TaskOptions options_;
+    gpu::TaskCharacteristics characteristics_;
+    gpu::GpuTaskConfig gpu_config_;
+};
+
+template <typename CpuFunction, typename GpuFunction>
+auto cpu_gpu_task(CpuFunction&& cpu, GpuFunction&& gpu)
+    -> CpuGpuTask<std::decay_t<CpuFunction>, std::decay_t<GpuFunction>> {
+    using CpuGpuTaskType = CpuGpuTask<std::decay_t<CpuFunction>, std::decay_t<GpuFunction>>;
+    return CpuGpuTaskType(std::forward<CpuFunction>(cpu), std::forward<GpuFunction>(gpu));
 }
 
 }  // namespace executor

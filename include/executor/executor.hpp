@@ -18,6 +18,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <concepts>
 #include <type_traits>
 #include <tuple>
 #include <map>
@@ -518,10 +519,14 @@ public:
     std::map<std::string, gpu::GpuExecutorStatus> get_all_gpu_executor_status() const;
 
     /**
-     * @brief 自动选择 CPU/GPU 执行器提交任务
+     * @brief 自动选择 CPU/GPU 执行器提交任务（legacy overload）
      *
      * 根据任务特征自动选择 CPU 或 GPU 执行器。
      * 如果选择 GPU，调用 submit_gpu()；如果选择 CPU，在 CPU 线程池执行。
+     *
+     * @deprecated 迁移期内保持现有语义：CPU 路径会以 nullptr stream 调用
+     * kernel，GPU 不可用时不会隐式回退。新代码应使用 cpu_gpu_task()，由两条
+     * 明确 callable 表达 CPU 与 GPU 路径。
      *
      * @tparam KernelFunc GPU kernel 函数类型
      * @param characteristics 任务特征（数据大小、计算强度等）
@@ -537,6 +542,31 @@ public:
         KernelFunc&& kernel,
         const gpu::GpuTaskConfig& gpu_config)
         -> std::future<void>;
+
+    /**
+     * @brief 提交一般 CPU 任务到自动路由入口。
+     *
+     * 首版 `Auto` 只选择默认异步线程池；此 overload 与 `submit()` 保持相同的
+     * future 完成语义，为后续路由诊断提供稳定入口。
+     */
+    template<typename F, typename... Args>
+    auto submit_auto(F&& f, Args&&... args)
+        -> std::future<typename std::invoke_result<F, Args...>::type>;
+
+    /**
+     * @brief 提交带任务意图的普通 callable。
+     *
+     * 阶段一仅接受 `Auto` 或 `GeneralCpu`，其他意图必须使用对应 typed API。
+     */
+    template<typename Function>
+    auto submit_auto(TaskBuilder<Function> task)
+        -> std::future<typename std::invoke_result<Function&>::type>;
+
+    /**
+     * @brief 提交 CPU/GPU 双路径任务。
+     */
+    template<typename CpuFunction, typename GpuFunction>
+    std::future<void> submit_auto(CpuGpuTask<CpuFunction, GpuFunction> task);
 
     /**
      * @brief 更新调度器配置
@@ -1349,6 +1379,97 @@ auto Executor::submit_auto(
         return submit([kernel = std::forward<KernelFunc>(kernel)]() mutable {
             kernel(nullptr);
         });
+    }
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_auto(F&& f, Args&&... args)
+    -> std::future<typename std::invoke_result<F, Args...>::type> {
+    return submit(std::forward<F>(f), std::forward<Args>(args)...);
+}
+
+template<typename Function>
+auto Executor::submit_auto(TaskBuilder<Function> task)
+    -> std::future<typename std::invoke_result<Function&>::type> {
+    const auto& options = task.options();
+    if (options.intent != ExecutionIntent::Auto &&
+        options.intent != ExecutionIntent::GeneralCpu) {
+        const std::string message =
+            "submit_auto: task intent requires a typed submission API";
+        record_submit_rejected("default", options.name, message);
+        std::promise<typename std::invoke_result<Function&>::type> promise;
+        promise.set_exception(std::make_exception_ptr(std::runtime_error(message)));
+        return promise.get_future();
+    }
+    return submit_priority(static_cast<int>(options.priority), std::move(task).function());
+}
+
+template<typename CpuFunction, typename GpuFunction>
+std::future<void> Executor::submit_auto(CpuGpuTask<CpuFunction, GpuFunction> task) {
+    static_assert(requires(CpuFunction& cpu) {
+                      { cpu() } -> std::same_as<void>;
+                  },
+                  "CpuGpuTask CPU callable must be invocable with no arguments and return void");
+    static_assert(requires(GpuFunction& gpu) {
+                      { gpu(static_cast<void*>(nullptr)) } -> std::same_as<void>;
+                  } || requires(GpuFunction& gpu) {
+                      { gpu() } -> std::same_as<void>;
+                  },
+                  "CpuGpuTask GPU callable must be invocable with void* stream or no arguments and return void");
+
+    const auto& options = task.options();
+    const auto task_name = options.name.empty() ? "facade_submit_auto" : options.name;
+    const auto gpu_names = get_gpu_executor_names();
+    const std::string gpu_name = options.preferred_executor
+                                     ? *options.preferred_executor
+                                     : (gpu_names.size() == 1 ? gpu_names.front() : std::string{});
+    auto* gpu_executor = gpu_name.empty() ? nullptr : get_gpu_executor(gpu_name);
+    const auto gpu_status = gpu_executor ? gpu_executor->get_status() : gpu::GpuExecutorStatus{};
+    const bool gpu_capacity_available = gpu_status.queue_capacity == 0 ||
+                                        gpu_status.queue_size < gpu_status.queue_capacity;
+    const bool gpu_running = gpu_executor && gpu_status.is_running && gpu_capacity_available;
+
+    const auto reject = [this, &task_name, &gpu_name](const std::string& message) {
+        record_submit_rejected(gpu_name.empty() ? "gpu" : gpu_name, task_name, message);
+        std::promise<void> promise;
+        promise.set_exception(std::make_exception_ptr(std::runtime_error(message)));
+        return promise.get_future();
+    };
+
+    if (options.fallback == FallbackPolicy::RequireRequestedBackend) {
+        if (!options.preferred_executor) {
+            return reject("submit_auto: RequireRequestedBackend requires preferred_executor");
+        }
+        if (!gpu_running) {
+            return reject("submit_auto: requested GPU executor is unavailable, stopped, or at capacity");
+        }
+        try {
+            auto gpu_config = task.gpu_config();
+            return submit_gpu(gpu_name, std::move(task).take_gpu(), gpu_config);
+        } catch (const std::exception& error) {
+            return reject(std::string("submit_auto: GPU submission rejected: ") + error.what());
+        }
+    }
+
+    if (!gpu_running) {
+        if (options.fallback == FallbackPolicy::AllowCpu) {
+            return submit(std::move(task).take_cpu());
+        }
+        return reject("submit_auto: no GPU executor is available for CpuOrGpu task");
+    }
+
+    if (scheduler_.decide(task.characteristics()) == gpu::ExecutorChoice::CPU) {
+        return submit(std::move(task).take_cpu());
+    }
+
+    try {
+        auto gpu_config = task.gpu_config();
+        return submit_gpu(gpu_name, std::move(task).take_gpu(), gpu_config);
+    } catch (const std::exception& error) {
+        if (options.fallback == FallbackPolicy::AllowCpu) {
+            return submit(std::move(task).take_cpu());
+        }
+        return reject(std::string("submit_auto: GPU submission rejected: ") + error.what());
     }
 }
 
