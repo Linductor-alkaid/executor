@@ -11,6 +11,8 @@ Understand how `cpu_gpu_task()` plus `submit_auto()` chooses a CPU or GPU path f
 
 If you have only an ordinary CPU lambda, return to [Execution Models and Routing Boundaries](/en/guides/execution-models-and-routing): default `Auto` does not implicitly move it to GPU.
 
+For how `.preferred_executor("cuda0")` constrains GPU candidates, why an unnamed task needs exactly one GPU, and when fallback applies, read [how automatic routing matches a target](/en/guides/execution-models-and-routing).
+
 ## Recommended path: independent CPU and GPU callables
 
 New code gives CPU and GPU separate callables instead of asking one callable to infer its environment from a null stream:

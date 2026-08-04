@@ -21,6 +21,8 @@ description: 先区分完成、接收和生命周期结果，再按业务约束�
 
 `submit_auto(lambda)` 是普通开发者的默认入口。它当前安全地选择默认异步线程池，不会因为 priority、deadline 或压力自动转投 GPU、无锁或实时后端。
 
+不确定名称、intent、fallback 与 capability snapshot 如何共同决定目标时，先读[自动路由如何匹配目标](/zh/guides/execution-models-and-routing)，再继续按场景选型。
+
 ## 先按结果模型分流
 
 ```mermaid

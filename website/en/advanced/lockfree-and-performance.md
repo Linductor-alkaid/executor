@@ -23,6 +23,8 @@ if (!admission.accepted) {
 }
 ```
 
+`LowLatency` and `preferred_executor` must match the named, started lock-free executor; the call never finds another available queue or falls back to the pool. See [how automatic routing matches a target](/en/guides/execution-models-and-routing).
+
 ## Current internal structure and “lock-free” scope
 
 `LockFreeQueue` provides bounded enqueue/dequeue. `ObjectPool` preallocates task wrappers to avoid hot-path allocation, but uses a mutex for free-list correctness against ABA, foreign pointers, and double release. Exception handler access also uses a mutex. The queue is lock-free; the whole executor is not a lock-free progress guarantee.

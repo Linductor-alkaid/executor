@@ -17,6 +17,8 @@ description: 使用 submit_auto 和 future.get 执行任务、获取返回值、
 
 使用 `submit_auto()`。普通 lambda 的默认意图是 `Auto`，当前只选择默认异步线程池；它返回 `std::future`：任务成功时 `get()` 返回值，任务抛出异常时 `get()` 在调用方线程重新抛出异常。首次提交会使用默认配置完成懒初始化。
 
+这不是“从所有执行器中自动选最快一个”：普通 lambda 不会改投 GPU、无锁或实时执行器。需要知道 `submit_auto`、`dispatch_auto` 和 `start_worker` 如何按 intent 与名称精确匹配目标时，阅读[自动路由如何匹配目标](/zh/guides/execution-models-and-routing)。
+
 <<< @/../examples/tutorial/01_first_task.cpp{4,7-16,18-24,26}
 
 完整源码：[`examples/tutorial/01_first_task.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/tutorial/01_first_task.cpp)。

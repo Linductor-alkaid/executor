@@ -21,6 +21,8 @@ Do not start with an executor class name. First ask what the caller must confirm
 
 `submit_auto(lambda)` is the ordinary developer's default entry. It safely uses the default asynchronous pool; it does not infer that pressure, a deadline, or priority should select GPU, lock-free, or real-time work.
 
+Before choosing by scenario, read [how automatic routing matches a target](/en/guides/execution-models-and-routing) if names, intents, fallback, and capability snapshots are still unclear.
+
 Complex policies should express correctness first. For “after two successful prerequisites, then urgent work,” build the dependency, then decide whether priority is actually needed; queue order is not a dependency mechanism.
 
 ```mermaid

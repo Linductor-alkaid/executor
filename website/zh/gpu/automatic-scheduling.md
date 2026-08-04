@@ -11,6 +11,8 @@ description: 用 cpu_gpu_task 表达独立路径、配置回退，并理解 lega
 
 如果你只有普通 CPU lambda，请返回[执行模型与路由边界](/zh/guides/execution-models-and-routing)：默认 `Auto` 不会隐式把它改投 GPU。
 
+要确认 `.preferred_executor("cuda0")` 如何限制 GPU 候选、未填写名称时为什么只能有一个 GPU，以及 fallback 何时生效，请阅读[自动路由如何匹配目标](/zh/guides/execution-models-and-routing)。
+
 ## 推荐路径：独立 CPU/GPU callable
 
 新代码为 CPU 与 GPU 路径提供独立 callable，不再用 `nullptr` stream 在一个 callable 中猜测执行环境：

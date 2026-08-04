@@ -51,6 +51,8 @@ auto admission = executor.dispatch_auto(options, [] { apply_control(); });
 
 `admission.accepted` has the same meaning as `try_push_realtime_task()` returning `true`: queue admission only. A stopped backend, full queue, exhausted object pool, or shutdown race rejects; none falls back to the default pool.
 
+`RealtimeQueue` and `preferred_executor` are both required; they match only the named, started realtime backend. See [how automatic routing matches a target](/en/guides/execution-models-and-routing) for every check and rejection branch.
+
 ## Bind inputs before the real-time path
 
 Both paths accept parameterless, resultless `void()` callables:

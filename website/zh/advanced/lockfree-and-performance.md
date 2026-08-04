@@ -25,6 +25,8 @@ if (!admission.accepted) {
 }
 ```
 
+`LowLatency` 与 `preferred_executor` 必须同时匹配同名、已启动的无锁执行器；它不会查找其他可用队列，也不会回退线程池。完整规则见[自动路由如何匹配目标](/zh/guides/execution-models-and-routing)。
+
 直接操作执行器仍适合需要精细生命周期或 benchmark 控制的场景：
 
 ```cpp

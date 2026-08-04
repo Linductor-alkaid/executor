@@ -55,6 +55,8 @@ auto admission = executor.dispatch_auto(options, [] { apply_control(); });
 
 `admission.accepted` 与 `try_push_realtime_task()` 的 `true` 含义相同：仅表示队列接收。未启动、队列满、对象池耗尽或关闭竞争会拒绝，绝不改投默认线程池。
 
+`RealtimeQueue` 必须和 `preferred_executor` 同时填写；它只匹配同名、已启动的实时后端。完整的检查和拒绝分支见[自动路由如何匹配目标](/zh/guides/execution-models-and-routing)。
+
 ## 实时线程如何接收函数与输入
 
 实时路径有两个不同入口，二者都只接收无参数、无返回值的 `void()` callable：

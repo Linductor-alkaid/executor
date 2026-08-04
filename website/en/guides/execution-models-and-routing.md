@@ -34,6 +34,128 @@ const auto decision = executor.get_last_routing_decision();
 
 `RoutingDecision` explains what was selected and why from declared intent and a capability snapshot. It is neither a reservation nor a replacement for a future, `DispatchResult`, or status counter.
 
+## Routing does not guess: entry point first, fields second
+
+“Auto” does not inspect a lambda, find the fastest machine, or choose arbitrarily among registered executors. Routing uses the **entry point** and only the `TaskOptions` fields you explicitly declare:
+
+| Call form | Looks up a specialist executor? | Routing inputs | How the target is determined | What never happens |
+| --- | --- | --- | --- | --- |
+| `submit_auto(lambda)` | No | None; equivalent to `intent = Auto` | Always the default async executor | GPU, deadline, priority, or load never moves it elsewhere |
+| `submit_auto(task(lambda).intent(GeneralCpu))` | No | `GeneralCpu`, optional name/priority | Always the default async executor | `preferred_executor` cannot send an ordinary callable to GPU, realtime, or lock-free |
+| `submit_auto(cpu_gpu_task(cpu, gpu))` | Yes, GPU only | Dual CPU/GPU paths, GPU name, characteristics, fallback | Explicit GPU name; without one, a candidate exists only when **exactly one** GPU is registered | An ordinary lambda is not treated as GPU work; multiple GPUs are not chosen arbitrarily |
+| `dispatch_auto(options, task)` | Yes, bounded backend only | `LowLatency`/`RealtimeQueue` plus `preferred_executor` | Backend category and name must both match exactly | It never scans for any available queue or falls back to the default pool |
+| `start_worker(spec)` | No | Worker-spec name, configuration, implementation | Creates and starts that worker | It is not task routing or one-shot completion |
+
+So a target named `control` is not sufficient by itself: use `dispatch_auto()` and declare `RealtimeQueue`. Conversely, adding a name or priority to `submit_auto(lambda)` never moves it to `control`.
+
+## Matching each call step by step
+
+### 1. Ordinary `submit_auto`: no target selection
+
+```cpp
+auto future = executor.submit_auto([frame] { return decode(frame); });
+```
+
+It records a `RoutingDecision` for `default` with `DefaultPolicy`, then uses the ordinary future path. To name a task or set default-pool priority, use the builder; only `Auto` and `GeneralCpu` are accepted:
+
+```cpp
+auto future = executor.submit_auto(
+    executor::task([frame] { return decode(frame); })
+        .name("decode-frame")
+        .priority(executor::TaskPriority::HIGH)
+        .intent(executor::ExecutionIntent::GeneralCpu));
+```
+
+Changing that intent to `LowLatency`, `RealtimeQueue`, or `BlockingWorker` makes the future ready with an exception. Those protocols need the typed APIs below, rather than guessing from an ordinary callable.
+
+### 2. CPU/GPU `submit_auto`: GPU name, candidate checks, then policy
+
+First provide independent implementations, then declare the GPU target and acceptable fallback:
+
+```cpp
+auto work = executor::cpu_gpu_task(
+    [input] { run_cpu(input); },
+    [input](void* stream) { run_gpu(input, stream); })
+    .name("segmentation")
+    .preferred_executor("cuda0")
+    .data_size(input.bytes())
+    .compute_intensity(3.5F)
+    .fallback(executor::FallbackPolicy::AllowCpu);
+
+auto future = executor.submit_auto(std::move(work));
+```
+
+Matching proceeds as follows:
+
+1. With `preferred_executor("cuda0")`, only the GPU named `cuda0` is queried. A missing, unregistered, stopped, GPU-incapable, or known-full target never changes to another GPU.
+2. Without a name, a candidate exists only when the registry has **exactly one** GPU; zero or multiple GPUs cannot be resolved automatically.
+3. For a submit-capable candidate, `prefer_gpu(true)` chooses GPU first; otherwise adaptive history (at least two comparable samples per side), then data-size and compute-intensity thresholds decide CPU or GPU.
+4. `RequireRequestedBackend` skips these heuristics and requires the named GPU to be submit-capable; a missing name rejects.
+5. `AllowCpu` uses default CPU when GPU is unavailable, stopped, known-full, or rejects the actual submission, recording `fell_back = true`. `NoFallback` makes the future ready with an exception.
+
+`preferred_executor` pins a candidate name; it does not guarantee that a task will run on GPU. Stop and capacity may still race real submission, so inspect both the future and routing decision.
+
+### 3. `dispatch_auto`: intent and name must both match
+
+Register and start the target, then provide complete `TaskOptions`:
+
+```cpp
+TaskOptions options;
+options.name = "publish-telemetry";
+options.intent = ExecutionIntent::LowLatency;
+options.preferred_executor = "telemetry";
+
+const auto result = executor.dispatch_auto(options, [] { publish(); });
+```
+
+The router performs an exact lookup:
+
+| Intent | Backend category | Required target name | Pre-dispatch snapshot checks |
+| --- | --- | --- | --- |
+| `LowLatency` | `LockFree` | A started lock-free executor | Registered, running, and below known capacity hint |
+| `RealtimeQueue` | `Realtime` | A started realtime executor | Registered, running, and below known capacity hint |
+
+Missing names, wrong categories, unregistered/stopped targets, or a full snapshot return `accepted == false` with the reason in `result.decision.reason` / `detail`. Passing snapshot checks still performs a real enqueue; a stop, full queue, or exhausted object pool in that interval also returns `accepted == false` with `Rejected`. Neither case tries another same-kind executor or the default pool.
+
+### 4. `start_worker`: the name identifies lifecycle, not routing
+
+```cpp
+BlockingWorkerSpec spec{"serial-rx", config, std::move(worker)};
+auto handle = executor.start_worker(std::move(spec));
+```
+
+`serial-rx` identifies registration, status, and stop/wake/join lifecycle. It is not a candidate for `submit_auto()` or `dispatch_auto()`. `WorkerHandle::started()` reports startup only, not device, protocol, or first-input readiness.
+
+## Discover before submitting
+
+The control plane can show currently nameable backends through a capability snapshot:
+
+```cpp
+for (const auto& capability : executor.get_executor_capabilities()) {
+    std::cout << capability.name << " running=" << capability.running
+              << " pending=" << capability.pending_work << '\n';
+}
+```
+
+Use `backend`, `name`, `registered`, `running`, `supports_future_submission`, `supports_bounded_dispatch`, `supports_gpu_kernel`, `pending_work`, and `capacity_hint` for diagnostics or a configuration UI. The snapshot is not a reservation: a submission must still handle rejection after it reports availability.
+
+## Read one routing decision
+
+After submission or dispatch, inspect `RoutingDecision`:
+
+```cpp
+if (const auto decision = executor.get_last_routing_decision()) {
+    log(decision->selected_executor_name, decision->detail);
+}
+```
+
+- `selected_backend` / `selected_executor_name`: backend and name the router attempted;
+- `reason`: default policy, explicit intent, preferred name, GPU heuristic/history, unavailable/stopped/capacity pressure, fallback, or rejection;
+- `fell_back`: true only when `AllowCpu` actually used CPU; it is not a user-task failure;
+- `detail`: diagnostic matching reason.
+
+The routing decision explains why a path was attempted. A future, `DispatchResult`, and `WorkerHandle` respectively report the actual completion, admission, and lifecycle outcome.
+
 ## When to route GPU work
 
 GPU is not implicit acceleration for an ordinary lambda. Use it only when the business operation has independent CPU and GPU implementations:
