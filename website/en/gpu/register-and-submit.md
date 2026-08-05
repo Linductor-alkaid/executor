@@ -67,7 +67,7 @@ The `void*` form accesses a backend stream; the no-argument form needs no explic
 
 `GpuExecutorConfig` requires a nonempty name, valid backend, nonnegative device ID, positive queue capacity and stream count. `GpuTaskConfig` carries grid/block, shared memory, stream, async, and priority. A nondefault stream must come from this executor's `create_stream()` and remain undestroyed.
 
-Stay with the Facade for registration/submission/status. For device memory, stream lifetime, unified memory, or P2P, use `get_gpu_executor()` only with its added resource-lifecycle responsibility.
+Stay with the Facade for registration/submission/status. For device memory, stream lifetime, unified memory, or P2P, use `get_gpu_executor()` only with its added resource-lifecycle responsibility. It returns a non-owning pointer and cannot be retained across or used concurrently with `shutdown()`.
 
 Registered does not mean faster. Any conclusion records model, driver, backend, data size, kernel, build type, measurement, and CPU comparison. See [`gpu_basic.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/gpu_basic.cpp), [`gpu_multi_device.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/gpu_multi_device.cpp), and [`gpu_opencl.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/gpu_opencl.cpp).
 

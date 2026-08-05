@@ -223,8 +223,8 @@ ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
 // 关闭执行器
 ShutdownResult Executor::shutdown(bool wait_for_tasks) {
     stop_timer_thread();
-    if (manager_->has_default_async_executor() &&
-        manager_->get_default_async_executor()->is_current_worker_thread()) {
+    const auto async_executor = manager_->get_default_async_executor_snapshot();
+    if (async_executor && async_executor->is_current_worker_thread()) {
         return manager_->shutdown(wait_for_tasks);
     }
     if (wait_for_tasks && manager_->has_default_async_executor()) {
@@ -453,7 +453,7 @@ std::string Executor::submit_periodic(int64_t period_ms, std::function<void()> t
         throw std::invalid_argument("task must not be null");
     }
 
-    auto* executor = manager_->get_default_async_executor();
+    auto executor = manager_->get_default_async_executor_snapshot();
     const std::string executor_name = executor ? executor->get_name() : "default";
     if (!executor) {
         record_submit_rejected(
@@ -555,17 +555,6 @@ ExecutorResult Executor::register_realtime_task_ex(
         return validation;
     }
 
-    if (manager_->get_realtime_executor(name) || manager_->get_lockfree_executor(name) ||
-        manager_->get_blocking_io_executor(name) ||
-        manager_->get_gpu_executor(name)) {
-        auto result = make_failure(
-            ExecutorErrorCode::DuplicateName,
-            "Executor '" + name + "' is already registered");
-        record_result_failure(
-            result, FailureKind::SubmitRejected, name, "facade_register_realtime_task");
-        return result;
-    }
-
     auto executor = manager_->create_realtime_executor(name, config);
     if (!executor) {
         auto result = make_failure(
@@ -603,7 +592,7 @@ ExecutorResult Executor::start_realtime_task_ex(const std::string& name) {
         return result;
     }
 
-    auto* executor = manager_->get_realtime_executor(name);
+    auto executor = manager_->get_realtime_executor_snapshot(name);
     if (!executor) {
         auto result = make_failure(
             ExecutorErrorCode::NotFound,
@@ -633,7 +622,7 @@ ExecutorResult Executor::start_realtime_task_ex(const std::string& name) {
 
 // 停止实时任务
 void Executor::stop_realtime_task(const std::string& name) {
-    auto* executor = manager_->get_realtime_executor(name);
+    auto executor = manager_->get_realtime_executor_snapshot(name);
     if (executor) {
         executor->stop();
     }
@@ -655,16 +644,6 @@ ExecutorResult Executor::register_blocking_io_worker_ex(
             validation, FailureKind::SubmitRejected, name, "facade_register_blocking_io_worker");
         return validation;
     }
-    if (manager_->get_blocking_io_executor(name) || manager_->get_lockfree_executor(name) ||
-        manager_->get_realtime_executor(name) ||
-        manager_->get_gpu_executor(name)) {
-        auto result = make_failure(ExecutorErrorCode::DuplicateName,
-                                   "Executor '" + name + "' is already registered");
-        record_result_failure(
-            result, FailureKind::SubmitRejected, name, "facade_register_blocking_io_worker");
-        return result;
-    }
-
     auto executor = manager_->create_blocking_io_executor(name, config, std::move(worker));
     if (!executor) {
         auto result = make_failure(ExecutorErrorCode::StartFailed,
@@ -695,7 +674,7 @@ ExecutorResult Executor::start_blocking_io_worker_ex(const std::string& name) {
             result, FailureKind::SubmitRejected, name, "facade_start_blocking_io_worker");
         return result;
     }
-    auto* executor = manager_->get_blocking_io_executor(name);
+    auto executor = manager_->get_blocking_io_executor_snapshot(name);
     if (!executor) {
         auto result = make_failure(ExecutorErrorCode::NotFound,
                                    "Blocking I/O executor '" + name + "' not found");
@@ -762,7 +741,7 @@ BlockingIoExecutorStatus WorkerHandle::status() const {
 }
 
 bool Executor::push_realtime_task(const std::string& name, std::function<void()> task) {
-    auto* executor = manager_->get_realtime_executor(name);
+    auto executor = manager_->get_realtime_executor_snapshot(name);
     if (!executor) {
         record_submit_rejected(
             name,
@@ -887,7 +866,7 @@ std::vector<ExecutorCapability> Executor::get_executor_capabilities() const {
 
 // 获取异步执行器状态
 AsyncExecutorStatus Executor::get_async_executor_status() const {
-    auto* executor = manager_->get_default_async_executor();
+    auto executor = manager_->get_default_async_executor_snapshot();
     if (!executor) {
         AsyncExecutorStatus status;
         status.name = "default";
@@ -900,7 +879,7 @@ AsyncExecutorStatus Executor::get_async_executor_status() const {
 
 // 获取实时执行器状态
 RealtimeExecutorStatus Executor::get_realtime_executor_status(const std::string& name) const {
-    auto* executor = manager_->get_realtime_executor(name);
+    auto executor = manager_->get_realtime_executor_snapshot(name);
     if (!executor) {
         RealtimeExecutorStatus status;
         status.name = name;
@@ -1225,9 +1204,7 @@ WaitResult Executor::wait_for_completion_ex(std::chrono::milliseconds timeout) {
     WaitResult result;
     result.timeout = timeout;
 
-    auto* ex = manager_->has_default_async_executor()
-                   ? manager_->get_default_async_executor()
-                   : nullptr;
+    auto ex = manager_->get_default_async_executor_snapshot();
     if (!ex) {
         result.completed = true;
         result.timed_out = false;
@@ -1265,9 +1242,7 @@ bool Executor::is_idle() const {
 
 CompletionStatus Executor::get_completion_status() const {
     CompletionStatus completion;
-    auto* ex = manager_->has_default_async_executor()
-                   ? manager_->get_default_async_executor()
-                   : nullptr;
+    auto ex = manager_->get_default_async_executor_snapshot();
     if (!ex) {
         return completion;
     }
@@ -1298,17 +1273,6 @@ ExecutorResult Executor::register_gpu_executor_ex(
         record_result_failure(
             validation, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
         return validation;
-    }
-
-    if (manager_->get_gpu_executor(name) || manager_->get_lockfree_executor(name) ||
-        manager_->get_realtime_executor(name) ||
-        manager_->get_blocking_io_executor(name)) {
-        auto result = make_failure(
-            ExecutorErrorCode::DuplicateName,
-            "Executor '" + name + "' is already registered");
-        record_result_failure(
-            result, FailureKind::GpuFailure, name, "facade_register_gpu_executor");
-        return result;
     }
 
     if (auto backend = check_gpu_backend_available(config); !backend.ok) {
@@ -1363,7 +1327,7 @@ std::vector<std::string> Executor::get_gpu_executor_names() const {
 
 // 获取 GPU 执行器状态
 gpu::GpuExecutorStatus Executor::get_gpu_executor_status(const std::string& name) const {
-    auto* executor = manager_->get_gpu_executor(name);
+    auto executor = manager_->get_gpu_executor_snapshot(name);
     if (!executor) {
         gpu::GpuExecutorStatus status;
         status.name = name;
@@ -1478,7 +1442,7 @@ void Executor::timer_thread_func() {
     while (timer_running_.load(std::memory_order_acquire)) {
         auto now = clock::now();
         auto next_wake = now + max_interval;
-        auto* executor = manager_->get_default_async_executor();
+        auto executor = manager_->get_default_async_executor_snapshot();
         const std::string executor_name = executor ? executor->get_name() : "default";
 
         {

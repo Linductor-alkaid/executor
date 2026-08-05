@@ -340,8 +340,11 @@ public:
     bool try_push_realtime_task(const std::string& name, std::function<void()> task);
 
     /**
-     * @brief 获取实时执行器
-     * 
+     * @brief 获取实时执行器的非持有裸指针
+     *
+     * 高级逃生口。返回值不延长生命周期，不能跨或并发于 shutdown() 使用；
+     * 普通任务推送请使用 push_realtime_task()。
+     *
      * @param name 执行器名称
      * @return 实时执行器指针，如果不存在则返回 nullptr
      */
@@ -522,8 +525,10 @@ public:
         -> std::future<void>;
 
     /**
-     * @brief 获取 GPU 执行器
-     * 
+     * @brief 获取 GPU 执行器的非持有裸指针
+     *
+     * 高级逃生口。返回值不延长生命周期，不能跨或并发于 shutdown() 使用。
+     *
      * @param name 执行器名称
      * @return GPU 执行器指针，如果不存在则返回 nullptr
      */
@@ -802,7 +807,7 @@ auto Executor::submit(F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
     using return_type = typename std::invoke_result<F, Args...>::type;
 
-    auto* executor = manager_->get_default_async_executor();
+    auto executor = manager_->get_default_async_executor_snapshot();
     const std::string executor_name = executor ? executor->get_name() : "default";
     const std::string task_id = "facade_submit";
     if (!executor) {
@@ -1010,7 +1015,7 @@ auto Executor::submit_priority(int priority, F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
     using return_type = typename std::invoke_result<F, Args...>::type;
 
-    auto* executor = manager_->get_default_async_executor();
+    auto executor = manager_->get_default_async_executor_snapshot();
     const std::string executor_name = executor ? executor->get_name() : "default";
     const std::string task_id = "facade_submit_priority";
     if (!executor) {
@@ -1101,7 +1106,7 @@ auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
     using return_type = typename std::invoke_result<F, Args...>::type;
 
-    auto* executor = manager_->get_default_async_executor();
+    auto executor = manager_->get_default_async_executor_snapshot();
     const std::string executor_name = executor ? executor->get_name() : "default";
     const std::string task_id = "facade_submit_delayed";
     if (!executor) {
@@ -1208,7 +1213,7 @@ auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
 // 批量任务提交模板方法实现
 template<typename F>
 std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& tasks) {
-    auto* executor = manager_->get_default_async_executor();
+    auto executor = manager_->get_default_async_executor_snapshot();
     const std::string executor_name = executor ? executor->get_name() : "default";
     if (!executor) {
         record_submit_rejected(
@@ -1319,7 +1324,7 @@ template<typename F>
 std::vector<std::future<void>> Executor::submit_batch_priority(
     int priority,
     const std::vector<F>& tasks) {
-    auto* executor = manager_->get_default_async_executor();
+    auto executor = manager_->get_default_async_executor_snapshot();
     const std::string executor_name = executor ? executor->get_name() : "default";
     if (!executor) {
         record_submit_rejected(
@@ -1341,7 +1346,7 @@ std::vector<std::future<void>> Executor::submit_batch_priority(
 
 template<typename F>
 void Executor::submit_batch_no_future(const std::vector<F>& tasks) {
-    auto* executor = manager_->get_default_async_executor();
+    auto executor = manager_->get_default_async_executor_snapshot();
     const std::string executor_name = executor ? executor->get_name() : "default";
     if (!executor) {
         record_submit_rejected(
@@ -1396,7 +1401,7 @@ auto Executor::submit_gpu(const std::string& executor_name,
                          KernelFunc&& kernel,
                          const gpu::GpuTaskConfig& config)
     -> std::future<void> {
-    auto* executor = manager_->get_gpu_executor(executor_name);
+    auto executor = manager_->get_gpu_executor_snapshot(executor_name);
     if (!executor) {
         const std::string message =
             "submit_gpu: no GPU executor registered with name " + executor_name;

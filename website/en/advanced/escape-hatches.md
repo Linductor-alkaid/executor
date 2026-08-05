@@ -25,7 +25,9 @@ Do not transfer `TaskHandle`, realtime/GPU executor pointers, or dependency rela
 
 ## Manager and direct-pointer responsibility
 
-`ExecutorManager` creates, registers, and retrieves `IAsyncExecutor`, `IRealtimeExecutor`, and `IGpuExecutor`. Registration accepts `std::unique_ptr`, transferring ownership; creation is not registration. Retrieved direct pointers remain manager-owned: never delete them, retain them past manager shutdown, or race them with unregister/stop.
+`ExecutorManager` creates, registers, and retrieves `IAsyncExecutor`, `IRealtimeExecutor`, and `IGpuExecutor`. Registration accepts `std::unique_ptr`, transferring ownership; creation is not registration. Direct pointers from `get_*_executor()` remain manager-owned: never delete them, retain them past manager shutdown, or use them concurrently with shutdown.
+
+When an operation must retain an executor through concurrent `shutdown()`, use the manager's `get_*_executor_snapshot()` APIs. They return a `std::shared_ptr`, keeping the backend object alive after registry removal until that snapshot is released. A snapshot is not a keep-running lease: shutdown can still stop the backend, so callers must handle submission results, futures, and status.
 
 The Facade aggregates common rejection, failure event, and status behavior. Direct interfaces can bypass those observation paths, so their caller owns return values, futures, status, and resource closure.
 

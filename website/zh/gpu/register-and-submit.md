@@ -69,7 +69,7 @@ completed.get();
 
 `GpuExecutorConfig` 至少需要非空名称、有效 backend、非负 `device_id`、正的队列容量与 stream 数。`GpuTaskConfig` 包含 grid/block、共享内存、stream、异步和优先级；非默认 stream 必须来自该 executor 的 `create_stream()`，销毁后不能继续使用。
 
-本页保持在 Facade：注册、提交和状态查询。确实需要设备内存、stream 生命周期、统一内存或 P2P 时，才通过 `get_gpu_executor()` 进入高级资源控制，并承担它新增的生命周期责任。
+本页保持在 Facade：注册、提交和状态查询。确实需要设备内存、stream 生命周期、统一内存或 P2P 时，才通过 `get_gpu_executor()` 进入高级资源控制，并承担它新增的生命周期责任。该接口返回非持有裸指针，不能跨或并发于 `shutdown()` 使用。
 
 ## 性能与复现
 

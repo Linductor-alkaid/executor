@@ -108,7 +108,7 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
     }
 
     // 创建 ThreadPoolExecutor
-    auto executor = std::make_unique<ThreadPoolExecutor>("default", pool_config);
+    auto executor = std::make_shared<ThreadPoolExecutor>("default", pool_config);
     executor->set_task_monitor(&statistics_collector_->get_task_monitor());
     statistics_collector_->get_task_monitor().set_enabled(config.enable_monitoring);
 
@@ -136,13 +136,17 @@ bool ExecutorManager::is_default_async_shutdown() const {
 // 若尚未初始化，则使用默认配置懒初始化一次（线程安全由 std::call_once 保证）
 // shutdown 后不再懒初始化，直接返回 nullptr
 IAsyncExecutor* ExecutorManager::get_default_async_executor() {
+    return get_default_async_executor_snapshot().get();
+}
+
+std::shared_ptr<IAsyncExecutor> ExecutorManager::get_default_async_executor_snapshot() {
     {
         std::lock_guard<std::mutex> lock(default_async_mutex_);
         if (default_async_shutdown_) {
             return nullptr;
         }
         if (default_async_executor_) {
-            return default_async_executor_.get();
+            return default_async_executor_;
         }
     }
 
@@ -152,7 +156,7 @@ IAsyncExecutor* ExecutorManager::get_default_async_executor() {
     });
 
     std::lock_guard<std::mutex> lock(default_async_mutex_);
-    return default_async_executor_.get();
+    return default_async_executor_;
 }
 
 // 注册实时执行器
@@ -163,30 +167,24 @@ bool ExecutorManager::register_realtime_executor(const std::string& name,
     }
 
     std::lock_guard<std::mutex> registration_lock(registration_mutex_);
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    
-    // 检查名称是否已存在
-    if (realtime_executors_.find(name) != realtime_executors_.end() ||
-        get_lockfree_executor(name) || get_blocking_io_executor(name) ||
-        get_gpu_executor(name)) {
+    if (registries_shutdown_ || is_executor_name_registered_locked(name)) {
         return false;  // 名称已存在
     }
-
-    // 注册执行器
-    realtime_executors_[name] = std::move(executor);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    realtime_executors_[name] = std::shared_ptr<IRealtimeExecutor>(std::move(executor));
     return true;
 }
 
 // 获取已注册的实时执行器
 IRealtimeExecutor* ExecutorManager::get_realtime_executor(const std::string& name) {
+    return get_realtime_executor_snapshot(name).get();
+}
+
+std::shared_ptr<IRealtimeExecutor> ExecutorManager::get_realtime_executor_snapshot(
+    const std::string& name) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    
-    auto it = realtime_executors_.find(name);
-    if (it == realtime_executors_.end()) {
-        return nullptr;  // 不存在
-    }
-    
-    return it->second.get();
+    const auto it = realtime_executors_.find(name);
+    return it == realtime_executors_.end() ? nullptr : it->second;
 }
 
 // 创建实时执行器（便捷方法）
@@ -230,19 +228,23 @@ bool ExecutorManager::register_lockfree_executor(
         return false;
     }
     std::lock_guard<std::mutex> registration_lock(registration_mutex_);
-    std::unique_lock<std::shared_mutex> lock(lockfree_mutex_);
-    if (lockfree_executors_.contains(name) || get_realtime_executor(name) ||
-        get_blocking_io_executor(name) || get_gpu_executor(name)) {
+    if (registries_shutdown_ || is_executor_name_registered_locked(name)) {
         return false;
     }
-    lockfree_executors_[name] = std::move(executor);
+    std::unique_lock<std::shared_mutex> lock(lockfree_mutex_);
+    lockfree_executors_[name] = std::shared_ptr<LockFreeTaskExecutor>(std::move(executor));
     return true;
 }
 
 LockFreeTaskExecutor* ExecutorManager::get_lockfree_executor(const std::string& name) {
+    return get_lockfree_executor_snapshot(name).get();
+}
+
+std::shared_ptr<LockFreeTaskExecutor> ExecutorManager::get_lockfree_executor_snapshot(
+    const std::string& name) const {
     std::shared_lock<std::shared_mutex> lock(lockfree_mutex_);
     const auto iterator = lockfree_executors_.find(name);
-    return iterator == lockfree_executors_.end() ? nullptr : iterator->second.get();
+    return iterator == lockfree_executors_.end() ? nullptr : iterator->second;
 }
 
 std::vector<std::string> ExecutorManager::get_lockfree_executor_names() const {
@@ -257,26 +259,18 @@ std::vector<std::string> ExecutorManager::get_lockfree_executor_names() const {
 }
 
 bool ExecutorManager::start_lockfree_executor(const std::string& name) {
-    std::shared_lock<std::shared_mutex> lock(lockfree_mutex_);
-    const auto iterator = lockfree_executors_.find(name);
-    return iterator != lockfree_executors_.end() && iterator->second &&
-           iterator->second->start();
+    auto executor = get_lockfree_executor_snapshot(name);
+    return executor && executor->start();
 }
 
 void ExecutorManager::stop_lockfree_executor(const std::string& name) {
-    std::shared_lock<std::shared_mutex> lock(lockfree_mutex_);
-    const auto iterator = lockfree_executors_.find(name);
-    if (iterator != lockfree_executors_.end() && iterator->second) {
-        iterator->second->stop_and_join();
-    }
+    if (auto executor = get_lockfree_executor_snapshot(name)) executor->stop_and_join();
 }
 
 bool ExecutorManager::try_push_lockfree_task(const std::string& name,
                                               std::function<void()> task) {
-    std::shared_lock<std::shared_mutex> lock(lockfree_mutex_);
-    const auto iterator = lockfree_executors_.find(name);
-    return iterator != lockfree_executors_.end() && iterator->second &&
-           iterator->second->push_task(std::move(task));
+    auto executor = get_lockfree_executor_snapshot(name);
+    return executor && executor->push_task(std::move(task));
 }
 
 bool ExecutorManager::register_blocking_io_executor(
@@ -287,48 +281,39 @@ bool ExecutorManager::register_blocking_io_executor(
     }
 
     std::lock_guard<std::mutex> registration_lock(registration_mutex_);
-    std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
-    if (blocking_io_executors_.find(name) != blocking_io_executors_.end() ||
-        get_lockfree_executor(name) || get_realtime_executor(name) ||
-        get_gpu_executor(name)) {
+    if (registries_shutdown_ || is_executor_name_registered_locked(name)) {
         return false;
     }
-    blocking_io_executors_[name] = std::move(executor);
+    std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
+    blocking_io_executors_[name] = std::shared_ptr<IBlockingIoExecutor>(std::move(executor));
     return true;
 }
 
 IBlockingIoExecutor* ExecutorManager::get_blocking_io_executor(const std::string& name) {
+    return get_blocking_io_executor_snapshot(name).get();
+}
+
+std::shared_ptr<IBlockingIoExecutor> ExecutorManager::get_blocking_io_executor_snapshot(
+    const std::string& name) const {
     std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
     const auto it = blocking_io_executors_.find(name);
-    return it == blocking_io_executors_.end() ? nullptr : it->second.get();
+    return it == blocking_io_executors_.end() ? nullptr : it->second;
 }
 
 void ExecutorManager::request_stop_blocking_io_executor(const std::string& name) noexcept {
     try {
-        std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
-        const auto it = blocking_io_executors_.find(name);
-        if (it != blocking_io_executors_.end() && it->second) {
-            it->second->request_stop();
-        }
+        if (auto executor = get_blocking_io_executor_snapshot(name)) executor->request_stop();
     } catch (...) {
     }
 }
 
 void ExecutorManager::stop_blocking_io_executor(const std::string& name) {
-    std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
-    const auto it = blocking_io_executors_.find(name);
-    if (it != blocking_io_executors_.end() && it->second) {
-        it->second->stop();
-    }
+    if (auto executor = get_blocking_io_executor_snapshot(name)) executor->stop();
 }
 
 BlockingIoExecutorStatus ExecutorManager::get_blocking_io_executor_status(
     const std::string& name) const {
-    std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
-    const auto it = blocking_io_executors_.find(name);
-    if (it != blocking_io_executors_.end() && it->second) {
-        return it->second->get_status();
-    }
+    if (auto executor = get_blocking_io_executor_snapshot(name)) return executor->get_status();
     BlockingIoExecutorStatus status;
     status.name = name;
     return status;
@@ -366,30 +351,24 @@ bool ExecutorManager::register_gpu_executor(const std::string& name,
     }
 
     std::lock_guard<std::mutex> registration_lock(registration_mutex_);
-    std::unique_lock<std::shared_mutex> lock(gpu_mutex_);
-    
-    // 检查名称是否已存在
-    if (gpu_executors_.find(name) != gpu_executors_.end() ||
-        get_lockfree_executor(name) || get_realtime_executor(name) ||
-        get_blocking_io_executor(name)) {
+    if (registries_shutdown_ || is_executor_name_registered_locked(name)) {
         return false;  // 名称已存在
     }
-
-    // 注册执行器
-    gpu_executors_[name] = std::move(executor);
+    std::unique_lock<std::shared_mutex> lock(gpu_mutex_);
+    gpu_executors_[name] = std::shared_ptr<IGpuExecutor>(std::move(executor));
     return true;
 }
 
 // 获取已注册的 GPU 执行器
 IGpuExecutor* ExecutorManager::get_gpu_executor(const std::string& name) {
+    return get_gpu_executor_snapshot(name).get();
+}
+
+std::shared_ptr<IGpuExecutor> ExecutorManager::get_gpu_executor_snapshot(
+    const std::string& name) const {
     std::shared_lock<std::shared_mutex> lock(gpu_mutex_);
-    
-    auto it = gpu_executors_.find(name);
-    if (it == gpu_executors_.end()) {
-        return nullptr;  // 不存在
-    }
-    
-    return it->second.get();
+    const auto it = gpu_executors_.find(name);
+    return it == gpu_executors_.end() ? nullptr : it->second;
 }
 
 // 创建 GPU 执行器（便捷方法）
@@ -453,6 +432,20 @@ ExecutorManager::get_all_gpu_executor_statuses() const {
         }
     }
     return result;
+}
+
+bool ExecutorManager::is_executor_name_registered(const std::string& name) const {
+    std::lock_guard<std::mutex> registration_lock(registration_mutex_);
+    return is_executor_name_registered_locked(name);
+}
+
+bool ExecutorManager::is_executor_name_registered_locked(const std::string& name) const {
+    std::shared_lock<std::shared_mutex> realtime_lock(mutex_);
+    std::shared_lock<std::shared_mutex> lockfree_lock(lockfree_mutex_);
+    std::shared_lock<std::shared_mutex> blocking_lock(blocking_io_mutex_);
+    std::shared_lock<std::shared_mutex> gpu_lock(gpu_mutex_);
+    return realtime_executors_.contains(name) || lockfree_executors_.contains(name) ||
+           blocking_io_executors_.contains(name) || gpu_executors_.contains(name);
 }
 
 std::vector<ExecutorCapability> ExecutorManager::get_executor_capabilities() const {
@@ -552,10 +545,8 @@ std::vector<ExecutorCapability> ExecutorManager::get_executor_capabilities() con
 
 bool ExecutorManager::try_push_realtime_task(const std::string& name,
                                               std::function<void()> task) {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    const auto it = realtime_executors_.find(name);
-    return it != realtime_executors_.end() && it->second &&
-           it->second->push_task_ex(std::move(task));
+    auto executor = get_realtime_executor_snapshot(name);
+    return executor && executor->push_task_ex(std::move(task));
 }
 
 void ExecutorManager::enable_monitoring(bool enable) {
@@ -587,68 +578,69 @@ ExecutorManager::get_all_task_statistics() const {
 // 关闭所有执行器
 ShutdownResult ExecutorManager::shutdown(bool wait_for_tasks) {
     bool shutdown_requested_from_worker = false;
-    std::vector<std::unique_ptr<LockFreeTaskExecutor>> lockfree_executors;
+    std::vector<std::shared_ptr<LockFreeTaskExecutor>> lockfree_executors;
+    std::vector<std::shared_ptr<IBlockingIoExecutor>> blocking_io_executors;
+    std::vector<std::shared_ptr<IRealtimeExecutor>> realtime_executors;
+    std::vector<std::shared_ptr<IGpuExecutor>> gpu_executors;
+
+    // Seal every named registry before removing entries so a concurrent
+    // registration cannot escape this shutdown pass.
     {
-        std::unique_lock<std::shared_mutex> lock(lockfree_mutex_);
-        lockfree_executors.reserve(lockfree_executors_.size());
-        for (auto& [name, executor] : lockfree_executors_) {
-            (void)name;
-            lockfree_executors.push_back(std::move(executor));
+        std::lock_guard<std::mutex> registration_lock(registration_mutex_);
+        registries_shutdown_ = true;
+
+        {
+            std::unique_lock<std::shared_mutex> lock(mutex_);
+            realtime_executors.reserve(realtime_executors_.size());
+            for (const auto& pair : realtime_executors_) {
+                realtime_executors.push_back(pair.second);
+            }
+            realtime_executors_.clear();
         }
-        lockfree_executors_.clear();
-    }
-    for (auto& executor : lockfree_executors) {
-        if (executor) {
-            executor->stop_and_join();
+        {
+            std::unique_lock<std::shared_mutex> lock(lockfree_mutex_);
+            lockfree_executors.reserve(lockfree_executors_.size());
+            for (const auto& [name, executor] : lockfree_executors_) {
+                (void)name;
+                lockfree_executors.push_back(executor);
+            }
+            lockfree_executors_.clear();
         }
-    }
-    std::vector<std::unique_ptr<IBlockingIoExecutor>> blocking_io_executors;
-    {
-        std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
-        blocking_io_executors.reserve(blocking_io_executors_.size());
-        for (auto& pair : blocking_io_executors_) {
-            blocking_io_executors.push_back(std::move(pair.second));
+        {
+            std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
+            blocking_io_executors.reserve(blocking_io_executors_.size());
+            for (const auto& pair : blocking_io_executors_) {
+                blocking_io_executors.push_back(pair.second);
+            }
+            blocking_io_executors_.clear();
         }
-        blocking_io_executors_.clear();
-    }
-    for (auto& executor : blocking_io_executors) {
-        if (executor) {
-            executor->request_stop();
-        }
-    }
-    for (auto& executor : blocking_io_executors) {
-        if (executor) {
-            executor->stop();
+        {
+            std::unique_lock<std::shared_mutex> lock(gpu_mutex_);
+            gpu_executors.reserve(gpu_executors_.size());
+            for (const auto& pair : gpu_executors_) {
+                gpu_executors.push_back(pair.second);
+            }
+            gpu_executors_.clear();
         }
     }
 
-    // 停止所有实时执行器
-    {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
-        for (auto& pair : realtime_executors_) {
-            if (pair.second) {
-                pair.second->stop();
-                if (wait_for_tasks) {
-                    // 注意：IRealtimeExecutor 没有 wait_for_completion 方法
-                    // 实时执行器的任务在周期回调中执行，stop() 已经会等待线程结束
-                }
-            }
-        }
-        realtime_executors_.clear();
+    for (auto& executor : lockfree_executors) {
+        if (executor) executor->stop_and_join();
     }
-    
-    // 停止所有 GPU 执行器
-    {
-        std::unique_lock<std::shared_mutex> lock(gpu_mutex_);
-        for (auto& pair : gpu_executors_) {
-            if (pair.second) {
-                pair.second->stop();
-                if (wait_for_tasks) {
-                    pair.second->wait_for_completion();
-                }
-            }
+    for (auto& executor : blocking_io_executors) {
+        if (executor) executor->request_stop();
+    }
+    for (auto& executor : blocking_io_executors) {
+        if (executor) executor->stop();
+    }
+    for (const auto& executor : realtime_executors) {
+        if (executor) executor->stop();
+    }
+    for (const auto& executor : gpu_executors) {
+        if (executor) {
+            executor->stop();
+            if (wait_for_tasks) executor->wait_for_completion();
         }
-        gpu_executors_.clear();
     }
     
     // 停止异步执行器

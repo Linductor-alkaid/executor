@@ -27,7 +27,9 @@ description: 在资源隔离、执行器扩展或 GPU 资源控制确有需要�
 
 ## Manager 与直接指针的责任
 
-`ExecutorManager` 可创建、注册和获取 `IAsyncExecutor`、`IRealtimeExecutor`、`IGpuExecutor`。注册 API 接收 `std::unique_ptr`，所有权随之转移；创建不等于注册。直接获取的指针由 manager 持有，调用方不得释放、长期缓存到 manager shutdown 之后，或与并发注销/关闭竞态使用。
+`ExecutorManager` 可创建、注册和获取 `IAsyncExecutor`、`IRealtimeExecutor`、`IGpuExecutor`。注册 API 接收 `std::unique_ptr`，所有权随之转移；创建不等于注册。`get_*_executor()` 返回的直接指针由 manager 持有，调用方不得释放、长期缓存到 manager shutdown 之后，或与并发关闭竞态使用。
+
+需要把对象安全持有到一次调用结束，或需要与并发 `shutdown()` 共存时，使用 manager 的 `get_*_executor_snapshot()`。它返回 `std::shared_ptr`：注册表移除后对象会继续存活到该快照释放。它不是“保持运行”句柄，shutdown 仍可请求停止后端；调用方仍须检查提交结果、future 和状态。
 
 Facade 已经把常见的拒绝、failure event 和状态聚合在一起。直接接口可能绕过这些统一观察路径，因此调用方必须自行检查返回值、future、状态和资源关闭。
 

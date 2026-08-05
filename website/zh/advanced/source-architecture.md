@@ -59,7 +59,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | Facade failure | 失败计数、ring buffer、callback 快照 | `failure_mutex_` | callback 在解锁后执行，避免诊断回调重入内部锁 |
 | Facade task graph | 节点状态、dependents 映射 | `task_graph_mutex_` + graph manager `shared_mutex` | 状态转移与依赖解析必须原子观察 |
-| Manager registry | realtime/GPU 注册表 | `shared_mutex` | 查询多、注册少；返回裸指针前必须保证实例生命周期 |
+| Manager registry | realtime/GPU 注册表 | `shared_mutex` | 查询多、注册少；Facade 通过 `shared_ptr` 快照持有对象，裸指针高级接口需自行与 shutdown 串行化 |
 | ThreadPool lifecycle | stop、total/completed/active | `mutex_` + atomic counters | 提交停止边界与等待完成条件分离，避免锁顺序反转 |
 | local queues | worker queue vector 的替换 | `local_queues_mutex_` + atomic `shared_ptr` | resize 时旧 vector 由快照延长生命周期 |
 | LockFreeQueue slots | 槽位就绪和回收序列 | `sequences_` acquire/release | 数据发布与槽位复用需要顺序关系，不用 mutex 串行化生产者 |

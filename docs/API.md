@@ -386,8 +386,10 @@ std::vector<std::string> get_realtime_task_list() const;
 ```
 
 - `push_realtime_task` / `try_push_realtime_task`：推荐任务推送入口；失败返回 `false`，并写入 failure event / 状态计数。
-- `get_realtime_executor`：高级逃生口，用于直接访问 `push_task_ex` 等底层操作；若不存在返回 `nullptr`。
+- `get_realtime_executor`：高级逃生口，用于直接访问 `push_task_ex` 等底层操作；若不存在返回 `nullptr`。返回的是 manager 持有的**非持有裸指针**，不能跨 `shutdown()` 缓存或与并发 `shutdown()` 同时使用。
 - `get_realtime_task_list`：当前已注册的实时任务名称列表。
+
+直接使用 `ExecutorManager` 时，优先使用 `get_default_async_executor_snapshot()`、`get_realtime_executor_snapshot(name)`、`get_lockfree_executor_snapshot(name)`、`get_blocking_io_executor_snapshot(name)` 和 `get_gpu_executor_snapshot(name)`。它们返回 `std::shared_ptr`，即使并发 `shutdown()` 已从注册表移除该项，也会保持对象存活到本地快照释放；这只解决对象生命周期，**不会**阻止 shutdown 请求停止执行器，因此每次调用仍须处理停止或拒绝结果。`shutdown()` 开始后，manager 拒绝新的具名执行器注册。
 
 ### 4.3 集成契约：周期、队列与安全路径
 
@@ -1342,7 +1344,7 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 
 ### 8.3 GPU 执行器接口（IGpuExecutor）
 
-通过 `get_gpu_executor(name)` 获取指针后，可调用：
+通过 `get_gpu_executor(name)` 获取指针后，可调用：该指针为非持有高级接口，不能跨或并发于 `shutdown()` 使用。直接使用 `ExecutorManager` 的集成应改取 `get_gpu_executor_snapshot(name)` 并在操作期间持有返回的 `std::shared_ptr`；快照不阻止执行器停止，仍要处理提交 future 和状态中的停止失败。
 
 - **内存**：`allocate_device_memory`、`free_device_memory`；`copy_to_device`、`copy_to_host`、`copy_device_to_device`（均支持异步与流 ID）
 - **统一内存**：`allocate_unified_memory`、`free_unified_memory`、`prefetch_memory`（host / device 方向均可）

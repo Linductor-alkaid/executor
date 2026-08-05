@@ -76,11 +76,23 @@ public:
     bool is_default_async_shutdown() const;
 
     /**
-     * @brief 获取默认异步执行器（线程池）
-     * 
+     * @brief 获取默认异步执行器（线程池）的非持有裸指针
+     *
+     * 仅供能自行与 manager shutdown 串行化的高级调用方使用。
+     * 不会延长执行器生命周期；需要跨并发 shutdown 安全使用时，调用
+     * get_default_async_executor_snapshot()。
+     *
      * @return 异步执行器指针，如果未初始化则返回 nullptr
      */
     IAsyncExecutor* get_default_async_executor();
+
+    /**
+     * @brief 获取默认异步执行器的生命周期持有快照
+     *
+     * 返回的 shared_ptr 会在注册表移除后继续保持对象存活，但不会阻止
+     * shutdown 对执行器请求停止。
+     */
+    std::shared_ptr<IAsyncExecutor> get_default_async_executor_snapshot();
 
     /**
      * @brief 注册实时执行器
@@ -93,12 +105,22 @@ public:
                                    std::unique_ptr<IRealtimeExecutor> executor);
 
     /**
-     * @brief 获取已注册的实时执行器
-     * 
+     * @brief 获取已注册实时执行器的非持有裸指针
+     *
+     * 不会延长执行器生命周期，不能与并发 shutdown 一起使用。需要安全
+     * 持有时调用 get_realtime_executor_snapshot()。
+     *
      * @param name 执行器名称
      * @return 实时执行器指针，如果不存在则返回 nullptr
      */
     IRealtimeExecutor* get_realtime_executor(const std::string& name);
+
+    /**
+     * @brief 获取实时执行器的生命周期持有快照
+     *
+     * 快照可安全跨注册表移除持有；它不改变 stop/shutdown 的状态语义。
+     */
+    std::shared_ptr<IRealtimeExecutor> get_realtime_executor_snapshot(const std::string& name) const;
 
     /**
      * @brief 创建实时执行器（便捷方法）
@@ -123,7 +145,10 @@ public:
 
     bool register_lockfree_executor(const std::string& name,
                                     std::unique_ptr<LockFreeTaskExecutor> executor);
+    /** 非持有裸指针；并发 shutdown 路径请使用 snapshot API。 */
     LockFreeTaskExecutor* get_lockfree_executor(const std::string& name);
+    /** 生命周期持有快照；不阻止执行器被停止。 */
+    std::shared_ptr<LockFreeTaskExecutor> get_lockfree_executor_snapshot(const std::string& name) const;
     std::vector<std::string> get_lockfree_executor_names() const;
     bool start_lockfree_executor(const std::string& name);
     void stop_lockfree_executor(const std::string& name);
@@ -133,7 +158,10 @@ public:
         const std::string& name,
         std::unique_ptr<IBlockingIoExecutor> executor);
 
+    /** 非持有裸指针；并发 shutdown 路径请使用 snapshot API。 */
     IBlockingIoExecutor* get_blocking_io_executor(const std::string& name);
+    /** 生命周期持有快照；不阻止执行器被停止。 */
+    std::shared_ptr<IBlockingIoExecutor> get_blocking_io_executor_snapshot(const std::string& name) const;
 
     void request_stop_blocking_io_executor(const std::string& name) noexcept;
     void stop_blocking_io_executor(const std::string& name);
@@ -157,12 +185,25 @@ public:
                                std::unique_ptr<IGpuExecutor> executor);
 
     /**
-     * @brief 获取已注册的 GPU 执行器
-     * 
+     * @brief 获取已注册 GPU 执行器的非持有裸指针
+     *
+     * 不会延长执行器生命周期，不能与并发 shutdown 一起使用。需要安全
+     * 持有时调用 get_gpu_executor_snapshot()。
+     *
      * @param name 执行器名称
      * @return GPU 执行器指针，如果不存在则返回 nullptr
      */
     IGpuExecutor* get_gpu_executor(const std::string& name);
+
+    /**
+     * @brief 获取 GPU 执行器的生命周期持有快照
+     *
+     * 快照可安全跨注册表移除持有；它不阻止 stop/shutdown 改变运行状态。
+     */
+    std::shared_ptr<IGpuExecutor> get_gpu_executor_snapshot(const std::string& name) const;
+
+    /** Atomically checks the cross-backend name registry. */
+    bool is_executor_name_registered(const std::string& name) const;
 
     /**
      * @brief 创建 GPU 执行器（便捷方法）
@@ -229,10 +270,12 @@ public:
     std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
 private:
+    bool is_executor_name_registered_locked(const std::string& name) const;
+
     // Protects default_async_executor_ and default_async_shutdown_.
     mutable std::mutex default_async_mutex_;
     // 默认异步执行器（线程池）
-    std::unique_ptr<IAsyncExecutor> default_async_executor_;
+    std::shared_ptr<IAsyncExecutor> default_async_executor_;
 
     // 已关闭标记：shutdown 后不再懒初始化，get_default_async_executor() 直接返回 nullptr
     bool default_async_shutdown_ = false;
@@ -241,25 +284,28 @@ private:
     std::once_flag default_init_once_;
 
     // 实时执行器注册表
-    std::unordered_map<std::string, std::unique_ptr<IRealtimeExecutor>> realtime_executors_;
+    std::unordered_map<std::string, std::shared_ptr<IRealtimeExecutor>> realtime_executors_;
 
     // 读写锁（保护实时执行器注册表）
     mutable std::shared_mutex mutex_;
 
-    std::unordered_map<std::string, std::unique_ptr<LockFreeTaskExecutor>> lockfree_executors_;
+    std::unordered_map<std::string, std::shared_ptr<LockFreeTaskExecutor>> lockfree_executors_;
     mutable std::shared_mutex lockfree_mutex_;
 
-    std::unordered_map<std::string, std::unique_ptr<IBlockingIoExecutor>> blocking_io_executors_;
+    std::unordered_map<std::string, std::shared_ptr<IBlockingIoExecutor>> blocking_io_executors_;
     mutable std::shared_mutex blocking_io_mutex_;
 
     // GPU 执行器注册表
-    std::unordered_map<std::string, std::unique_ptr<IGpuExecutor>> gpu_executors_;
+    std::unordered_map<std::string, std::shared_ptr<IGpuExecutor>> gpu_executors_;
 
     // 读写锁（保护 GPU 执行器注册表）
     mutable std::shared_mutex gpu_mutex_;
 
     // Serializes cross-backend name uniqueness checks and registrations.
     mutable std::mutex registration_mutex_;
+
+    // Once shutdown starts, named registries are sealed against new entries.
+    bool registries_shutdown_ = false;
 
     // 统计收集器（任务监控）
     std::unique_ptr<monitor::StatisticsCollector> statistics_collector_;
