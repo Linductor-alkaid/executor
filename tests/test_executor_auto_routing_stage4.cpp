@@ -108,7 +108,7 @@ bool test_realtime_dispatch_is_explicit_and_bounded() {
     RealtimeThreadConfig config;
     config.thread_name = "stage4-realtime";
     config.cycle_period_ns = 1'000'000;
-    config.enable_memory_lock = false;
+    config.enable_process_memory_lock = false;
     config.timer_slack_ns = 0;
     config.cycle_callback = [] {};
     TEST_ASSERT(executor.register_realtime_task("realtime", config),

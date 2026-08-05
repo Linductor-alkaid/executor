@@ -112,9 +112,9 @@ std::vector<int> get_current_thread_affinity() {
     return cpu_ids;
 }
 
-bool try_mlock_current_thread() {
+ProcessMemoryLockResult try_mlock_process_memory() {
     // Windows 不支持 mlockall，无对应的进程级内存锁定语义，直接返回 false
-    return false;
+    return {false, ERROR_NOT_SUPPORTED};
 }
 
 void set_current_thread_name(const std::string& name) {
@@ -241,13 +241,11 @@ std::vector<int> get_current_thread_affinity() {
     return cpu_ids;
 }
 
-bool try_mlock_current_thread() {
-    // 锁定当前及未来的所有页面，防止分页到 swap 引入抖动
-    // 失败（如无 CAP_IPC_LOCK 权限）时静默返回 false，不抛异常
+ProcessMemoryLockResult try_mlock_process_memory() {
     if (mlockall(MCL_CURRENT | MCL_FUTURE) == 0) {
-        return true;
+        return {true, 0};
     }
-    return false;
+    return {false, errno};
 }
 
 void set_current_thread_name(const std::string& name) {

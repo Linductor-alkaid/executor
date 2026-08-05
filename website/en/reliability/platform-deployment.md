@@ -24,7 +24,7 @@ For an ordinary thread pool, the first layer is usually enough. Do not request r
 | CMake generator | Usually single-config | Visual Studio usually multi-config; build/CTest specify `Release` |
 | Real-time priority | `SCHED_FIFO` 1–99 with authorization | `SetThreadPriority` level; not equivalent to `SCHED_FIFO` |
 | CPU affinity | Select within current allowed cpuset | `SetThreadAffinityMask`; current implementation uses one 64-bit mask |
-| Memory locking | `mlockall(MCL_CURRENT | MCL_FUTURE)` | No equivalent; `memory_locked` is expected false |
+| Memory locking | Explicit opt-in `mlockall(MCL_CURRENT | MCL_FUTURE)` for the whole process and future mappings | No equivalent; `process_memory_lock_applied` is expected false |
 | Timer slack | `PR_SET_TIMERSLACK` | No per-thread equivalent; `timer_slack_applied` expected false |
 | Short-period timing | Monotonic clock and timer slack | Requests 1 ms timer period for thread lifetime when period <20 ms |
 
@@ -67,7 +67,7 @@ ulimit -l
 grep -E 'Cpus_allowed_list|Mems_allowed_list' /proc/self/status
 ```
 
-`taskset` and `Cpus_allowed_list` identify CPUs actually available to the process; container numbering may not begin at zero. `ulimit -r` bounds requested real-time priority: insufficient `RLIMIT_RTPRIO`/`CAP_SYS_NICE` leaves the thread running but `priority_applied=false`. `ulimit -l` bounds lockable memory: insufficient value/`CAP_IPC_LOCK` leaves `memory_locked=false`. `Mems_allowed_list` is not Executor configuration but can affect locality and jitter.
+`taskset` and `Cpus_allowed_list` identify CPUs actually available to the process; container numbering may not begin at zero. `ulimit -r` bounds requested real-time priority: insufficient `RLIMIT_RTPRIO`/`CAP_SYS_NICE` leaves the thread running but `priority_applied=false`. `ulimit -l` bounds lockable memory: insufficient value/`CAP_IPC_LOCK` makes an explicitly requested process-wide `mlockall` fail; inspect `process_memory_lock_applied` and `process_memory_lock_errno`. `Mems_allowed_list` is not Executor configuration but can affect locality and jitter.
 
 If file capabilities grant authority, inspect `getcap ./your-service`. Do not use running the entire service under `sudo` as a long-term fix. Give minimal capability/resource limits through systemd, container runtime, or security policy. Check `LimitRTPRIO=`, `LimitMEMLOCK=`, `CPUAffinity=`, final user, host cpuset, capability/limits, and orchestration overrides in the final container/service—not only a host shell.
 
@@ -84,7 +84,7 @@ Get-Process -Id $PID |
   Select-Object ProcessName, PriorityClass, ProcessorAffinity
 ```
 
-These record environment but do not replace thread-level Executor state. Windows priority semantics differ from Linux; one 64-bit affinity mask does not cover all processor-group cases on hosts above 64 logical CPUs; false `memory_locked` and `timer_slack_applied` are expected in this implementation; short-period threads request 1 ms timer precision (with power cost) during life; thread naming requires Windows 10 1607+ and is diagnostic only. A service account, interactive shell, and CI runner can have different limits.
+These record environment but do not replace thread-level Executor state. Windows priority semantics differ from Linux; one 64-bit affinity mask does not cover all processor-group cases on hosts above 64 logical CPUs; false `process_memory_lock_applied` and `timer_slack_applied` are expected in this implementation; short-period threads request 1 ms timer precision (with power cost) during life; thread naming requires Windows 10 1607+ and is diagnostic only. A service account, interactive shell, and CI runner can have different limits.
 
 ## Confirm requests through runtime status
 
@@ -97,7 +97,8 @@ std::cout
     << ", period_ns=" << status.cycle_period_ns
     << ", priority=" << status.priority_applied
     << ", affinity=" << status.cpu_affinity_applied
-    << ", memory=" << status.memory_locked
+    << ", process_memory_lock=" << status.process_memory_lock_applied
+    << ", process_memory_lock_errno=" << status.process_memory_lock_errno
     << ", timer_slack=" << status.timer_slack_applied
     << ", cycles=" << status.cycle_count
     << ", cycle_timeouts=" << status.cycle_timeout_count
@@ -111,7 +112,7 @@ Wait until `cycle_count` grows, then compare status deltas under steady and over
 | Cross-platform background period only | `is_running=true`, growing `cycle_count`, exit in budget; tuning fields may be false |
 | Linux fixed CPU | `cpu_affinity_applied=true`, configured CPU allowed by process cpuset, verified with system tool |
 | Linux real-time scheduling | `priority_applied=true`, plus tail latency/jitter validation under target load |
-| Linux paging-jitter mitigation | `memory_locked=true`, plus memory peak inside deployment budget |
+| Linux paging-jitter mitigation | Explicitly set `enable_process_memory_lock=true`, then require `process_memory_lock_applied=true` and keep the entire process memory peak inside the deployment budget |
 | Windows short-period control | Running and period statistics meet target; Linux-specific memory/timer-slack fields not required |
 
 If tuning falls back, the library runs safely and records it. Business requirements decide whether to keep accepting traffic: background refresh may degrade; hard control budget should fail health checks.

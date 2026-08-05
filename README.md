@@ -13,7 +13,7 @@
 - **Hybrid Execution Modes**
   Thread pool (general concurrent tasks) + dedicated real-time thread (high real-time tasks such as CAN communication, sensor acquisition)
 
-- **Default-Optimal Facade (P019)**
+- **Default-Optimal Facade**
   Zero-config users get the best behavior on their platform automatically:
   - **Adaptive thread count** (`min/max_threads` = 0 sentinel, `ExecutorManager` probes `hardware_concurrency()` at init, falls back to (2, 4) on failure)
   - **Work-stealing by default** (lock-free implementation, auto-disabled when `max_threads == 1`)
@@ -22,14 +22,14 @@
   - **Adaptive real-time thread priority** (`thread_priority` = 0 → auto-recommend 80 if cycle ≤ 1 ms, 50 if ≤ 10 ms, 0 if > 10 ms)
   Auto-decisions fall back to safe defaults when platform probing or tuning is unavailable, and user-supplied values are **always preserved**. Task failures, rejected submissions, drops, and timeouts are not considered tuning failures: they must remain observable through futures, return values, status counters, or monitoring statistics.
 
-- **Soft Task Timeout (P024)**
+- **Soft Task Timeout**
   `task_timeout_ms` is a pre-execution soft timeout: if a queued task has waited longer than the configured timeout before a worker starts it, the task is skipped and `timeout_count` is incremented.
   In-progress tasks are never forcefully interrupted because C++ has no safe thread-kill mechanism.
   Long-running tasks should check their own cancellation or deadline condition internally.
 
-- **Linux Real-Time Hardening (P016 + P019-A)**
-  `RealtimeThreadConfig` defaults are now opt-out:
-  - `enable_memory_lock` (default `true` — best-effort `mlockall` to avoid page-fault jitter; unsupported or denied calls fall back without changing task status)
+- **Linux Real-Time Hardening**
+  `RealtimeThreadConfig` uses conservative process-memory-lock semantics:
+  - `enable_process_memory_lock` (default `false` — Linux `mlockall` affects the whole process and future mappings; explicitly opt in only after sizing the memory budget; `process_memory_lock_errno` reports denied requests)
   - `timer_slack_ns` (default `1` — best-effort 1 ns slack to avoid kernel's 50 µs default; unsupported or denied calls fall back; `0` is now explicit opt-out)
   - `thread_name` (still `""` by default — library doesn't guess user business names)
   Reference example: `tests/test_realtime_hardening.cpp`

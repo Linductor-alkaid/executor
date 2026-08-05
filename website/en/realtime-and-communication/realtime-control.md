@@ -77,8 +77,8 @@ Objects captured by `cycle_callback` must outlive `stop_realtime_task()`. Dynami
 
 ## Configuration and fallback
 
-Defaults attempt real-time priority, CPU affinity, memory lock, and low timer slack. Linux `SCHED_FIFO`, `mlockall`, container cpusets, and Windows scheduling capability can be limited by deployment permissions. The library continues safely, but that does not mean a requested setting took effect.
+Defaults attempt real-time priority, CPU affinity, and low timer slack. Process-wide memory locking is disabled by default: Linux `mlockall` locks the whole process and future mappings, so enable `enable_process_memory_lock` only after sizing the process memory budget. Linux `SCHED_FIFO`, `mlockall`, container cpusets, and Windows scheduling capability can be limited by deployment permissions. The library continues safely, but that does not mean a requested setting took effect.
 
-At deployment, inspect `RealtimeExecutorStatus`: `priority_applied`, `cpu_affinity_applied`, `memory_locked`, and `timer_slack_applied`; alert alongside `cycle_timeout_count`, `dropped_task_count`, `queue_full_count`, and `pool_exhausted_count`. Empty affinity enables adaptive choice; verify any explicit configuration in its target environment.
+At deployment, inspect `RealtimeExecutorStatus`: `priority_applied`, `cpu_affinity_applied`, `process_memory_lock_applied`, `process_memory_lock_errno`, and `timer_slack_applied`; alert alongside `cycle_timeout_count`, `dropped_task_count`, `queue_full_count`, and `pool_exhausted_count`. Empty affinity enables adaptive choice; verify any explicit configuration in its target environment.
 
 Next: [deliver every message](/en/realtime-and-communication/channels).

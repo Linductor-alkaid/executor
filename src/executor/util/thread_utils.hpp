@@ -45,16 +45,20 @@ int get_current_thread_priority();
  */
 std::vector<int> get_current_thread_affinity();
 
+struct ProcessMemoryLockResult {
+    bool applied = false;
+    int error_code = 0;
+};
+
 /**
- * @brief 把当前线程锁在物理内存里，防止分页到 swap
+ * @brief 锁定进程当前和未来映射，防止分页到 swap
  *
- * 在 Linux 上调用 mlockall(MCL_CURRENT|MCL_FUTURE)，避免实时线程因缺页/换页
- * 引入毫秒级抖动。需要 CAP_IPC_LOCK 权限（或足够的 RLIMIT_MEMLOCK）。
- * 失败时（如无权限）静默返回 false，由调用方决定是否告警，不抛异常。
+ * Linux 上调用 mlockall(MCL_CURRENT|MCL_FUTURE)。这是进程级操作，不是当前
+ * 线程操作；它还会锁定后续映射。需要 CAP_IPC_LOCK 或足够的 RLIMIT_MEMLOCK。
  *
- * @return 成功返回true，失败返回false（Windows 上始终返回false）
+ * @return 是否成功及失败时的 errno（Windows 上 error_code 为 ERROR_NOT_SUPPORTED）
  */
-bool try_mlock_current_thread();
+ProcessMemoryLockResult try_mlock_process_memory();
 
 /**
  * @brief 把当前线程名设进内核，便于 top/htop/perf 看到

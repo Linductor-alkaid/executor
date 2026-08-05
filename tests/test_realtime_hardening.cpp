@@ -19,6 +19,7 @@
 #ifdef __linux__
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <sys/resource.h>
 #endif
 
 using namespace executor::util;
@@ -32,28 +33,56 @@ using namespace executor::util;
         } \
     } while(0)
 
-// ========== try_mlock_current_thread 测试 ==========
+// ========== RealtimeMemoryLock.ProcessScopedContract ==========
 
-bool test_try_mlock_current_thread() {
-    std::cout << "Testing try_mlock_current_thread..." << std::endl;
+bool test_realtime_memory_lock_process_scoped_contract() {
+    std::cout << "Testing RealtimeMemoryLock.ProcessScopedContract..." << std::endl;
 
-    // CI Code Coverage build 在 2 vCPU runner 上,mlockall(MCL_CURRENT|MCL_FUTURE) 会
-    // 锁住所有测试 runtime 内存 (gtest fixture + 数百 MB coverage 插桩) →
-    // OOM-killer 在后续 test 中 SIGKILL。允许通过 env 跳过实际 mlock 调用,
-    // 本地默认行为不变。
-    const char* skip_mlock = std::getenv("EXECUTOR_TEST_NO_MLOCKALL");
-    if (skip_mlock && skip_mlock[0] != '\0' && skip_mlock[0] != '0') {
-        std::cout << "  SKIPPED (EXECUTOR_TEST_NO_MLOCKALL set)" << std::endl;
-        return true;
+    executor::RealtimeThreadConfig disabled_config;
+    TEST_ASSERT(!disabled_config.enable_process_memory_lock,
+                "Process-wide memory locking must be opt-in");
+
+    disabled_config.thread_name = "p002_disabled";
+    disabled_config.cycle_period_ns = 20'000'000;
+    disabled_config.timer_slack_ns = 0;
+    disabled_config.cycle_callback = [] {};
+    executor::RealtimeThreadExecutor disabled_executor("p002_disabled", disabled_config);
+    TEST_ASSERT(disabled_executor.start(), "Disabled memory-lock executor should start");
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    const auto disabled_status = disabled_executor.get_status();
+    disabled_executor.stop();
+    TEST_ASSERT(!disabled_status.process_memory_lock_applied,
+                "Explicitly disabled process lock must not report applied");
+    TEST_ASSERT(disabled_status.process_memory_lock_errno == 0,
+                "Disabled process lock must not report a failed mlockall call");
+
+#ifdef __linux__
+    struct rlimit original_limit {};
+    if (getrlimit(RLIMIT_MEMLOCK, &original_limit) == 0) {
+        struct rlimit denied_limit = original_limit;
+        denied_limit.rlim_cur = 0;
+        if (setrlimit(RLIMIT_MEMLOCK, &denied_limit) == 0) {
+            executor::RealtimeThreadConfig denied_config;
+            denied_config.enable_process_memory_lock = true;
+            denied_config.thread_name = "p002_denied";
+            denied_config.cycle_period_ns = 20'000'000;
+            denied_config.timer_slack_ns = 0;
+            denied_config.cycle_callback = [] {};
+            executor::RealtimeThreadExecutor denied_executor("p002_denied", denied_config);
+            TEST_ASSERT(denied_executor.start(), "Denied memory-lock executor should still start");
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+            const auto denied_status = denied_executor.get_status();
+            denied_executor.stop();
+            (void)setrlimit(RLIMIT_MEMLOCK, &original_limit);
+
+            if (!denied_status.process_memory_lock_applied) {
+                TEST_ASSERT(denied_status.process_memory_lock_errno != 0,
+                            "Rejected process lock must expose errno");
+            }
+        }
     }
+#endif
 
-    // CI 容器一般无 CAP_IPC_LOCK，可能返回 false；这里只断言不崩溃即可。
-    // 返回值用于消除未使用变量告警。
-    bool locked = try_mlock_current_thread();
-    std::cout << "  mlockall result: " << (locked ? "true (locked)" : "false (no permission, ok)")
-              << std::endl;
-
-    // 无论成功与否都不应崩溃或抛异常
     return true;
 }
 
@@ -110,13 +139,14 @@ bool test_default_config_is_optimal() {
     std::cout << "Testing RealtimeThreadConfig default-is-optimal values..." << std::endl;
 
     executor::RealtimeThreadConfig cfg;
-    TEST_ASSERT(cfg.enable_memory_lock == true,
-                "Default enable_memory_lock should be true (opt-out, facade philosophy)");
+    TEST_ASSERT(cfg.enable_process_memory_lock == false,
+                "Default enable_process_memory_lock should be false (process-wide opt-in)");
     TEST_ASSERT(cfg.timer_slack_ns == 1,
                 "Default timer_slack_ns should be 1 (1ns, opt-out by setting 0)");
     // thread_name 仍然 "", 不变
 
-    std::cout << "  enable_memory_lock default = " << cfg.enable_memory_lock << std::endl;
+    std::cout << "  enable_process_memory_lock default = "
+              << cfg.enable_process_memory_lock << std::endl;
     std::cout << "  timer_slack_ns default = " << cfg.timer_slack_ns << std::endl;
     return true;
 }
@@ -234,7 +264,7 @@ bool test_realtime_round_robin_auto_affinity() {
     for (int i = 0; i < kThreads; ++i) {
         executor::RealtimeThreadConfig cfg;
         cfg.cycle_period_ns = 20'000'000;  // avoid auto SCHED_FIFO in unprivileged CI
-        cfg.enable_memory_lock = false;    // test affinity only; mlockall is environment-dependent
+        cfg.enable_process_memory_lock = false; // test affinity only; mlockall is process-wide
         cfg.timer_slack_ns = 50000;        // keep CI timer behavior conservative
         // lambda runs on the RT worker thread; capture this thread's affinity
         cfg.thread_name = "p005_rt_" + std::to_string(i);
@@ -304,7 +334,7 @@ int main() {
 
     bool all_passed = true;
 
-    all_passed &= test_try_mlock_current_thread();
+    all_passed &= test_realtime_memory_lock_process_scoped_contract();
     all_passed &= test_set_current_thread_name();
     all_passed &= test_set_current_thread_timer_slack_ns();
     all_passed &= test_default_config_is_optimal();

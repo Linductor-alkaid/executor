@@ -204,7 +204,8 @@ private:
     std::atomic<int64_t> max_cycle_time_ns_{0};     // 最大周期执行时间（纳秒）
     std::atomic<bool> priority_applied_{false};
     std::atomic<bool> cpu_affinity_applied_{false};
-    std::atomic<bool> memory_locked_{false};
+    std::atomic<bool> process_memory_lock_applied_{false};
+    std::atomic<int> process_memory_lock_errno_{0};
     std::atomic<bool> timer_slack_applied_{false};
 
     // P-001 (260615): 背压可见性 — 始终累计, 与 enable_stats 无关.

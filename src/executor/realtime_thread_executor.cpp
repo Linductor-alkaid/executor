@@ -138,10 +138,13 @@ bool RealtimeThreadExecutor::start() {
                 std::memory_order_release);
         }
 
-        // 锁定内存，避免分页到 swap 引入抖动（默认开启，失败静默回退；用户可显式设 false 关闭）
-        if (config_.enable_memory_lock) {
-            memory_locked_.store(
-                util::try_mlock_current_thread(), std::memory_order_release);
+        // mlockall 是进程级操作，默认关闭，必须由调用方显式接受其资源影响。
+        if (config_.enable_process_memory_lock) {
+            const auto memory_lock_result = util::try_mlock_process_memory();
+            process_memory_lock_applied_.store(
+                memory_lock_result.applied, std::memory_order_release);
+            process_memory_lock_errno_.store(
+                memory_lock_result.error_code, std::memory_order_release);
         }
 
         // 设置线程名，便于 top/htop/perf 调试
@@ -516,7 +519,11 @@ RealtimeExecutorStatus RealtimeThreadExecutor::get_status() const {
     status.max_cycle_time_ns = static_cast<double>(max_cycle_time_ns_.load(std::memory_order_acquire));
     status.priority_applied = priority_applied_.load(std::memory_order_acquire);
     status.cpu_affinity_applied = cpu_affinity_applied_.load(std::memory_order_acquire);
-    status.memory_locked = memory_locked_.load(std::memory_order_acquire);
+    status.process_memory_lock_applied =
+        process_memory_lock_applied_.load(std::memory_order_acquire);
+    status.process_memory_lock_errno =
+        process_memory_lock_errno_.load(std::memory_order_acquire);
+    status.memory_locked = status.process_memory_lock_applied;
     status.timer_slack_applied = timer_slack_applied_.load(std::memory_order_acquire);
     // P-001 (260615): 背压可见性
     status.dropped_task_count = dropped_task_count_.load(std::memory_order_acquire);

@@ -13,7 +13,7 @@
 - **混合执行模式**
   线程池（普通并发任务）+ 专用实时线程（高实时性任务，如 CAN 通信、传感器采集）
 
-- **默认即最优 Facade（P019）**
+- **默认即最优 Facade**
   零配置用户自动获得当前平台下的最优行为：
   - **自适应线程数**（`min/max_threads` = 0 sentinel，`ExecutorManager` 初始化时探测 `hardware_concurrency()`，探测失败退到 (2, 4)）
   - **工作窃取默认开启**（无锁实现，`max_threads == 1` 时自动关闭）
@@ -22,14 +22,14 @@
   - **自适应实时线程优先级**（`thread_priority` = 0 → 自动建议：cycle ≤ 1 ms → 80，≤ 10 ms → 50，> 10 ms → 0）
   自动决策在平台探测或调优不可用时会退到安全默认，用户显式设值**始终保留**。任务失败、提交拒绝、丢任务和超时不属于调优失败，必须通过 future、返回值、状态计数或监控统计保持可观察；用户可以选择不响应，但库不能吞掉。
 
-- **软任务超时（P024）**
+- **软任务超时**
   `task_timeout_ms` 是执行前软超时：任务在队列中等待超过配置阈值后，worker 开始执行前会跳过该任务并递增 `timeout_count`。
   已经开始执行的任务不会被强制中断，因为 C++ 没有安全的线程强杀机制。
   长耗时任务应在任务内部自行检查取消条件或 deadline。
 
-- **Linux 实时性加固（P016 + P019-A）**
-  `RealtimeThreadConfig` 默认值已改为 opt-out：
-  - `enable_memory_lock`（默认 `true` — 尽力调用 `mlockall` 锁定内存避免分页抖动；平台不支持或权限不足时回退，不改变任务状态）
+- **Linux 实时性加固**
+  `RealtimeThreadConfig` 对进程内存锁采用保守语义：
+  - `enable_process_memory_lock`（默认 `false` — Linux `mlockall` 影响整个进程和后续映射；仅在完成内存预算评估后显式启用；拒绝原因见 `process_memory_lock_errno`）
   - `timer_slack_ns`（默认 `1` — 尽力设置 1 ns slack 以规避内核 50 µs 默认值；平台不支持或权限不足时回退；`0` 为显式 opt-out）
   - `thread_name`（仍为 `""` 默认 — 库不猜测用户业务命名）
   参考示例：`tests/test_realtime_hardening.cpp`

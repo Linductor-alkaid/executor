@@ -85,9 +85,9 @@ const bool queued = executor.try_push_realtime_task(
 
 ## 配置与降级
 
-默认配置会尽力申请实时优先级、CPU 亲和性、内存锁和低 timer slack。Linux 的 `SCHED_FIFO`、`mlockall`、容器 cpuset 和 Windows 调度能力可能受权限或平台限制；库会安全继续运行，但这不代表请求已生效。
+默认配置会尽力申请实时优先级、CPU 亲和性和低 timer slack。进程级内存锁默认关闭：Linux `mlockall` 会锁定整个进程和后续映射，只有在评估完整进程内存预算后才应启用 `enable_process_memory_lock`。Linux 的 `SCHED_FIFO`、`mlockall`、容器 cpuset 和 Windows 调度能力可能受权限或平台限制；库会安全继续运行，但这不代表请求已生效。
 
-部署时检查 `RealtimeExecutorStatus` 的 `priority_applied`、`cpu_affinity_applied`、`memory_locked` 和 `timer_slack_applied`，并结合 `cycle_timeout_count`、`dropped_task_count`、`queue_full_count` 与 `pool_exhausted_count` 设定告警。空 `cpu_affinity` 是自适应选择，显式配置则应由部署环境验证其有效性。
+部署时检查 `RealtimeExecutorStatus` 的 `priority_applied`、`cpu_affinity_applied`、`process_memory_lock_applied`、`process_memory_lock_errno` 和 `timer_slack_applied`，并结合 `cycle_timeout_count`、`dropped_task_count`、`queue_full_count` 与 `pool_exhausted_count` 设定告警。空 `cpu_affinity` 是自适应选择，显式配置则应由部署环境验证其有效性。
 
 ## 下一步阅读
 

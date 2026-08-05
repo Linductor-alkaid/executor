@@ -381,7 +381,7 @@ bool test_mixed_executor_shutdown() {
     RealtimeThreadConfig realtime_config;
     realtime_config.thread_name = "mixed_rt";
     realtime_config.cycle_period_ns = 1'000'000;
-    realtime_config.enable_memory_lock = false;
+    realtime_config.enable_process_memory_lock = false;
     realtime_config.timer_slack_ns = 0;
     realtime_config.cycle_callback = [] {};
     TEST_ASSERT(executor.register_realtime_task("mixed_rt", realtime_config),

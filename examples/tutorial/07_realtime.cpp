@@ -16,7 +16,7 @@ int main() {
     config.thread_name = "tutorial_rt";
     config.cycle_period_ns = 5'000'000;
     config.thread_priority = 0;
-    config.enable_memory_lock = false;
+    config.enable_process_memory_lock = false;
     config.timer_slack_ns = 0;
     config.cycle_callback = [&] { ++cycles; };
 

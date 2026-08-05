@@ -36,7 +36,7 @@ struct RealtimeThreadConfig {
     std::vector<int> cpu_affinity;                        // CPU亲和性 (空 = 自适应 sentinel: RealtimeThreadExecutor::start 时按 hw_concurrency 自动选核, 失败静默不绑; 显式设值尊重覆盖)
     std::function<void()> cycle_callback;                 // 周期回调函数
     ICycleManager* cycle_manager = nullptr;               // 可选的周期管理器接口（用于更精确的周期控制）
-    bool enable_memory_lock = true;                       // 默认开, mlockall 防分页抖动, 失败静默; 显式设 false 关闭
+    bool enable_process_memory_lock = false;              // 默认关闭；Linux mlockall 是进程级操作，会锁定当前及后续映射
     uint64_t timer_slack_ns = 1;                          // 默认 1ns, 几乎消除 50us 内核 timer slack; 显式设 0 表示保留内核默认
     // P-260618-002: 单周期任务预算. process_tasks() 每周期最多处理这么多个任务,
     // 防止生产速率短暂超过消费速率时单周期一口气耗尽整条队列, 打破"周期确定性"契约

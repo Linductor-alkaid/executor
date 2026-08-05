@@ -24,7 +24,7 @@ description: 核对编译产物、CPU 可用范围、实时调度、内存锁定
 | CMake 生成器 | 通常为单配置 | Visual Studio 通常为多配置，构建和 CTest 要指定 `Release` |
 | 实时优先级 | `SCHED_FIFO` 1–99，需要系统授权 | 映射到 `SetThreadPriority` 等级，不等价于 Linux `SCHED_FIFO` |
 | CPU 亲和性 | 当前线程允许的 cpuset 内选择 | `SetThreadAffinityMask`；当前实现使用单个 64 位 mask |
-| 内存锁定 | `mlockall(MCL_CURRENT \| MCL_FUTURE)` | 没有等价实现，`memory_locked` 预期为 false |
+| 内存锁定 | 显式 opt-in 的 `mlockall(MCL_CURRENT \| MCL_FUTURE)`，影响整个进程和后续映射 | 没有等价实现，`process_memory_lock_applied` 预期为 false |
 | timer slack | `PR_SET_TIMERSLACK` | 没有 per-thread 等价实现，`timer_slack_applied` 预期为 false |
 | 短周期计时 | Linux 单调时钟与 timer slack | 周期短于 20ms 时，线程生命周期内请求 1ms timer period |
 
@@ -71,7 +71,7 @@ grep -E 'Cpus_allowed_list|Mems_allowed_list' /proc/self/status
 
 - `taskset -pc $$` 与 `Cpus_allowed_list` 给出当前进程真正允许使用的 CPU；容器中的 CPU 编号不一定从 0 开始。
 - `ulimit -r` 是当前 shell 可申请的实时优先级上限。请求 `SCHED_FIFO` 但没有足够的 `RLIMIT_RTPRIO` 或 `CAP_SYS_NICE` 时，线程仍可运行，但 `priority_applied=false`。
-- `ulimit -l` 是可锁内存上限，通常以 KiB 显示。上限不足且没有 `CAP_IPC_LOCK` 时，`mlockall` 会失败，`memory_locked=false`。
+- `ulimit -l` 是可锁内存上限，通常以 KiB 显示。显式请求进程级 `mlockall` 时，上限不足或没有 `CAP_IPC_LOCK` 会导致失败；检查 `process_memory_lock_applied` 和 `process_memory_lock_errno`。
 - `Mems_allowed_list` 用于确认容器或 NUMA 策略是否限制了可用内存节点；它不是 Executor 配置字段，但会影响实际抖动和局部性。
 
 如果程序文件通过 capability 获权，可核对：
@@ -112,7 +112,7 @@ Get-Process -Id $PID |
 
 - `SetThreadPriority` 是 Windows 调度提示，与 Linux `SCHED_FIFO` 的保证和数值范围不同；不要复用同一套优先级验收阈值。
 - 当前亲和性实现使用一个 64 位 mask。超过 64 个逻辑处理器或涉及 processor groups 的主机，不能假设一个 `cpu_affinity` 列表覆盖全机；必须在目标硬件上验证。
-- `memory_locked=false` 和 `timer_slack_applied=false` 是当前 Windows 实现的预期结果，不代表注册失败。
+- `process_memory_lock_applied=false` 和 `timer_slack_applied=false` 是当前 Windows 实现的预期结果，不代表注册失败。
 - 短周期实时线程会在其生命周期内请求 1ms timer period；这可能增加系统功耗，停止线程后会恢复请求。
 - 线程名称依赖 `SetThreadDescription`，目标系统应为 Windows 10 1607 或更高版本；名称只用于诊断，不影响任务正确性。
 
@@ -130,7 +130,8 @@ std::cout
     << ", period_ns=" << status.cycle_period_ns
     << ", priority=" << status.priority_applied
     << ", affinity=" << status.cpu_affinity_applied
-    << ", memory=" << status.memory_locked
+    << ", process_memory_lock=" << status.process_memory_lock_applied
+    << ", process_memory_lock_errno=" << status.process_memory_lock_errno
     << ", timer_slack=" << status.timer_slack_applied
     << ", cycles=" << status.cycle_count
     << ", cycle_timeouts=" << status.cycle_timeout_count
@@ -147,7 +148,7 @@ std::cout
 | 只需跨平台后台周期 | `is_running=true`、`cycle_count` 增长、退出在预算内；调优字段可为 false。 |
 | Linux 需要固定 CPU | `cpu_affinity_applied=true`，配置 CPU 属于进程允许 cpuset，并通过系统工具复核。 |
 | Linux 需要实时调度 | `priority_applied=true`，同时在目标负载下验证尾延迟和 jitter。 |
-| Linux 需要防分页抖动 | `memory_locked=true`，并验证进程内存峰值不会突破部署预算。 |
+| Linux 需要防分页抖动 | 显式设定 `enable_process_memory_lock=true`，要求 `process_memory_lock_applied=true`，并验证整个进程内存峰值不会突破部署预算。 |
 | Windows 短周期控制 | `is_running=true`、周期统计达标；不要求 Linux 专属的 memory/timer-slack 状态。 |
 
 调优字段为 false 时，库会安全继续运行并记录 tuning fallback。是否允许继续接流量必须由业务需求决定：后台刷新可以降级，硬性控制预算则应让健康检查失败。

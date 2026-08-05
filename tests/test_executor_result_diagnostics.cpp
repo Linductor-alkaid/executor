@@ -21,7 +21,7 @@ RealtimeThreadConfig make_rt_config(const std::string& thread_name) {
     config.thread_name = thread_name;
     config.cycle_period_ns = 5'000'000;
     config.thread_priority = 0;
-    config.enable_memory_lock = false;
+    config.enable_process_memory_lock = false;
     config.timer_slack_ns = 0;
     config.cycle_callback = []() {};
     return config;

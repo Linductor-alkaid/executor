@@ -163,7 +163,8 @@ void BlockingIoExecutor::run(std::stop_token stop_token) noexcept {
             std::memory_order_release);
     }
     if (config_.enable_memory_lock) {
-        memory_locked_.store(util::try_mlock_current_thread(), std::memory_order_release);
+        memory_locked_.store(
+            util::try_mlock_process_memory().applied, std::memory_order_release);
     }
 
     ready_.store(true, std::memory_order_release);

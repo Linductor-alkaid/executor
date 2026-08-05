@@ -454,7 +454,7 @@ WorkerHandle start_worker(BlockingWorkerSpec spec);
 | --- | --- |
 | `BlockingIoConfig::thread_name` | 必填的线程名称 |
 | `cpu_affinity` | 可选 affinity；空值保持 OS 调度 |
-| `enable_memory_lock` | 默认 `false`；仅在显式请求时尝试锁定内存 |
+| `enable_memory_lock` | 默认 `false`；仅在显式请求时尝试进程级 `mlockall`，会影响当前和后续进程映射 |
 | `startup_timeout` | 默认 1000 ms；`0` 不等待 ready，正值限制启动等待 |
 | `BlockingIoExecutorStatus::ready` | executor 线程已建立并完成线程属性设置；不表示协议、设备或业务数据已就绪 |
 | `wakeup_count` | executor 调用 worker `wakeup()` 的累计次数 |
@@ -1014,7 +1014,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 - `ThreadPoolConfig.min_threads` / `max_threads` = 0（sentinel，自适应）
 - `ThreadPoolConfig.enable_work_stealing` = `true`（默认开）
 - `ThreadPoolConfig.cpu_affinity` 空 → auto-allocate [0..hw-1]
-- `RealtimeThreadConfig.enable_memory_lock` = `true`（尽力调用 mlockall；不可用或权限不足时安全回退）
+- `RealtimeThreadConfig.enable_process_memory_lock` = `false`（默认不调用进程级 `mlockall`；仅在显式启用并接受其资源影响时请求）
 - `RealtimeThreadConfig.timer_slack_ns` = 1（尽力设置 1 ns；不可用或权限不足时安全回退）
 - `RealtimeThreadConfig.cpu_affinity` 空 → 通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；若可用 CPU 数量 <= 1，则不设置亲和性
 - `RealtimeThreadConfig.thread_priority` = 0 → 自适应按 `cycle_period_ns` 建议
@@ -1050,7 +1050,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
 | `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |
-| `enable_memory_lock` | `bool` | 是否尽力调用 `mlockall` 锁定内存（避免分页抖动）；默认 `true`（opt-out，不可用或权限不足时安全回退） |
+| `enable_process_memory_lock` | `bool` | 是否显式请求 Linux `mlockall(MCL_CURRENT \| MCL_FUTURE)`；这是进程级操作，会锁定当前映射及后续映射，默认 `false`。权限或 `RLIMIT_MEMLOCK` 不足时安全回退，并在状态中报告 errno。 |
 | `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，尽力设置，不可用或权限不足时安全回退）；`0` = 显式 opt-out 保留内核默认 |
 
 ### 7.3 状态与统计类型
@@ -1065,7 +1065,9 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `cycle_timeout_count` (int64_t)：超时周期计数。
   - `avg_cycle_time_ns` (double)：平均周期执行时间（纳秒）。
   - `max_cycle_time_ns` (double)：最大周期执行时间（纳秒）。
-  - `priority_applied` / `cpu_affinity_applied` / `memory_locked` / `timer_slack_applied` (bool)：请求的实时优先级、CPU 亲和性、内存锁定和 timer slack 是否成功应用；未请求或平台不支持/权限不足时为 `false`，用于将调优降级显式上报。
+  - `priority_applied` / `cpu_affinity_applied` / `timer_slack_applied` (bool)：请求的实时优先级、CPU 亲和性和 timer slack 是否成功应用；未请求或平台不支持/权限不足时为 `false`，用于将调优降级显式上报。
+  - `process_memory_lock_applied` (bool)：显式请求的进程级 `mlockall` 是否成功应用；未请求、平台不支持或权限不足时为 `false`。`memory_locked` 是同值的兼容字段，新代码应使用此字段。
+  - `process_memory_lock_errno` (int)：请求 `mlockall` 失败时保留的 errno；未请求或成功时为 `0`，例如权限或 `RLIMIT_MEMLOCK` 限制可据此诊断。
   - `dropped_task_count` (uint64_t)：总拒绝/丢弃量，覆盖空任务、未运行/已停止、对象池耗尽和队列满四类来源；**始终累计**，不受 `enable_stats` 影响。它不等同于背压：背压仅由 `pool_exhausted_count` 和 `queue_full_count` 构成；应单独分析 `rejected_not_running_count` 与 `rejected_empty_task_count`，以区分生命周期状态拒绝和无效输入。
   - `failed_pushes` (uint64_t)：LockFreeQueue 所有底层失败入队尝试数（仅 `enable_stats=true` 时统计），包括队列满、CAS 竞争和 reservation 取消；它不等同于也不一定是 `dropped_task_count` 的子集。
   - `peak_queue_size` (uint64_t)：队列峰值长度（仅 `enable_stats=true`）。
