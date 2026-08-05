@@ -178,7 +178,8 @@ export default defineConfig({
     }
   },
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/executor.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/executor/executor.svg?v=1', sizes: 'any' }],
+    ['link', { rel: 'shortcut icon', type: 'image/svg+xml', href: '/executor/executor.svg?v=1' }],
     ['meta', { name: 'theme-color', content: '#181d26' }]
   ],
   themeConfig: {
