@@ -34,14 +34,16 @@ future.get();
 
 ## 默认选择规则
 
-调度器按以下顺序决定：
+`Executor` 的公开自动路由目前只会使用显式偏好和阈值：Facade 不会在任务完成后向其内部 `GpuScheduler` 写入性能记录，因此即使开启 `enable_adaptive`，也没有可供自动路由使用的历史样本。
+
+`GpuScheduler` 本身在拥有调用方提供的历史时按以下顺序决定：
 
 1. `TaskCharacteristics::prefer_gpu` 为真时选择 GPU。
 2. 启用自适应调度且相似任务的 CPU/GPU 历史各至少有两条时，选择预测耗时更短的一侧。
 3. 否则，当数据大小达到 `data_size_threshold`（默认 1 MiB）且计算强度达到 `compute_intensity_threshold`（默认 2.0）时选择 GPU。
 4. 其余情况选择 CPU。
 
-`CpuGpuTask` 以 `data_size`、`compute_intensity` 和 `prefer_gpu()` 传递任务特征；调度器仍按显式 GPU 偏好、自适应历史和阈值选择候选。GPU 必须已注册、运行、无后端错误且未达到已知硬容量，才会进入候选。
+`CpuGpuTask` 以 `data_size`、`compute_intensity` 和 `prefer_gpu()` 传递任务特征；Facade 的实际选择依赖显式 GPU 偏好和阈值。GPU 必须已注册、运行、无后端错误且未达到已知硬容量，才会进入候选。
 
 ## 兼容路径：legacy 四参数 overload
 
@@ -75,7 +77,7 @@ config.history_size = 200;
 executor.update_scheduler_config(config);
 ```
 
-阈值应来自真实基准而非直觉。自适应历史只有在应用记录了具有代表性的 CPU/GPU 性能后才有意义；变更硬件、驱动、数据形状或 kernel 后应重新收集数据。调度配置是策略，不替代后端可用性检查和任务级异常处理。
+阈值应来自真实基准而非直觉。`GpuScheduler::record_performance()` 可用于调用方自行维护的调度器，但当前 `Executor` 没有公开接口将这些样本写入其内部调度器；不要把 `enable_adaptive` 当作 Facade 已自动学习的能力。变更硬件、驱动、数据形状或 kernel 后应重新校准阈值。调度配置是策略，不替代后端可用性检查和任务级异常处理。
 
 ## 下一步阅读
 

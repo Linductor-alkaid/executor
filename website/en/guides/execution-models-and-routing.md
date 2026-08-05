@@ -89,7 +89,7 @@ Matching proceeds as follows:
 
 1. With `preferred_executor("cuda0")`, only the GPU named `cuda0` is queried. A missing, unregistered, stopped, GPU-incapable, or known-full target never changes to another GPU.
 2. Without a name, a candidate exists only when the registry has **exactly one** GPU; zero or multiple GPUs cannot be resolved automatically.
-3. For a submit-capable candidate, `prefer_gpu(true)` chooses GPU first; otherwise adaptive history (at least two comparable samples per side), then data-size and compute-intensity thresholds decide CPU or GPU.
+3. For a submit-capable candidate, `prefer_gpu(true)` chooses GPU first; the current Facade does not record performance samples, so it otherwise uses data-size and compute-intensity thresholds. `GpuScheduler` adaptive history applies only to a scheduler the caller maintains and populates.
 4. `RequireRequestedBackend` skips these heuristics and requires the named GPU to be submit-capable; a missing name rejects.
 5. `AllowCpu` uses default CPU when GPU is unavailable, stopped, known-full, or rejects the actual submission, recording `fell_back = true`. `NoFallback` makes the future ready with an exception.
 
@@ -137,7 +137,7 @@ for (const auto& capability : executor.get_executor_capabilities()) {
 }
 ```
 
-Use `backend`, `name`, `registered`, `running`, `supports_future_submission`, `supports_bounded_dispatch`, `supports_gpu_kernel`, `pending_work`, and `capacity_hint` for diagnostics or a configuration UI. The snapshot is not a reservation: a submission must still handle rejection after it reports availability.
+Use `backend`, `name`, `registered`, `running`, `supports_future_submission`, `supports_bounded_dispatch`, `supports_gpu_kernel`, `pending_work`, and `capacity_hint` for diagnostics or a configuration UI. `pending_work` is currently always `0` for realtime backends because their status API has no instantaneous queue-depth snapshot; assess realtime backlog through drop, queue-full, and cycle-timeout counters. The snapshot is not a reservation: a submission must still handle rejection after it reports availability.
 
 ## Read one routing decision
 

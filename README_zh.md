@@ -281,7 +281,7 @@ target_link_libraries(myapp PRIVATE executor::executor)
 
 ## 版本
 
-当前版本：**v0.3.0**
+当前版本：**v0.3.1**
 
 变更记录见 [CHANGELOG.md](CHANGELOG.md)
 

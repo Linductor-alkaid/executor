@@ -284,7 +284,7 @@ Full JSON: [docs/optimization/realtime_precision_windows.json](docs/optimization
 
 ## Version
 
-Current version: **v0.3.0**
+Current version: **v0.3.1**
 
 See [CHANGELOG.md](CHANGELOG.md) for the change log.
 

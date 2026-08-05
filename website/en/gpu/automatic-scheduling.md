@@ -34,14 +34,16 @@ future.get();
 
 ## Default selection rules
 
-The scheduler decides in order:
+The public `Executor` routing path currently uses only explicit preference and thresholds: the Facade does not record completion timings into its internal `GpuScheduler`, so enabling `enable_adaptive` supplies no history for automatic routing.
+
+`GpuScheduler` itself decides in this order when it owns caller-supplied history:
 
 1. Choose GPU when `TaskCharacteristics::prefer_gpu` is true.
 2. With adaptive scheduling enabled and at least two CPU and two GPU history samples for similar work, choose the side with lower predicted time.
 3. Otherwise choose GPU when data size meets `data_size_threshold` (default 1 MiB) and compute intensity meets `compute_intensity_threshold` (default 2.0).
 4. Choose CPU otherwise.
 
-`CpuGpuTask` supplies `data_size`, `compute_intensity`, and `prefer_gpu()` task characteristics. A GPU enters the candidate set only when it is registered, running, error-free, and below known hard capacity.
+`CpuGpuTask` supplies `data_size`, `compute_intensity`, and `prefer_gpu()` task characteristics. The Facade's actual choice uses explicit GPU preference and thresholds. A GPU enters the candidate set only when it is registered, running, error-free, and below known hard capacity.
 
 ## Compatibility path: legacy four-argument overload
 
@@ -76,6 +78,6 @@ config.history_size = 200;
 executor.update_scheduler_config(config);
 ```
 
-Thresholds come from real benchmarks, not intuition. Adaptive history is useful only after representative CPU/GPU performance is recorded; recollect after changing hardware, driver, data shape, or kernel. Scheduling policy does not replace backend availability checks or task-level exception handling.
+Thresholds come from real benchmarks, not intuition. `GpuScheduler::record_performance()` can support a scheduler maintained by the caller, but `Executor` currently exposes no way to write those samples into its internal scheduler; do not treat `enable_adaptive` as Facade learning. Recalibrate thresholds after changing hardware, driver, data shape, or kernel. Scheduling policy does not replace backend availability checks or task-level exception handling.
 
 For stream, resource, or multi-device control, use the advanced interfaces deliberately; complete fields and semantics remain in the [API reference](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md).

@@ -89,7 +89,7 @@ auto future = executor.submit_auto(std::move(work));
 
 1. `preferred_executor("cuda0")` 时，只查询名为 `cuda0` 的 GPU；名称不存在、未注册、未运行、缺少 GPU 提交能力或达到已知 capacity hint 时，不会换到别的 GPU。
 2. 未填写名称时，只有注册表中**恰好一个** GPU 才能成为候选；零个或多个 GPU 都无法自动决定目标。
-3. 对可提交 GPU，`prefer_gpu(true)` 优先选择 GPU；否则自适应历史（每侧至少两个同类样本）优先，再用数据量与计算强度阈值决定 CPU/GPU。
+3. 对可提交 GPU，`prefer_gpu(true)` 优先选择 GPU；当前 Facade 不会自动记录性能样本，因此其余情况按数据量与计算强度阈值决定 CPU/GPU。`GpuScheduler` 的自适应历史仅适用于调用方自行维护并记录样本的调度器。
 4. `RequireRequestedBackend` 跳过上述启发式，要求指定 GPU 可提交；没有名称即拒绝。
 5. `AllowCpu` 在 GPU 不可用、未运行、已知容量不足或实际 GPU 提交被拒绝时改走默认 CPU，并在决策中写 `fell_back = true`。`NoFallback` 则让 future 以异常就绪。
 
@@ -137,7 +137,7 @@ for (const auto& capability : executor.get_executor_capabilities()) {
 }
 ```
 
-用 `backend`、`name`、`registered`、`running`、`supports_future_submission`、`supports_bounded_dispatch`、`supports_gpu_kernel`、`pending_work` 和 `capacity_hint` 构建诊断或配置 UI。不要把这份快照当 reservation：显示可用后，实际投递仍必须处理拒绝。
+用 `backend`、`name`、`registered`、`running`、`supports_future_submission`、`supports_bounded_dispatch`、`supports_gpu_kernel`、`pending_work` 和 `capacity_hint` 构建诊断或配置 UI。`pending_work` 对实时后端目前恒为 `0`，因为状态 API 不提供瞬时队列深度；实时积压应以 drop、队列满和周期超时计数判断。不要把这份快照当 reservation：显示可用后，实际投递仍必须处理拒绝。
 
 ## 如何读取一次路由
 
