@@ -15,6 +15,7 @@ export default defineConfig({
       title: 'Executor Guide',
       description: 'Build reliable C++ concurrent programs from your first task.',
       themeConfig: {
+        logo: '/executor.svg',
         siteTitle: 'Executor Guide',
         nav: [
           { text: 'Quick Start', link: '/en/quick-start/build' },
@@ -177,10 +178,11 @@ export default defineConfig({
     }
   },
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/executor-mark.svg' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/executor.svg' }],
     ['meta', { name: 'theme-color', content: '#181d26' }]
   ],
   themeConfig: {
+    logo: '/executor.svg',
     siteTitle: 'Executor 使用手册',
     nav: [
       { text: '快速开始', link: '/zh/quick-start/build' },

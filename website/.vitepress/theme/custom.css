@@ -30,6 +30,12 @@
 .language-switch { display: inline-flex; align-items: center; min-height: 40px; padding: 0 10px; color: var(--vp-c-text-2); font-size: 14px; font-weight: 500; white-space: nowrap; }
 .language-switch:active { color: var(--vp-c-text-1); }
 .VPNavBarTitle .title { font-weight: 500; }
+.VPNavBarTitle .logo {
+  width: 28px;
+  height: 28px;
+  max-width: 28px;
+  max-height: 28px;
+}
 .VPSidebarItem.is-link.is-active > .item {
   margin: 2px -12px;
   width: calc(100% + 24px);
