@@ -224,11 +224,22 @@ bool RealtimeThreadExecutor::stop_and_join() {
             return false;
         }
 
+        // A concurrent external caller must wait for the thread owner to join,
+        // drain accepted pushes, and publish stop completion.  In particular,
+        // it must not clear stopping_ while that finalization is still active.
+        if (stop_finalization_in_progress_) {
+            stop_completion_cv_.wait(lock, [this] {
+                return !stop_finalization_in_progress_;
+            });
+            return true;
+        }
+
         stopping_.store(true, std::memory_order_release);
         running_.store(false, std::memory_order_release);
         stop_cycle = config_.cycle_manager &&
                      cycle_manager_active_.load(std::memory_order_acquire);
         if (thread_.joinable()) {
+            stop_finalization_in_progress_ = true;
             joiner = std::move(thread_);
         }
     }
@@ -259,6 +270,8 @@ bool RealtimeThreadExecutor::stop_and_join() {
     drain_stopped_queue();
     cycle_manager_active_.store(false, std::memory_order_release);
     stopping_.store(false, std::memory_order_release);
+    stop_finalization_in_progress_ = false;
+    stop_completion_cv_.notify_all();
     return true;
 }
 

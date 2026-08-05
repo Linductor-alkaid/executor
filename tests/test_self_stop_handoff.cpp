@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <future>
 #include <memory>
@@ -94,6 +95,68 @@ TEST(SelfStopHandoff, ConcurrentStopFromTwoExternalThreads) {
 
     EXPECT_TRUE(first_result);
     EXPECT_TRUE(second_result);
+}
+
+TEST(RealtimeConcurrentStop, StartRejectedUntilJoinCompletes) {
+    executor::RealtimeThreadConfig config;
+    config.thread_name = "concurrent_stop_rt";
+    config.cycle_period_ns = 1'000'000;
+
+    std::mutex callback_mutex;
+    std::condition_variable callback_cv;
+    bool release_callback = false;
+    std::atomic<bool> callback_notified{false};
+    std::promise<void> callback_entered;
+    auto callback_entered_future = callback_entered.get_future();
+    config.cycle_callback = [&] {
+        if (!callback_notified.exchange(true, std::memory_order_acq_rel)) {
+            callback_entered.set_value();
+        }
+        std::unique_lock<std::mutex> lock(callback_mutex);
+        callback_cv.wait(lock, [&] { return release_callback; });
+    };
+
+    executor::RealtimeThreadExecutor executor("concurrent_stop_rt", config);
+    ASSERT_TRUE(executor.start());
+    ASSERT_EQ(callback_entered_future.wait_for(1s), std::future_status::ready);
+
+    std::promise<bool> first_stop_result;
+    auto first_stop_future = first_stop_result.get_future();
+    std::thread first_stopper([&] {
+        first_stop_result.set_value(executor.stop_and_join());
+    });
+
+    const auto stopping_deadline = std::chrono::steady_clock::now() + 1s;
+    while (executor.get_status().is_running &&
+           std::chrono::steady_clock::now() < stopping_deadline) {
+        std::this_thread::yield();
+    }
+    ASSERT_FALSE(executor.get_status().is_running);
+
+    std::promise<bool> second_stop_result;
+    auto second_stop_future = second_stop_result.get_future();
+    std::thread second_stopper([&] {
+        second_stop_result.set_value(executor.stop_and_join());
+    });
+
+    EXPECT_EQ(second_stop_future.wait_for(50ms), std::future_status::timeout);
+    EXPECT_FALSE(executor.start());
+
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex);
+        release_callback = true;
+    }
+    callback_cv.notify_one();
+
+    EXPECT_EQ(first_stop_future.wait_for(1s), std::future_status::ready);
+    EXPECT_EQ(second_stop_future.wait_for(1s), std::future_status::ready);
+    EXPECT_TRUE(first_stop_future.get());
+    EXPECT_TRUE(second_stop_future.get());
+    first_stopper.join();
+    second_stopper.join();
+
+    EXPECT_TRUE(executor.start());
+    EXPECT_TRUE(executor.stop_and_join());
 }
 
 // 自停止后剩余任务被丢弃:任务 A 在内部调 stop(),后续任务 B 不应再执行,

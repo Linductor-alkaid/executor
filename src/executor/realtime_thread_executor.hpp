@@ -13,6 +13,7 @@
 #include <chrono>
 #include <functional>
 #include <cstdint>
+#include <condition_variable>
 #include <mutex>
 #include <utility>
 
@@ -180,7 +181,9 @@ private:
     // ICycleManager method while holding it because managers may synchronously
     // invoke a callback that calls stop_and_join().
     std::mutex stop_mutex_;
+    std::condition_variable stop_completion_cv_;
     std::atomic<bool> stopping_{false};
+    bool stop_finalization_in_progress_{false};
     std::atomic<bool> cycle_manager_active_{false};
     std::atomic<bool> self_stop_requested_{false};
     std::atomic<uint32_t> in_flight_pushes_{0};      // 正在进入队列的 push_task_ex 调用

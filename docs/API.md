@@ -637,7 +637,7 @@ if (status.ready_count > status.queue_capacity / 2) {
 | 批量统计 | 每次成功的 `push_tasks_batch` 调用会令 `get_queue_stats().batch_pushes` 递增 1，`total_pushes` 递增 `count`（P-260623-004：与队列 batch 统计语义一致） |
 | 空任务统计 | 空任务属于提交拒绝，不进入队列，不增加 `processed_count()` 或 `exception_count()`；可通过 `rejected_empty_count()` 或 `get_queue_stats().rejected_empty_count` 观察 |
 
-#### Backoff multiplier
+#### 退避倍率
 
 `LockFreeTaskExecutor` 将 `backoff_multiplier` 传递给底层 `LockFreeQueue`，用于放大 CAS 失败后的 pause 退避次数。
 
@@ -645,7 +645,7 @@ if (status.ready_count > status.queue_capacity / 2) {
 - 最大值为 `LockFreeQueue::kMaxBackoffMultiplier`，当前为 `1u << 20`（`1048576`）。
 - 大于最大值的输入会被钳制到 `LockFreeQueue::kMaxBackoffMultiplier`，避免内部 `backoff * backoff_multiplier` 算术溢出并保持退避窗口有界。
 
-#### MPSC reservation back-pressure contract
+#### MPSC 预留反压契约
 
 底层 MPSC 队列采用**策略 (b)：保留取消恢复**。生产者取得槽位后，消费者会在该槽位仍为 `Reserved` 时最多 `yield` 64 次（`LockFreeQueue::kDefaultReservationWaitYields`）；若生产者仍未进入不可中断的写入窗口，消费者会显式将该槽位标记为取消并继续推进队列。因而 `push_task()` / `push_tasks_batch()` 可以在这个窗口返回 `false`，即使调用方已经获得了任务 wrapper；调用方必须把 `false` 当作未接受提交并自行重试、回收或降级处理。
 
@@ -1439,13 +1439,13 @@ public:
 };
 ```
 
-`noexcept(false)` is explicit: manager implementations may throw, but
-`RealtimeThreadExecutor` catches the exception, increments
-`RealtimeExecutorStatus::cycle_manager_error_count`, and falls back or returns
-normally. `stop_cycle()` is invoked without the executor lifecycle mutex held;
-therefore a registered cycle callback may safely call `stop()` or
-`stop_and_join()` on that executor. Implementations must still make their own
-callback and stop state thread-safe.
+显式标注 `noexcept(false)`，表示周期管理器的实现可以抛出异常；
+`RealtimeThreadExecutor` 会捕获异常、递增
+`RealtimeExecutorStatus::cycle_manager_error_count`，然后回退或正常返回。
+调用 `stop_cycle()` 时不会持有执行器的生命周期互斥锁，因此已注册的周期回调可安全地在该执行器上调用
+`stop()` 或 `stop_and_join()`。周期管理器的实现仍须自行保证其回调和停止状态的线程安全。
+
+多个外部线程可以并发调用 `RealtimeThreadExecutor::stop_and_join()`。取得工作线程所有权的调用方负责完成停止收尾；其他调用方会等待其完成工作线程 join、等待正在进行的任务提交结束并清空已排队任务。停止收尾完成前，`start()` 返回 `false`，从而避免新建的实时线程与正在停止的工作线程重叠运行。
 
 ### 9.2 使用场景
 
@@ -1587,9 +1587,7 @@ private:
 };
 ```
 
-`SimpleCycleManager` owns each worker thread. `stop_cycle()` signals and joins the
-matching worker; its destructor signals and joins every remaining worker before
-destroying callbacks or synchronization state.
+`SimpleCycleManager` 负责管理每个工作线程。`stop_cycle()` 会向对应工作线程发出停止信号并执行 join；析构函数会在销毁回调或同步状态前，向所有尚未停止的工作线程发出停止信号并完成 join。
 
 ### 9.4 注入到实时线程配置
 
