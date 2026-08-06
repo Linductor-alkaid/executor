@@ -25,6 +25,8 @@ namespace {
 
 std::atomic<int> write_enqueue_count{0};
 std::atomic<int> copy_enqueue_count{0};
+std::atomic<int> finish_count{0};
+std::atomic<cl_int> finish_result{CL_SUCCESS};
 std::atomic<std::uintptr_t> next_buffer{0x5};
 
 cl_int fake_cl_get_platform_ids(cl_uint num_entries,
@@ -148,7 +150,8 @@ cl_int fake_cl_enqueue_copy_buffer(cl_command_queue,
 }
 
 cl_int fake_cl_finish(cl_command_queue) {
-    return CL_SUCCESS;
+    finish_count.fetch_add(1);
+    return finish_result.load();
 }
 
 cl_int fake_cl_flush(cl_command_queue) {
@@ -185,6 +188,8 @@ public:
         loader_.functions_ = functions;
         write_enqueue_count = 0;
         copy_enqueue_count = 0;
+        finish_count = 0;
+        finish_result = CL_SUCCESS;
     }
 
     ~FakeOpenCLLoaderScope() {
@@ -313,4 +318,28 @@ TEST(OpenCLCopyValidation, DeviceToDeviceRejectsSmallerSourceOrDestination) {
     EXPECT_FALSE(executor.copy_device_to_device(small, large, 2048));
     EXPECT_TRUE(contains(executor.get_status().last_error_message, "destination"));
     EXPECT_EQ(copy_enqueue_count.load(), 0);
+}
+
+TEST(OpenCLCopyDeviceToDevice, HonorsAsync) {
+    FakeOpenCLLoaderScope fake_loader;
+    OpenCLExecutor executor("opencl_device_copy_async", make_opencl_config());
+    ASSERT_TRUE(executor.start()) << executor.get_status().last_error_message;
+
+    void* source = executor.allocate_device_memory(1024);
+    void* destination = executor.allocate_device_memory(1024);
+    ASSERT_NE(source, nullptr);
+    ASSERT_NE(destination, nullptr);
+
+    EXPECT_TRUE(executor.copy_device_to_device(destination, source, 1024, false));
+    EXPECT_EQ(copy_enqueue_count.load(), 1);
+    EXPECT_EQ(finish_count.load(), 1);
+
+    EXPECT_TRUE(executor.copy_device_to_device(destination, source, 1024, true));
+    EXPECT_EQ(copy_enqueue_count.load(), 2);
+    EXPECT_EQ(finish_count.load(), 1);
+
+    finish_result = CL_INVALID_COMMAND_QUEUE;
+    EXPECT_FALSE(executor.copy_device_to_device(destination, source, 1024, false));
+    EXPECT_EQ(finish_count.load(), 2);
+    EXPECT_TRUE(contains(executor.get_status().last_error_message, "clFinish"));
 }

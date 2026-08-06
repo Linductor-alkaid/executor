@@ -530,7 +530,13 @@ bool OpenCLExecutor::copy_device_to_device(void* dst, const void* src, size_t si
         queue_wrapper->queue, src_it->second.buffer, dst_it->second.buffer,
         0, 0, size, 0, nullptr, nullptr);
 
-    return check_opencl_error(err, "clEnqueueCopyBuffer");
+    if (!check_opencl_error(err, "clEnqueueCopyBuffer")) {
+        return false;
+    }
+    if (!async) {
+        return check_opencl_error(funcs.clFinish(queue_wrapper->queue), "clFinish");
+    }
+    return true;
 }
 
 bool OpenCLExecutor::copy_from_peer(IGpuExecutor* src_executor, const void* src_ptr,

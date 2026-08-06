@@ -1346,7 +1346,7 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 
 通过 `get_gpu_executor(name)` 获取指针后，可调用：该指针为非持有高级接口，不能跨或并发于 `shutdown()` 使用。直接使用 `ExecutorManager` 的集成应改取 `get_gpu_executor_snapshot(name)` 并在操作期间持有返回的 `std::shared_ptr`；快照不阻止执行器停止，仍要处理提交 future 和状态中的停止失败。
 
-- **内存**：`allocate_device_memory`、`free_device_memory`；`copy_to_device`、`copy_to_host`、`copy_device_to_device`（均支持异步与流 ID）
+- **内存**：`allocate_device_memory`、`free_device_memory`；`copy_to_device`、`copy_to_host`、`copy_device_to_device`（均支持异步与流 ID）。`async=false` 在返回前完成指定流中的复制；`async=true` 仅入队，调用方必须在操作完成前保持相关设备缓冲区有效（主机参与的异步复制还必须保持主机缓冲区有效），随后通过 `synchronize_stream`、`synchronize` 或 `wait_for_completion` 等待完成。
 - **统一内存**：`allocate_unified_memory`、`free_unified_memory`、`prefetch_memory`（host / device 方向均可）
 - **P2P 传输**：`copy_from_peer`（跨 GPU 设备对等拷贝）
 - **批量执行**：`submit_kernels_batch`（一次性提交一组 kernel+config，返回等长 `std::vector<std::future<void>>`；关停时每个输入均保证返回一个 future，详见 P-001 commit）
