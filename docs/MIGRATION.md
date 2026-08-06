@@ -19,6 +19,7 @@
 - 已验证的 MPSC 单消费者路径使用 `dispatch_auto()` + `LowLatency`，周期实时工作使用 `dispatch_auto()` + `RealtimeQueue`。两者必须指定已启动后端，返回的 `DispatchResult` 仅表示接收，不表示完成。
 - 长期可中断 I/O 推荐改用 `start_worker(BlockingWorkerSpec{...})`。`WorkerHandle` 统一启动结果、状态查询和停止，但不改变 `wakeup()`、stop token、启动超时或退出原因契约。
 - 通过 `get_executor_capabilities()` 枚举所有后端状态；它是预检快照，不能替代处理实际投递竞争和背压。
+- 低频健康检查、等待/关闭超时现场和故障支持包可新增 `get_snapshot()` 或 `get_snapshot_text()`；它们是只读 best-effort 诊断，不触发默认异步执行器懒初始化，也不替代提交 reservation、任务结果或后端专属状态 API。可运行的最小示例见 `examples/lifecycle_snapshot.cpp`。
 
 ### 兼容与后续版本
 

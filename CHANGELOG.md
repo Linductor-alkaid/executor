@@ -26,6 +26,7 @@
 - 新增生命周期快照测试，覆盖未初始化不触发懒初始化、全部后端汇总、等待/关闭故障现场、in-flight 容量溢出、并发 shutdown，以及持续注册变化下的 epoch 有界重试和 partial 标记。
 - `API.md`、`MIGRATION.md`、中英文 README 和 Blocking I/O 教程补充 API 选择表、结果语义、迁移路径及自动路由边界。
 - `API.md`、生命周期 Monitor 设计文档和实施计划同步 snapshot 字段、best-effort/partial 语义、有限在途诊断、state epoch 和稳定文本导出说明。
+- 新增 `examples/lifecycle_snapshot.cpp`，可在 CPU-only 构建中演示任务积压、任务失败、稳定文本导出和 shutdown 后的生命周期快照；该示例作为 CTest smoke test 运行。
 - 新增生命周期快照性能基线，记录 idle initialized async 场景的采集/格式化耗时、格式化分配次数和输出字节数。
 
 ### 破坏性变更

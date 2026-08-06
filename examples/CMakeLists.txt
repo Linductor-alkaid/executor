@@ -1,9 +1,6 @@
 # examples/CMakeLists.txt
 # 配置示例可执行文件
 
-# 注意：当前阶段还没有示例文件，后续阶段会添加
-# 此文件为示例构建做好准备
-
 # 收集示例源文件
 file(GLOB EXAMPLE_SOURCES "*.cpp")
 
@@ -25,6 +22,15 @@ foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
     # 链接 executor 库
     target_link_libraries(${EXAMPLE_NAME} PRIVATE executor)
 endforeach()
+
+# 生命周期快照示例只使用 CPU 后端，作为发布文档中的可执行 smoke test。
+if(TARGET lifecycle_snapshot AND BUILD_TESTING)
+    add_test(NAME lifecycle_snapshot_example COMMAND lifecycle_snapshot)
+    set_tests_properties(lifecycle_snapshot_example PROPERTIES
+        LABELS "example;monitoring;smoke"
+        TIMEOUT 15
+    )
+endif()
 
 add_subdirectory(tutorial)
 

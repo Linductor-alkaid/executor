@@ -42,6 +42,16 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_BUILD_EXAMPLES=ON
 cmake --build build
 ```
 
+完整生命周期监控示例不依赖 GPU，可直接运行：
+
+```bash
+./build/examples/lifecycle_snapshot
+```
+
+该示例会在单线程任务积压时读取 `Executor::get_snapshot()`，观察任务异常后的
+失败摘要和稳定文本导出，并在关闭后确认 `Stopped` 生命周期。它是低频诊断示例，
+不应移植到 realtime cycle thread。
+
 ### 3.3 构建动态库
 
 ```bash

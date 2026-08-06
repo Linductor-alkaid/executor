@@ -247,26 +247,26 @@
 - [x] 更新 `README_zh.md` 和 `README.md` 的监控能力说明。
 - [x] 更新 `website/zh/reliability/monitoring.md`，说明统一 snapshot 与任务统计、失败状态、后端状态的边界。
 - [x] 更新 `website/zh/quick-start/lifecycle.md` 和 `website/zh/tutorial/waiting-and-status.md`，加入超时/关闭现场采集示例。
-- [ ] 增加 `examples/lifecycle_snapshot.cpp`，展示初始化、提交积压、查询、失败和 shutdown snapshot。
-- [ ] 更新 `examples/CMakeLists.txt` 与构建说明。
+- [x] 增加 `examples/lifecycle_snapshot.cpp`，展示初始化、提交积压、查询、失败和 shutdown snapshot。
+- [x] 更新 `examples/CMakeLists.txt` 与构建说明。
 
 ### 版本与兼容
 
 - [x] 将 `ExecutorSnapshot`、生命周期枚举和新 API 纳入版本变更说明。
 - [x] 通过 `schema_version` 保证文本/JSON 导出可演进。
-- [ ] 保留所有既有单项状态和统计 API，不要求用户迁移已有监控代码。
+- [x] 保留所有既有单项状态和统计 API，不要求用户迁移已有监控代码。
 
 ---
 
 ## 总体验收标准
 
-- [ ] 用户只使用 `Executor::get_snapshot()` 即可获得完整的 Executor 生命周期和所有已注册 backend 状态摘要。
-- [ ] snapshot 查询不触发懒初始化，不改变提交、future、shutdown 和 realtime 语义。
-- [ ] snapshot 与注册、停止、析构并发运行无数据竞争、死锁和 use-after-free。
-- [ ] active、queued、failed、dropped 等汇总字段能与现有 backend status、failure status 和 task statistics 对账。
-- [ ] 未初始化、运行中、排空、停止、启动失败和 partial provider 场景均有测试覆盖。
-- [ ] 监控关闭、采样率为 0 和诊断容量耗尽时，核心执行路径仍保持正确性和有界资源使用。
-- [ ] 文档明确 best-effort 快照不是事务级一致读，也不代表提交 reservation 或任务可恢复状态。
+- [x] 用户只使用 `Executor::get_snapshot()` 即可获得完整的 Executor 生命周期和所有已注册 backend 状态摘要。
+- [x] snapshot 查询不触发懒初始化，不改变提交、future、shutdown 和 realtime 语义。
+- [x] snapshot 与注册、停止、析构并发运行无数据竞争、死锁和 use-after-free。
+- [x] active、queued、failed、dropped 等汇总字段能与现有 backend status、failure status 和 task statistics 对账。
+- [x] 未初始化、运行中、排空、停止、启动失败和 partial provider 场景均有测试覆盖。
+- [x] 监控关闭、采样率为 0 和诊断容量耗尽时，核心执行路径仍保持正确性和有界资源使用。
+- [x] 文档明确 best-effort 快照不是事务级一致读，也不代表提交 reservation 或任务可恢复状态。
 
 ## 参考
 
