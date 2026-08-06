@@ -42,6 +42,20 @@ Snapshots are momentary: another producer may submit immediately after an idle r
 
 Timeout does not cancel work. Individual results and exceptions still belong to their futures, while `wait_timeout_count` records wait-timeout trends.
 
+When the timeout may involve realtime, Blocking I/O, or GPU backends as well as
+default async work, capture the full Executor scene before choosing the policy:
+
+```cpp
+const auto result = executor.wait_for_completion_ex(std::chrono::milliseconds{200});
+if (!result.completed) {
+    const auto snapshot = executor.get_snapshot();
+    // Persist lifecycle, backend state, failures, and snapshot.partial.
+}
+```
+
+`get_snapshot()` is best-effort and does not cancel or reserve work. It complements
+`WaitResult::status`, whose completion fields remain scoped to default async work.
+
 ## Test the decision
 
 Run a task longer than the budget; run one blocking task followed by short tasks on a single worker; leave a producer active while draining; then practice continued waiting, persisting unfinished input, and fast shutdown. Define both a per-request wait budget and a service-wide drain budget before an incident.

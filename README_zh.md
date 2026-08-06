@@ -72,7 +72,7 @@
   支持进程内共享或按项目隔离的独立实例（RAII 生命周期）
 
 - **可选监控**
-  任务统计、执行器状态查询；可选 `ICycleManager` 集成以精确控制实时周期
+  任务统计、单后端状态查询和统一生命周期 `Executor::get_snapshot()`；快照覆盖各后端、失败摘要和聚合计数，采用低频 best-effort 语义；可选 `ICycleManager` 集成以精确控制实时周期
 
 - **最小依赖**
   仅依赖 C++ 标准库与平台特定 API（Linux: `pthread`、`rt`；Windows: Win32 API），无第三方必需依赖；GPU 为可选模块（CUDA/OpenCL 头文件 + 运行时动态加载）

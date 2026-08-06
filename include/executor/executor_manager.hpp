@@ -143,6 +143,15 @@ public:
      */
     std::vector<std::string> get_realtime_executor_names() const;
 
+    /**
+     * @brief 获取全部实时执行器的状态值拷贝。
+     *
+     * 注册表在读取期间以 shared_ptr 快照保护对象生命周期；调用方不会获得
+     * 裸指针，也不会阻止并发 stop 改变后端状态。
+     */
+    std::map<std::string, RealtimeExecutorStatus>
+    get_all_realtime_executor_statuses() const;
+
     bool register_lockfree_executor(const std::string& name,
                                     std::unique_ptr<LockFreeTaskExecutor> executor);
     /** 非持有裸指针；并发 shutdown 路径请使用 snapshot API。 */
@@ -173,6 +182,10 @@ public:
         std::unique_ptr<IBlockingIoWorker> worker);
 
     std::vector<std::string> get_blocking_io_executor_names() const;
+
+    /** 获取全部 Blocking I/O 执行器的状态值拷贝。 */
+    std::map<std::string, BlockingIoExecutorStatus>
+    get_all_blocking_io_executor_statuses() const;
 
     /**
      * @brief 注册 GPU 执行器

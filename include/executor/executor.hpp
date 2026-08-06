@@ -31,6 +31,7 @@
 namespace executor {
 
 class TaskDependencyManager;
+namespace monitor { class ExecutorMonitor; }
 
 /**
  * @brief Executor Facade
@@ -492,6 +493,14 @@ public:
     CompletionStatus get_completion_status() const;
 
     /**
+     * @brief 获取 Executor 的完整生命周期诊断快照。
+     *
+     * 这是低频、best-effort 的只读诊断接口。查询不会创建默认异步执行器，
+     * 不承诺跨后端事务级一致性，也不应在实时周期中调用。
+     */
+    ExecutorSnapshot get_snapshot() const;
+
+    /**
      * @brief 注册 GPU 执行器
      * 
      * 创建并注册 GPU 执行器。
@@ -732,6 +741,10 @@ private:
 
     // 实例化模式时拥有的 ExecutorManager
     std::unique_ptr<ExecutorManager> owned_manager_;
+
+    // 仅由 facade 生命周期边界写入；Monitor 对运行后端状态作保守补充。
+    std::atomic<ExecutorLifecycleState> lifecycle_state_{ExecutorLifecycleState::Created};
+    std::unique_ptr<monitor::ExecutorMonitor> monitor_;
 
     // 延迟任务结构（使用类型擦除）
     struct DelayedTask {

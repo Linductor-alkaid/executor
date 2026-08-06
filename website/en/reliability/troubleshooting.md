@@ -10,13 +10,16 @@ description: Diagnose work that does not run, growing queues, wait timeouts, sta
 Do not first add threads, enlarge a queue, or increase priority. Record lifecycle, workload, and failures from the same moment; configuration changes can erase the most useful evidence.
 
 ```cpp
-const auto completion = executor.get_completion_status();
-const auto async = executor.get_async_executor_status();
-const auto failures = executor.get_failure_status();
-const auto recent = executor.get_recent_failures(16);
+const auto snapshot = executor.get_snapshot();
 ```
 
-Log completion initialization/running/active/queued/pending/completed/failed fields, async running/active/queue/completed/failed/average-time fields, failure counts by `FailureKind`, and recent executor/task/message/timestamp context. `CompletionStatus` answers accepted unfinished work; `AsyncExecutorStatus` answers running and backlog; failures and recent events explain category/context. An individual future remains the source of truth for that task.
+Log `snapshot.lifecycle`, `partial`, `consistency_note`, completion/async state,
+named realtime/Blocking I/O/GPU states, aggregate counters, failure counts, and
+recent executor/task/message/timestamp context. `CompletionStatus` answers accepted
+default-async unfinished work; backend state answers running and backlog; failures
+and recent events explain category/context. If `partial` is true, record that fact
+rather than treating absent data as zero. An individual future remains the source
+of truth for that task.
 
 Also record version, configuration summary, process start, latest deploy, input rate, and downstream dependency health. One snapshot is only now; alerts compare deltas and trends.
 
@@ -47,7 +50,8 @@ Rate-limit intake, merge overly fine work, bound I/O, and remove permanent loops
 
 ## Symptom 3: wait timeout
 
-Use `wait_for_completion_ex(timeout)`, not a bare `false`, and record its message/status before the predetermined degradation policy.
+Use `wait_for_completion_ex(timeout)`, not a bare `false`, then record its
+message/status and `get_snapshot()` before the predetermined degradation policy.
 
 | Timeout snapshot | Meaning | Direction |
 | --- | --- | --- |

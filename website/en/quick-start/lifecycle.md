@@ -26,6 +26,13 @@ executor.shutdown(true);
 
 The singleton has a `shutdown(false)` process-exit fallback, and independent `Executor` instances clean up through destruction. Neither removes the application's responsibility to decide whether accepted work must finish at its business boundary.
 
+For a low-frequency health check or shutdown record, `get_snapshot()` returns the
+current lifecycle plus registered backend states, failure summary, and aggregate
+counters. It is read-only and does not trigger lazy initialization, so an
+uninitialized instance remains `Created` after the query. Treat the result as a
+best-effort diagnostic snapshot rather than a submission reservation or a global
+transactional read.
+
 ## Common mistakes
 
 - Changing initialization configuration after the first `submit_auto()` or `submit()` completed lazy initialization.

@@ -75,7 +75,7 @@
   Supports a shared in-process singleton or isolated independent instances per project (RAII lifecycle)
 
 - **Optional Monitoring**
-  Task statistics and executor state queries. Optional `ICycleManager` integration for precise real-time cycle control
+  Task statistics, per-backend status queries, and the unified lifecycle `Executor::get_snapshot()` API. The snapshot includes backend states, failure summaries, and aggregate counters with low-frequency best-effort semantics. Optional `ICycleManager` integration for precise real-time cycle control
 
 - **Minimal Dependencies**
   Depends only on the C++ standard library and platform-specific APIs (Linux: `pthread`, `rt`; Windows: Win32 API). No required third-party dependencies. GPU is an optional module (CUDA/OpenCL headers + runtime dynamic loading).

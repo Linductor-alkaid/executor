@@ -1,4 +1,5 @@
 #include "executor/executor.hpp"
+#include "executor/monitor/executor_monitor.hpp"
 #include "thread_pool_executor.hpp"
 #include "thread_pool/thread_pool.hpp"
 #include "task/task.hpp"
@@ -154,6 +155,12 @@ Executor::Executor(ExecutorManager& manager)
     , owned_manager_(nullptr)
     , timer_running_(false)
     , task_dependencies_(std::make_unique<TaskDependencyManager>()) {
+    monitor_ = std::make_unique<monitor::ExecutorMonitor>(
+        *manager_, lifecycle_state_,
+        [this]() { return get_completion_status(); },
+        [this]() { return get_failure_status(); },
+        [this]() { return get_recent_failures(); },
+        [this]() { return get_all_task_statistics(); });
 }
 
 // 实例化模式构造函数
@@ -163,6 +170,12 @@ Executor::Executor()
     , timer_running_(false)
     , task_dependencies_(std::make_unique<TaskDependencyManager>()) {
     manager_ = owned_manager_.get();
+    monitor_ = std::make_unique<monitor::ExecutorMonitor>(
+        *manager_, lifecycle_state_,
+        [this]() { return get_completion_status(); },
+        [this]() { return get_failure_status(); },
+        [this]() { return get_recent_failures(); },
+        [this]() { return get_all_task_statistics(); });
 }
 
 // 析构函数
@@ -178,6 +191,7 @@ bool Executor::initialize(const ExecutorConfig& config) {
 
 ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
     if (auto validation = validate_executor_config(config); !validation.ok) {
+        lifecycle_state_.store(ExecutorLifecycleState::Failed, std::memory_order_release);
         record_result_failure(
             validation, FailureKind::SubmitRejected, "default", "facade_initialize");
         return validation;
@@ -201,6 +215,7 @@ ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
         return result;
     }
 
+    lifecycle_state_.store(ExecutorLifecycleState::Initializing, std::memory_order_release);
     if (!manager_->initialize_async_executor(config)) {
         auto code = manager_->is_default_async_shutdown()
                         ? ExecutorErrorCode::AlreadyShutdown
@@ -214,25 +229,42 @@ ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
                 : "Async executor initialization was rejected");
         record_result_failure(
             result, FailureKind::SubmitRejected, "default", "facade_initialize");
+        if (code == ExecutorErrorCode::StartFailed) {
+            lifecycle_state_.store(ExecutorLifecycleState::Failed, std::memory_order_release);
+        }
         return result;
     }
 
+    lifecycle_state_.store(ExecutorLifecycleState::Running, std::memory_order_release);
     return ExecutorResult::success("Async executor initialized");
 }
 
 // 关闭执行器
 ShutdownResult Executor::shutdown(bool wait_for_tasks) {
     stop_timer_thread();
+    lifecycle_state_.store(ExecutorLifecycleState::Draining, std::memory_order_release);
     const auto async_executor = manager_->get_default_async_executor_snapshot();
     if (async_executor && async_executor->is_current_worker_thread()) {
-        return manager_->shutdown(wait_for_tasks);
+        const auto result = manager_->shutdown(wait_for_tasks);
+        if (result == ShutdownResult::Completed) {
+            lifecycle_state_.store(ExecutorLifecycleState::Stopped, std::memory_order_release);
+        }
+        return result;
     }
     if (wait_for_tasks && manager_->has_default_async_executor()) {
         const auto wait_result = wait_for_completion_ex(kDefaultWaitForCompletionTimeout);
-        return manager_->shutdown(wait_result.completed);
+        const auto result = manager_->shutdown(wait_result.completed);
+        if (result == ShutdownResult::Completed) {
+            lifecycle_state_.store(ExecutorLifecycleState::Stopped, std::memory_order_release);
+        }
+        return result;
     }
 
-    return manager_->shutdown(wait_for_tasks);
+    const auto result = manager_->shutdown(wait_for_tasks);
+    if (result == ShutdownResult::Completed) {
+        lifecycle_state_.store(ExecutorLifecycleState::Stopped, std::memory_order_release);
+    }
+    return result;
 }
 
 void Executor::set_timer_thread_factory_for_test(
@@ -1271,6 +1303,10 @@ CompletionStatus Executor::get_completion_status() const {
     completion.failed_tasks = status.failed_tasks;
     completion.is_idle = completion.pending_tasks == 0;
     return completion;
+}
+
+ExecutorSnapshot Executor::get_snapshot() const {
+    return monitor_->collect();
 }
 
 // 注册 GPU 执行器

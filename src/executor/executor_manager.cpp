@@ -221,6 +221,26 @@ std::vector<std::string> ExecutorManager::get_realtime_executor_names() const {
     return names;
 }
 
+std::map<std::string, RealtimeExecutorStatus>
+ExecutorManager::get_all_realtime_executor_statuses() const {
+    std::vector<std::pair<std::string, std::shared_ptr<IRealtimeExecutor>>> snapshots;
+    {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        snapshots.reserve(realtime_executors_.size());
+        for (const auto& [name, executor] : realtime_executors_) {
+            snapshots.emplace_back(name, executor);
+        }
+    }
+
+    std::map<std::string, RealtimeExecutorStatus> result;
+    for (const auto& [name, executor] : snapshots) {
+        if (executor) {
+            result[name] = executor->get_status();
+        }
+    }
+    return result;
+}
+
 bool ExecutorManager::register_lockfree_executor(
     const std::string& name,
     std::unique_ptr<LockFreeTaskExecutor> executor) {
@@ -343,6 +363,26 @@ std::vector<std::string> ExecutorManager::get_blocking_io_executor_names() const
     return names;
 }
 
+std::map<std::string, BlockingIoExecutorStatus>
+ExecutorManager::get_all_blocking_io_executor_statuses() const {
+    std::vector<std::pair<std::string, std::shared_ptr<IBlockingIoExecutor>>> snapshots;
+    {
+        std::shared_lock<std::shared_mutex> lock(blocking_io_mutex_);
+        snapshots.reserve(blocking_io_executors_.size());
+        for (const auto& [name, executor] : blocking_io_executors_) {
+            snapshots.emplace_back(name, executor);
+        }
+    }
+
+    std::map<std::string, BlockingIoExecutorStatus> result;
+    for (const auto& [name, executor] : snapshots) {
+        if (executor) {
+            result[name] = executor->get_status();
+        }
+    }
+    return result;
+}
+
 // 注册 GPU 执行器
 bool ExecutorManager::register_gpu_executor(const std::string& name,
                                              std::unique_ptr<IGpuExecutor> executor) {
@@ -424,11 +464,19 @@ std::vector<std::string> ExecutorManager::get_gpu_executor_names() const {
 // 获取所有 GPU 执行器状态
 std::map<std::string, gpu::GpuExecutorStatus>
 ExecutorManager::get_all_gpu_executor_statuses() const {
-    std::shared_lock<std::shared_mutex> lock(gpu_mutex_);
+    std::vector<std::pair<std::string, std::shared_ptr<IGpuExecutor>>> snapshots;
+    {
+        std::shared_lock<std::shared_mutex> lock(gpu_mutex_);
+        snapshots.reserve(gpu_executors_.size());
+        for (const auto& [name, executor] : gpu_executors_) {
+            snapshots.emplace_back(name, executor);
+        }
+    }
+
     std::map<std::string, gpu::GpuExecutorStatus> result;
-    for (const auto& pair : gpu_executors_) {
-        if (pair.second) {
-            result[pair.first] = pair.second->get_status();
+    for (const auto& [name, executor] : snapshots) {
+        if (executor) {
+            result[name] = executor->get_status();
         }
     }
     return result;

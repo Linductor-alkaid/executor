@@ -33,11 +33,35 @@ Full example: [`examples/monitoring_sampling_example.cpp`](https://github.com/Li
 
 `set_monitoring_sampling_rate(rate)` accepts `0.0` through `1.0`. Sampling supports trend comparisons, anomaly detection, and capacity planning. Retain a future or business state for the definite result of one task.
 
+## Full lifecycle snapshot
+
+Use `get_snapshot()` when one diagnostic read must preserve the Executor-wide scene:
+
+```cpp
+const auto snapshot = executor.get_snapshot();
+std::cout << "sequence=" << snapshot.snapshot_sequence
+          << ", partial=" << snapshot.partial
+          << ", active=" << snapshot.active_task_count
+          << ", queued=" << snapshot.queued_task_count << '\n';
+```
+
+`ExecutorSnapshot` contains the lifecycle (`Created`, `Initializing`, `Running`,
+`Draining`, `Stopped`, or `Failed`), default async, realtime, Blocking I/O, and
+GPU backend states, failure summary/recent events, task statistics, and aggregate
+counters. It is a read-only, low-frequency, best-effort diagnostic API: it does
+not lazily initialize the default async executor, and its fields do not claim to
+come from one transactional instant. When `partial` is true, inspect
+`consistency_note` before acting on missing data.
+
+The snapshot excludes in-flight task detail, task callables, business payloads,
+and communication payloads. Do not call it from a real-time cycle thread.
+
 ## Do not confuse three data classes
 
 - `TaskStatistics`: execution aggregate by task type, for trends.
 - `get_async_executor_status()`: current queue, active, completed, and failed snapshot, for congestion and lifecycle diagnosis.
 - `ExecutorFailureStatus`: cumulative failure kinds recorded by the Facade, for alerts and root-cause routing.
+- `ExecutorSnapshot`: one capture of lifecycle and multi-backend state, for health checks, timeout/shutdown diagnosis, and support bundles. It does not replace backend-specific semantics in the individual queries above.
 
 Start from a question: use status for “is work backing up?”, failure status for “are failures increasing?”, and task statistics for “is long-term execution time getting worse?”.
 

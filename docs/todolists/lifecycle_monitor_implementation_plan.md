@@ -4,8 +4,8 @@
 
 ## 目标
 
-- [ ] 新增只读的 `ExecutorSnapshot`，一次调用汇总 Executor 生命周期、各类后端状态、失败摘要和任务统计。
-- [ ] 第一阶段采用明确标注的 best-effort 语义，不改变提交、future、shutdown 和实时周期行为。
+- [x] 新增只读的 `ExecutorSnapshot`，一次调用汇总 Executor 生命周期、各类后端状态、失败摘要和任务统计。
+- [x] 第一阶段采用明确标注的 best-effort 语义，不改变提交、future、shutdown 和实时周期行为。
 - [ ] 为等待超时、shutdown 失败、启动失败和健康检查提供统一故障现场入口。
 - [ ] 后续按实际排障需求扩展有限在途任务诊断，而不是默认保存无限任务历史。
 
@@ -17,9 +17,9 @@
 - [x] `ExecutorFailureStatus`、`get_recent_failures()` 和 failure callback 已提供失败累计与有限最近事件。
 - [x] `ExecutorManager` 已使用 `shared_ptr` snapshot getter 保护后端查询期间的对象生命周期。
 - [x] `CommStats` 已提供通信组件本地统计，但默认不并入 `ExecutorFailureStatus`。
-- [ ] 尚无统一的 Executor 生命周期枚举。
-- [ ] 尚无一次调用汇总所有后端和失败/统计状态的 `ExecutorSnapshot`。
-- [ ] 尚无统一 snapshot 序号、采集时间和 partial/inconsistency 标记。
+- [x] 已具备统一的 `ExecutorLifecycleState` 生命周期枚举。
+- [x] 已具备一次调用汇总所有后端和失败/统计状态的 `ExecutorSnapshot`。
+- [x] 已具备统一 snapshot 序号、采集时间和 partial/inconsistency 标记。
 - [ ] 尚无在途任务的有界生命周期诊断表。
 
 ## 设计约束
@@ -79,14 +79,14 @@
 - Modify: `include/executor/executor_manager.hpp`
 - Modify: `src/executor/executor_manager.cpp`
 
-- [ ] 增加全部实时执行器状态查询：
-  - [ ] `std::map<std::string, RealtimeExecutorStatus> get_all_realtime_executor_statuses() const`
-  - [ ] 使用注册表读锁和 `shared_ptr` 快照，避免返回裸指针。
-- [ ] 增加全部 Blocking I/O 执行器状态查询：
-  - [ ] `std::map<std::string, BlockingIoExecutorStatus> get_all_blocking_io_executor_statuses() const`
-- [ ] 保持已有 `get_all_gpu_executor_statuses()`，检查未启用 GPU 时返回空 map 的语义。
-- [ ] 增加只读 lifecycle 查询或内部状态 provider，不能触发默认异步执行器懒初始化。
-- [ ] 对 provider 不可用、注册表正在关闭或对象已移除的情况保留可识别结果。
+- [x] 增加全部实时执行器状态查询：
+  - [x] `std::map<std::string, RealtimeExecutorStatus> get_all_realtime_executor_statuses() const`
+  - [x] 使用注册表读锁和 `shared_ptr` 快照，避免返回裸指针。
+- [x] 增加全部 Blocking I/O 执行器状态查询：
+  - [x] `std::map<std::string, BlockingIoExecutorStatus> get_all_blocking_io_executor_statuses() const`
+- [x] 保持已有 `get_all_gpu_executor_statuses()`，检查未启用 GPU 时返回空 map 的语义。
+- [x] 增加只读 lifecycle 查询或内部状态 provider，不能触发默认异步执行器懒初始化。
+- [x] 对 provider 不可用、注册表正在关闭或对象已移除的情况保留可识别结果。
 
 ### 1.2 Monitor 汇总类
 
@@ -96,14 +96,14 @@
 - Create: `src/executor/monitor/executor_monitor.cpp`
 - Modify: `src/CMakeLists.txt`
 
-- [ ] 创建 `monitor::ExecutorMonitor` 或等价 `SnapshotCollector` 类。
-- [ ] 注入 `ExecutorManager`、`StatisticsCollector` 和 failure state 的只读 provider。
-- [ ] 实现 `ExecutorSnapshot collect() const`。
-- [ ] 按固定顺序采集：lifecycle → backend shared snapshots → failure → recent failures → task statistics → aggregate counters。
-- [ ] 在采集期间不调用会懒初始化的 `get_default_async_executor()`；使用 `has_default_async_executor()` 和 `get_default_async_executor_snapshot()`。
-- [ ] 对 backend 查询异常进行隔离：标记 `partial=true`，在 `consistency_note` 中写明 provider 名称，不让诊断异常传播到业务线程。
-- [ ] 维护同一 Monitor 实例内单调递增的 `snapshot_sequence`。
-- [ ] 明确 `captured_at` 是采集开始时间还是完成时间，并在注释和测试中固定。
+- [x] 创建 `monitor::ExecutorMonitor` 或等价 `SnapshotCollector` 类。
+- [x] 注入 `ExecutorManager`、`StatisticsCollector` 和 failure state 的只读 provider。
+- [x] 实现 `ExecutorSnapshot collect() const`。
+- [x] 按固定顺序采集：lifecycle → backend shared snapshots → failure → recent failures → task statistics → aggregate counters。
+- [x] 在采集期间不调用会懒初始化的 `get_default_async_executor()`；使用 `has_default_async_executor()` 和 `get_default_async_executor_snapshot()`。
+- [x] 对 backend 查询异常进行隔离：标记 `partial=true`，在 `consistency_note` 中写明 provider 名称，不让诊断异常传播到业务线程。
+- [x] 维护同一 Monitor 实例内单调递增的 `snapshot_sequence`。
+- [x] 明确 `captured_at` 是采集开始时间还是完成时间，并在注释和测试中固定。
 
 ### 1.3 Executor Facade API
 
@@ -112,11 +112,11 @@
 - Modify: `include/executor/executor.hpp`
 - Modify: `src/executor/executor.cpp`
 
-- [ ] 增加 `ExecutorSnapshot get_snapshot() const`。
-- [ ] 在 `Executor` 构造函数中初始化 Monitor，并确保单例模式与实例化模式各自隔离序号和状态。
-- [ ] 确认 snapshot 查询不会创建默认异步执行器。
-- [ ] 保持已有 `get_*_status()`、`get_failure_status()` 和任务统计 API 不变。
-- [ ] 对对象析构、shutdown 后和部分 backend 注册场景定义返回值。
+- [x] 增加 `ExecutorSnapshot get_snapshot() const`。
+- [x] 在 `Executor` 构造函数中初始化 Monitor，并确保单例模式与实例化模式各自隔离序号和状态。
+- [x] 确认 snapshot 查询不会创建默认异步执行器。
+- [x] 保持已有 `get_*_status()`、`get_failure_status()` 和任务统计 API 不变。
+- [x] 对对象析构、shutdown 后和部分 backend 注册场景定义返回值。
 
 ### 1.4 MVP 测试
 
@@ -125,20 +125,20 @@
 - Create: `tests/test_executor_snapshot.cpp`
 - Modify: `tests/CMakeLists.txt`
 
-- [ ] 未初始化时 snapshot 为 `Created`，且查询前后默认异步执行器仍未初始化。
-- [ ] 初始化成功后 lifecycle 为 `Running`，async 状态与 `get_async_executor_status()` 对账。
-- [ ] 提交 active/queued 任务时，汇总 active、queued 和 pending 与现有 completion 状态一致。
-- [ ] 注册实时、Blocking I/O 和 GPU（可用时）后，全部 map 包含对应名称和状态。
-- [ ] shutdown 期间 snapshot 能观察到 `Draining` 或 stopping backend；完成后为 `Stopped`。
-- [ ] 初始化失败或关键 backend 启动失败可观察为 `Failed`，并能关联 failure status/recent event。
-- [ ] 并发注册、停止、查询和析构压力测试无数据竞争、死锁或 use-after-free。
-- [ ] 连续调用 snapshot 的 `snapshot_sequence` 严格递增。
+- [x] 未初始化时 snapshot 为 `Created`，且查询前后默认异步执行器仍未初始化。
+- [x] 初始化成功后 lifecycle 为 `Running`，async 状态与 `get_async_executor_status()` 对账。
+- [x] 提交 active/queued 任务时，汇总 active、queued 和 pending 与现有 completion 状态一致。
+- [x] 注册实时、Blocking I/O 和 GPU（可用时）后，全部 map 包含对应名称和状态。
+- [x] shutdown 期间 snapshot 能观察到 `Draining` 或 stopping backend；完成后为 `Stopped`。
+- [x] 初始化失败或关键 backend 启动失败可观察为 `Failed`，并能关联 failure status/recent event。
+- [x] 并发注册、停止、查询和析构压力测试无数据竞争、死锁或 use-after-free。
+- [x] 连续调用 snapshot 的 `snapshot_sequence` 严格递增。
 
 ### 阶段验收
 
-- [ ] `ctest` 中新增 snapshot 测试全部通过。
-- [ ] 现有监控、失败可观察性、实时生命周期和 shutdown 测试不回归。
-- [ ] `get_snapshot()` 不触发懒初始化、不阻止 shutdown、不改变任务结果。
+- [x] `ctest` 中新增 snapshot 测试全部通过。
+- [x] 现有监控、失败可观察性、实时生命周期和 shutdown 测试不回归。
+- [x] `get_snapshot()` 不触发懒初始化、不阻止 shutdown、不改变任务结果。
 
 ---
 
@@ -243,10 +243,10 @@
 
 ### API/用户文档
 
-- [ ] 更新 `docs/API.md`，增加统一 snapshot 使用示例、生命周期语义和 best-effort 限制。
-- [ ] 更新 `README_zh.md` 和 `README.md` 的监控能力说明。
-- [ ] 更新 `website/zh/reliability/monitoring.md`，说明统一 snapshot 与任务统计、失败状态、后端状态的边界。
-- [ ] 更新 `website/zh/quick-start/lifecycle.md` 和 `website/zh/tutorial/waiting-and-status.md`，加入超时/关闭现场采集示例。
+- [x] 更新 `docs/API.md`，增加统一 snapshot 使用示例、生命周期语义和 best-effort 限制。
+- [x] 更新 `README_zh.md` 和 `README.md` 的监控能力说明。
+- [x] 更新 `website/zh/reliability/monitoring.md`，说明统一 snapshot 与任务统计、失败状态、后端状态的边界。
+- [x] 更新 `website/zh/quick-start/lifecycle.md` 和 `website/zh/tutorial/waiting-and-status.md`，加入超时/关闭现场采集示例。
 - [ ] 增加 `examples/lifecycle_snapshot.cpp`，展示初始化、提交积压、查询、失败和 shutdown snapshot。
 - [ ] 更新 `examples/CMakeLists.txt` 与构建说明。
 

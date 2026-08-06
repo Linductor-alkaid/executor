@@ -52,11 +52,24 @@ if (!result.completed) {
 
 超时不是任务异常，也不代表任务已经取消；检查 `result.timed_out` 和 `result.status`，并查询失败状态中的 `wait_timeout_count`。单个任务的返回值和异常仍应由各自的 `future.get()` 处理。
 
+当超时还可能涉及实时、Blocking I/O 或 GPU 后端时，在选择后续策略前采集完整 Executor 现场：
+
+```cpp
+const auto result = executor.wait_for_completion_ex(std::chrono::milliseconds{200});
+if (!result.completed) {
+    const auto snapshot = executor.get_snapshot();
+    // 持久化 lifecycle、后端状态、failures 和 snapshot.partial。
+}
+```
+
+`get_snapshot()` 是 best-effort 诊断查询，不会取消或预留工作；它补充
+`WaitResult::status`，后者的完成字段仍只覆盖默认异步任务。
+
 ## 正确收尾顺序
 
 1. 停止产生新任务，例如取消不再需要的周期任务。
 2. 以业务可接受的 timeout 调用 `wait_for_completion_ex()`。
-3. 完成时调用 `shutdown(true)`；超时时记录快照并按业务策略重试、降级或调用 `shutdown(false)`。
+3. 完成时调用 `shutdown(true)`；超时时记录 `WaitResult` 与完整 snapshot，并按业务策略重试、降级或调用 `shutdown(false)`。
 
 不要在超时后假设任务已经停止：超时只说明它们尚未全部完成。
 

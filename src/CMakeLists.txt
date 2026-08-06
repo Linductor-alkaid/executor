@@ -3,7 +3,7 @@
 
 # 收集源文件
 # 注意：当前阶段还没有源文件，后续阶段会添加
-file(GLOB_RECURSE EXECUTOR_SOURCES
+file(GLOB_RECURSE EXECUTOR_SOURCES CONFIGURE_DEPENDS
     "executor/*.cpp"
     "executor/*.c"
 )
@@ -29,7 +29,7 @@ else()
 endif()
 
 # 收集头文件（用于 IDE 显示）
-file(GLOB_RECURSE EXECUTOR_HEADERS
+file(GLOB_RECURSE EXECUTOR_HEADERS CONFIGURE_DEPENDS
     "executor/*.hpp"
     "executor/*.h"
 )

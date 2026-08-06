@@ -25,6 +25,24 @@ const auto all_stats = executor.get_all_task_statistics();
 
 完整示例：[`examples/monitoring_sampling_example.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/monitoring_sampling_example.cpp)。
 
+## 完整生命周期快照
+
+需要一次保存 Executor 整体现场时，使用 `get_snapshot()`：
+
+```cpp
+const auto snapshot = executor.get_snapshot();
+std::cout << "sequence=" << snapshot.snapshot_sequence
+          << ", partial=" << snapshot.partial
+          << ", active=" << snapshot.active_task_count
+          << ", queued=" << snapshot.queued_task_count << "\n";
+```
+
+快照包含生命周期（`Created`、`Initializing`、`Running`、`Draining`、`Stopped`、`Failed`）、
+默认异步、实时、Blocking I/O 和 GPU 后端状态、失败摘要/最近事件、任务统计及聚合计数。
+它是只读的低频 best-effort 诊断接口，不会因查询而懒初始化默认异步执行器，也不保证所有后端
+字段来自同一个瞬间；`partial=true` 时应同时查看 `consistency_note`。快照不包含任务 payload、
+callable 或通信数据内容，也不建议在实时周期线程中调用。
+
 ## 选择采样率
 
 | 目标 | 设置 | 取舍 |
@@ -40,6 +58,7 @@ const auto all_stats = executor.get_all_task_statistics();
 - `TaskStatistics`：按 task type 聚合的任务执行统计，适合监控趋势。
 - `get_async_executor_status()`：执行器此刻的队列、活跃、完成和失败快照，适合诊断拥塞与生命周期。
 - `ExecutorFailureStatus`：Facade 记录的失败类别累计数，适合失败告警与根因分流。
+- `ExecutorSnapshot`：一次采集完整生命周期和多后端现场，适合健康检查、超时/关闭诊断和故障支持包；它不替代上述单项查询的后端特定语义。
 
 先从一个明确问题选择数据：想知道“是否堆积”看状态快照；想知道“失败是否增长”看 failure status；想知道“长期耗时分布是否恶化”看任务统计。
 

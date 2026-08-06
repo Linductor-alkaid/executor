@@ -997,6 +997,7 @@ void set_monitoring_sampling_rate(double rate);
 
 AsyncExecutorStatus get_async_executor_status() const;
 RealtimeExecutorStatus get_realtime_executor_status(const std::string& name) const;
+ExecutorSnapshot get_snapshot() const;
 
 TaskStatistics get_task_statistics(const std::string& task_type) const;
 std::map<std::string, TaskStatistics> get_all_task_statistics() const;
@@ -1006,7 +1007,32 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 - `set_monitoring_sampling_rate`：设置监控采样率（0.0–1.0），1.0 表示每次任务都采样，较低值可减少监控开销。
 - `get_async_executor_status`：线程池名称、运行状态、活跃/完成/失败任务数、队列大小、平均任务时间等。
 - `get_realtime_executor_status`：实时线程名称、运行状态、周期、周期计数、超时计数、平均/最大周期时间等。
+- `get_snapshot`：一次返回 Executor 生命周期、默认异步/实时/Blocking I/O/GPU 后端状态、失败摘要、最近失败事件、任务统计和聚合计数；不会触发默认异步执行器懒初始化。
 - `get_task_statistics` / `get_all_task_statistics`：按 `task_type` 或全部的成功/失败/超时次数及执行时间统计。
+
+### 6.1 完整生命周期快照
+
+`get_snapshot()` 是低频、只读的 best-effort 诊断接口，适合健康检查、等待/关闭超时现场和故障支持包的状态采集：
+
+```cpp
+const auto snapshot = executor.get_snapshot();
+if (snapshot.lifecycle == executor::ExecutorLifecycleState::Failed ||
+    snapshot.partial) {
+    // 保存 snapshot 中的 lifecycle、failures、recent_failures 和后端状态
+}
+```
+
+`ExecutorSnapshot` 固定包含 `schema_version`、单实例内单调递增的
+`snapshot_sequence`、采集开始时间 `captured_at`、生命周期状态、`partial` /
+`consistency_note`、`completion`、`async`、`realtime`、`blocking_io`、`gpu`、
+`failures`、`recent_failures`、`task_statistics` 以及运行/停止后端数、活跃/排队/失败/丢弃工作数。
+
+生命周期状态为 `Created`、`Initializing`、`Running`、`Draining`、`Stopped` 或
+`Failed`。它是跨后端摘要，不替代具体后端的 `is_running`、停止原因或队列字段。
+
+快照按 provider 独立读取，不承诺跨所有后端的事务级一致性；采集期间后端变更、
+provider 不可用或读取异常会设置 `partial=true` 并在 `consistency_note` 中说明。
+快照不包含在途任务明细、任务 callable、业务 payload 或通信 payload，也不应在实时周期线程中调用。
 
 ---
 

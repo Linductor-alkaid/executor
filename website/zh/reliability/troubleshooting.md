@@ -9,24 +9,13 @@ description: 从任务不执行、排队变长、等待超时、关闭卡住、�
 
 发生故障时，不要先增加线程数、扩大队列或改成更高优先级。先记录同一时刻的生命周期、工作量和失败信息；否则修改配置后，最有价值的现场也会消失。
 
-普通异步任务至少保留以下快照：
+优先采集完整 Executor 现场：
 
 ```cpp
-const auto completion = executor.get_completion_status();
-const auto async = executor.get_async_executor_status();
-const auto failures = executor.get_failure_status();
-const auto recent = executor.get_recent_failures(16);
-
-// 将字段写入应用自己的结构化日志：
-// completion: is_initialized, is_running, active_tasks,
-//             queued_tasks, pending_tasks, completed_tasks, failed_tasks
-// async:      is_running, active_tasks, queue_size,
-//             completed_tasks, failed_tasks, avg_task_time_ms
-// failures:   各 FailureKind 的累计计数
-// recent:     executor_name, task_id, message, timestamp
+const auto snapshot = executor.get_snapshot();
 ```
 
-`CompletionStatus` 适合判断“还有多少已接受工作没有结束”，`AsyncExecutorStatus` 适合判断“执行器现在是否运行、队列是否堆积”，`ExecutorFailureStatus` 和最近事件负责解释失败类别与上下文。单项任务的确定结果仍以对应 `future` 为准。
+记录 `snapshot.lifecycle`、`partial`、`consistency_note`、completion/async 状态、具名 realtime/Blocking I/O/GPU 状态、聚合计数、失败状态和最近事件。`CompletionStatus` 适合判断默认异步执行器中“还有多少已接受工作没有结束”，后端状态用于判断运行和积压，失败状态与最近事件负责解释类别和上下文。`partial=true` 时应保留这一事实，不能把缺失数据当作零值。单项任务的确定结果仍以对应 `future` 为准。
 
 生产服务还应一起记录版本、配置摘要、进程启动时间、最近一次部署、输入速率和下游依赖状态。单个快照只能说明当下；告警应比较一段时间内的增量和趋势。
 
@@ -81,12 +70,13 @@ queue_size 持续增长
 
 ## 症状三：等待超时
 
-优先使用 `wait_for_completion_ex(timeout)`，不要只记录一个 `false`：
+优先使用 `wait_for_completion_ex(timeout)`，不要只记录一个 `false`；在选择降级策略前同时采集 `get_snapshot()`：
 
 ```cpp
 const auto result = executor.wait_for_completion_ex(shutdown_budget);
 if (!result.completed) {
-    // 记录 result.message 和 result.status，再执行应用预先定义的降级策略。
+    const auto snapshot = executor.get_snapshot();
+    // 记录 result.message、result.status 和 snapshot，再执行预先定义的降级策略。
 }
 ```
 
