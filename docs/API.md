@@ -578,7 +578,8 @@ public:
     uint64_t processed_count() const;                // 已处理任务总数
 
     QueueStats get_queue_stats() const;              // 队列状态快照；字段是否依赖 enable_stats 见下表
-    QueueStats get_status_snapshot() const;          // 可复制的非同步状态快照
+    QueueStats get_status_snapshot() const;          // O(1)、可复制的非同步状态快照
+    QueueStats expensive_diagnostic_snapshot() const; // O(capacity)、低频逐槽位诊断快照
 
     // 异常观测与自定义处理（异常计数不依赖 enable_stats）
     // exception_count() 返回 get_queue_stats() 期间累积的 task 异常次数
@@ -593,7 +594,9 @@ public:
 
 #### 状态快照与背压诊断
 
-`get_status_snapshot()` 返回一个可按值复制的 `QueueStats`，适合由监控线程采样；它不等待生产者或消费者。快照由多个独立原子读取组成，**所有字段均为近似、非同步值**：并发读写可在采样期间推进，字段不保证来自同一时刻，不能作为同步或正确性判定依据。`reserved_count` 和 `ready_count` 由状态转换维护的 relaxed 原子计数提供，因此采样为 O(1)，并发时可能轻微漂移但不会遗漏状态转换事件。`get_queue_stats()` 返回相同的值类型快照。若要调试逐槽位状态，可直接使用底层 `LockFreeQueue::expensive_diagnostic_snapshot()`；它是 O(capacity)，不可在热路径调用。
+`get_status_snapshot()` 返回一个可按值复制的 `QueueStats`，适合由监控线程采样；它不等待生产者或消费者。快照由多个独立原子读取组成，**所有字段均为近似、非同步值**：并发读写可在采样期间推进，字段不保证来自同一时刻，不能作为同步或正确性判定依据。`reserved_count` 和 `ready_count` 由状态转换维护的 relaxed 原子计数提供，因此采样为 O(1)，并发时可能轻微漂移但不会遗漏状态转换事件。`get_queue_stats()` 返回相同的值类型快照。
+
+`expensive_diagnostic_snapshot()` 是公开的低频排障接口：它扫描全部槽位，复杂度为 O(capacity)，**不可在热路径或每次监控采样中调用**。它返回相同的 `QueueStats`，但 `reserved_count` 是扫描得到的 `Reserved`/`Writing` 槽位数，`ready_count` 是扫描得到的 `Published` 槽位数；可用于 dump 卡住的 reservation。逐槽位状态计数需要构造时传入 `enable_stats=true`，且仍是非同步快照。
 
 **底层队列统计（均需 `enable_stats=true`）**：未启用时，底层队列返回零值，因此下列字段不提供有效的队列统计。
 
@@ -626,7 +629,15 @@ const auto status = exec.get_status_snapshot();
 if (status.ready_count > status.queue_capacity / 2) {
     // 消费者可能落后；考虑扩容或限流。
 }
+
+// 仅在告警后低频调用（例如每秒最多一次），定位卡住的 producer reservation。
+const auto diagnostic = exec.expensive_diagnostic_snapshot();
+if (diagnostic.reserved_count != 0) {
+    // Reserved/Writing 槽位持续存在时，检查生产者是否卡在发布前。
+}
 ```
+
+**背压告警示例**：可在 `ready_count > queue_capacity / 2` 连续多个采样周期时发出“消费者落后”预警；`ready_count > queue_capacity * 3 / 4` 时限流或扩容。`reserved_count > 0` 本身只表示某个 producer 正在发布；若它跨多个低频诊断周期持续不降，再收集 `expensive_diagnostic_snapshot()` 和 `cancelled_reservation_count` 排查卡住 reservation。
 
 #### `push_tasks_batch` 详解
 

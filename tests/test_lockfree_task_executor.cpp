@@ -81,6 +81,63 @@ void block_second_batch_publish(void* context) {
     }
 }
 
+struct PublishHook {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+};
+
+void block_publish(void* context) {
+    auto* hook = static_cast<PublishHook*>(context);
+    hook->entered.store(true, std::memory_order_release);
+    while (!hook->release.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+}
+
+TEST(LockFreeTaskExecutor, DiagnosticSnapshotReportsStalledReservation) {
+    LockFreeTaskExecutor exec(8, 1, true);
+    PublishHook hook;
+    exec.set_before_publish_hook(block_publish, &hook);
+
+    std::atomic<bool> first_result{false};
+    std::thread first_producer([&] {
+        first_result.store(exec.push_task([] {}), std::memory_order_release);
+    });
+    ASSERT_TRUE(wait_until([&] { return hook.entered.load(std::memory_order_acquire); }));
+
+    const auto stalled = exec.expensive_diagnostic_snapshot();
+    EXPECT_EQ(stalled.reserved_count, 1u);
+    EXPECT_EQ(stalled.ready_count, 0u);
+
+    hook.release.store(true, std::memory_order_release);
+    first_producer.join();
+    EXPECT_TRUE(first_result.load(std::memory_order_acquire));
+
+    const auto published = exec.expensive_diagnostic_snapshot();
+    EXPECT_EQ(published.reserved_count, 0u);
+    EXPECT_EQ(published.ready_count, 1u);
+
+    hook.entered.store(false, std::memory_order_release);
+    hook.release.store(false, std::memory_order_release);
+    std::atomic<bool> second_result{true};
+    std::thread second_producer([&] {
+        second_result.store(exec.push_task([] {}), std::memory_order_release);
+    });
+    ASSERT_TRUE(wait_until([&] { return hook.entered.load(std::memory_order_acquire); }));
+    ASSERT_TRUE(exec.start());
+    ASSERT_TRUE(wait_until([&] {
+        return exec.get_queue_stats().cancelled_reservation_count >= 1;
+    }));
+
+    hook.release.store(true, std::memory_order_release);
+    second_producer.join();
+    EXPECT_FALSE(second_result.load(std::memory_order_acquire));
+    EXPECT_GE(exec.expensive_diagnostic_snapshot().cancelled_reservation_count, 1u);
+
+    exec.set_before_publish_hook(nullptr, nullptr);
+    exec.stop();
+}
+
 TEST(LockFreeTaskExecutor, BatchAllocationFailureLeavesStopJoinable) {
     LockFreeTaskExecutor exec(16);
     ASSERT_TRUE(exec.start());

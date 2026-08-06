@@ -14,6 +14,7 @@ namespace executor {
 namespace util {
 template<typename T> class LockFreeQueue;
 template<typename T> class ObjectPool;
+struct LockFreeQueueStats;
 }
 
 /**
@@ -178,6 +179,18 @@ public:
      */
     QueueStats get_status_snapshot() const;
 
+    /**
+     * @brief Returns a full per-slot diagnostic queue snapshot.
+     *
+     * This method scans every queue slot, so it is O(queue_capacity) and is
+     * intended only for infrequent diagnostics. Like get_status_snapshot(),
+     * it is non-synchronized and may observe concurrent state transitions.
+     * `reserved_count` includes slots in Reserved or Writing; `ready_count`
+     * includes Published slots. These per-slot counts require
+     * `enable_stats=true`.
+     */
+    QueueStats expensive_diagnostic_snapshot() const;
+
     // Test/debug hook: invoked after a producer reserves a slot and before it
     // enters the non-interruptible write window. This method may be called
     // concurrently with push_task(); each producer observes either the old
@@ -205,6 +218,7 @@ private:
     bool enter_push();
     void leave_push();
     void worker_thread();
+    QueueStats make_queue_stats(const util::LockFreeQueueStats& raw) const;
 
     std::unique_ptr<util::LockFreeQueue<TaskWrapper*>> queue_;
     std::unique_ptr<util::ObjectPool<TaskWrapper>> task_pool_;

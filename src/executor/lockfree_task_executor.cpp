@@ -236,7 +236,15 @@ void LockFreeTaskExecutor::set_exception_handler(std::function<void(std::excepti
 }
 
 LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_queue_stats() const {
-    auto raw = queue_->get_stats();
+    return make_queue_stats(queue_->get_stats());
+}
+
+LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::expensive_diagnostic_snapshot() const {
+    return make_queue_stats(queue_->expensive_diagnostic_snapshot());
+}
+
+LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::make_queue_stats(
+    const util::LockFreeQueueStats& raw) const {
     QueueStats result;
     result.total_pushes = raw.total_pushes;
     result.failed_pushes = raw.failed_pushes;
