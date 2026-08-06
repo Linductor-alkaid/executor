@@ -1,6 +1,7 @@
 #pragma once
 
 #include <executor/comm/fwd.hpp>
+#include <executor/comm/bounded_queue.hpp>
 #include <executor/comm/types.hpp>
 
 #include <algorithm>
@@ -171,7 +172,9 @@ template <class T>
 class RealtimeChannel {
 public:
     explicit RealtimeChannel(RealtimeChannelOptions options = {})
-        : options_(normalize_options(std::move(options))) {}
+        : options_(normalize_options(std::move(options))),
+          queue_(options_.capacity, options_.drop_policy, options_.enable_stats,
+                 options_.name, "realtime channel") {}
 
     bool try_send(const T& value) {
         return try_send_impl(value);
@@ -195,10 +198,7 @@ public:
                     break;
                 }
 
-                item.emplace(std::move(queue_.front().value));
-                const auto enqueued_at = queue_.front().enqueued_at;
-                queue_.pop_front();
-                record_receive_locked(enqueued_at);
+                item = std::move(queue_.try_pop()->value);
             }
 
             try {
@@ -215,12 +215,12 @@ public:
 
     void close() {
         std::lock_guard<std::mutex> lock(mutex_);
-        closed_ = true;
+        queue_.close();
     }
 
     bool is_closed() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        return closed_;
+        return queue_.is_closed();
     }
 
     bool empty() const {
@@ -234,7 +234,7 @@ public:
     }
 
     size_t capacity() const {
-        return options_.capacity;
+        return queue_.capacity();
     }
 
     size_t max_items_per_cycle() const {
@@ -243,22 +243,12 @@ public:
 
     CommStats stats() const {
         std::lock_guard<std::mutex> lock(mutex_);
-        CommStats snapshot = stats_;
-        snapshot.current_depth = queue_.size();
-        snapshot.capacity = options_.capacity;
-        if (options_.enable_stats) {
-            snapshot.consumer_lag = queue_.size();
-            snapshot.producer_lag =
-                (stats_.sent_count >= stats_.received_count)
-                    ? (stats_.sent_count - stats_.received_count)
-                    : 0;
-        }
-        return snapshot;
+        return queue_.stats();
     }
 
     void set_event_callback(CommEventCallback callback) {
         std::lock_guard<std::mutex> lock(mutex_);
-        event_callback_ = std::move(callback);
+        queue_.set_event_callback(std::move(callback));
     }
 
 private:
@@ -277,8 +267,8 @@ private:
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            sent = enqueue_locked(std::forward<U>(value), event);
-            callback = event_callback_;
+            sent = queue_.enqueue(std::forward<U>(value), event);
+            callback = queue_.callback();
         }
 
         emit_comm_event_noexcept(callback, event);
@@ -294,120 +284,21 @@ private:
         }
     }
 
-    template <class U>
-    bool enqueue_locked(U&& value, std::optional<CommEvent>& event) {
-        if (closed_) {
-            record_closed_send_locked(event);
-            return false;
-        }
-
-        if (queue_.size() >= options_.capacity) {
-            if (options_.drop_policy == DropPolicy::DropOldest) {
-                queue_.pop_front();
-                record_drop_locked(event);
-            } else if (options_.drop_policy == DropPolicy::KeepLatest) {
-                queue_.clear();
-                record_overwrite_locked(event);
-            } else {
-                record_drop_locked(event);
-                return false;
-            }
-        }
-
-        queue_.push_back(QueuedItem{std::forward<U>(value), std::chrono::steady_clock::now()});
-        record_send_locked();
-        return true;
-    }
-
-    void record_send_locked() {
-        if (!options_.enable_stats) {
-            return;
-        }
-        ++stats_.sent_count;
-        stats_.current_depth = queue_.size();
-        if (stats_.current_depth > stats_.peak_depth) {
-            stats_.peak_depth = stats_.current_depth;
-        }
-    }
-
-    void record_receive_locked(std::chrono::steady_clock::time_point enqueued_at) {
-        if (!options_.enable_stats) {
-            return;
-        }
-        ++stats_.received_count;
-        stats_.current_depth = queue_.size();
-        update_latency_stats(
-            stats_,
-            total_latency_,
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - enqueued_at));
-    }
-
-    void record_drop_locked(std::optional<CommEvent>& event) {
-        if (options_.enable_stats) {
-            ++stats_.dropped_count;
-            stats_.current_depth = queue_.size();
-        }
-        event = make_event_locked(CommEventKind::Dropped, "realtime channel message dropped");
-    }
-
-    void record_overwrite_locked(std::optional<CommEvent>& event) {
-        if (options_.enable_stats) {
-            ++stats_.overwritten_count;
-            stats_.current_depth = queue_.size();
-        }
-        event = make_event_locked(CommEventKind::Overwritten,
-                                  "realtime channel messages overwritten");
-    }
-
-    void record_closed_send_locked(std::optional<CommEvent>& event) {
-        if (options_.enable_stats) {
-            ++stats_.closed_send_count;
-        }
-        event = make_event_locked(CommEventKind::ClosedSend,
-                                  "send rejected after realtime channel close");
-    }
-
     void record_handler_exception_event() {
         std::optional<CommEvent> event;
         CommEventCallback callback;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (options_.enable_stats) {
-                ++stats_.handler_exception_count;
-            }
-            event = make_event_locked(CommEventKind::HandlerException,
-                                      "realtime channel handler threw");
-            callback = event_callback_;
+            queue_.record_handler_exception(event);
+            callback = queue_.callback();
         }
 
         emit_comm_event_noexcept(callback, event);
     }
 
-    std::optional<CommEvent> make_event_locked(CommEventKind kind, std::string message) const {
-        if (!event_callback_) {
-            return std::nullopt;
-        }
-
-        CommEvent event;
-        event.kind = kind;
-        event.component_name = options_.name;
-        event.message = std::move(message);
-        event.sequence = stats_.sent_count;
-        return event;
-    }
-
     RealtimeChannelOptions options_;
-    struct QueuedItem {
-        T value;
-        std::chrono::steady_clock::time_point enqueued_at;
-    };
     mutable std::mutex mutex_;
-    std::deque<QueuedItem> queue_;
-    bool closed_ = false;
-    CommStats stats_;
-    std::chrono::nanoseconds total_latency_{0};
-    CommEventCallback event_callback_;
+    BoundedQueue<T> queue_;
 };
 
 } // namespace executor::comm
