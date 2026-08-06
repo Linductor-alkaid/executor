@@ -227,10 +227,11 @@ Monitor 不应在采集时调用会触发懒初始化的接口；应使用现有
 
 ```cpp
 ExecutorSnapshot Executor::get_snapshot() const;
-std::string Executor::get_snapshot_json() const;
+std::string Executor::get_snapshot_text() const;
+void Executor::set_snapshot_diagnostic_callback(ExecutorSnapshotCallback callback);
 ```
 
-`get_snapshot_json()` 可作为第二个迭代项，避免第一版将 JSON 库或格式约束引入核心类型。已有接口继续保留：
+`get_snapshot_text()` 输出稳定的行式诊断文本；时间字段带明确单位，枚举使用稳定字符串，且不包含 `exception_ptr`、callable、payload 或通信内容。JSON 仍作为后续可选 API，避免过早把 JSON 库或格式约束引入核心类型。`set_snapshot_diagnostic_callback()` 在等待超时及 facade 初始化、注册、启动失败时，于调用线程交付独立快照；回调异常必须隔离，不能从实时周期或任务热路径调用。已有接口继续保留：
 
 - `get_async_executor_status()`；
 - `get_realtime_executor_status()`；

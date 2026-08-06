@@ -9,6 +9,7 @@
 #include <executor/executor_manager.hpp>
 #include <executor/interfaces.hpp>
 #include <executor/monitor/executor_monitor.hpp>
+#include <executor/monitor/executor_snapshot_formatter.hpp>
 
 using namespace executor;
 
@@ -96,6 +97,133 @@ bool test_snapshot_does_not_lazy_initialize() {
                 "default async executor must remain stopped after snapshot");
     TEST_ASSERT(after.snapshot_sequence == before.snapshot_sequence + 1,
                 "snapshot sequence must increase monotonically");
+    return true;
+}
+
+bool test_snapshot_text_is_stable_and_complete() {
+    Executor executor;
+    const auto snapshot = executor.get_snapshot();
+    const auto text = monitor::format_executor_snapshot(snapshot);
+
+    TEST_ASSERT(text.rfind("executor_snapshot\n", 0) == 0,
+                "snapshot text must have a stable format marker");
+    TEST_ASSERT(text.find("schema_version=1\n") != std::string::npos,
+                "snapshot text must include schema version");
+    TEST_ASSERT(text.find("snapshot_sequence=") != std::string::npos,
+                "snapshot text must include snapshot sequence");
+    TEST_ASSERT(text.find("captured_at_steady_ns=") != std::string::npos,
+                "snapshot text must use an explicit steady-clock unit");
+    TEST_ASSERT(text.find("collection_duration_ns=") != std::string::npos,
+                "snapshot text must include collection duration in nanoseconds");
+    TEST_ASSERT(text.find("lifecycle=Created\n") != std::string::npos,
+                "snapshot text must use lifecycle strings rather than integers");
+    TEST_ASSERT(text.find("partial=false\n") != std::string::npos,
+                "snapshot text must include partial state");
+    TEST_ASSERT(text.find("gpu.count=0\n") != std::string::npos,
+                "empty GPU backends must be represented readably");
+    TEST_ASSERT(executor.get_snapshot_text().rfind("executor_snapshot\n", 0) == 0,
+                "facade text API must use the stable formatter");
+    const auto export_result = monitor::format_executor_snapshot_with_metrics(snapshot);
+    TEST_ASSERT(export_result.text == text,
+                "metric formatter must preserve the stable text output");
+    TEST_ASSERT(export_result.metrics.formatting_duration.count() >= 0,
+                "metric formatter must report a duration");
+    TEST_ASSERT(export_result.metrics.formatting_allocation_count > 0,
+                "metric formatter must report its output allocations");
+    return true;
+}
+
+bool test_snapshot_text_handles_partial_providers() {
+    ExecutorManager manager;
+    std::atomic<ExecutorLifecycleState> lifecycle{ExecutorLifecycleState::Created};
+    monitor::ExecutorMonitor monitor(
+        manager, lifecycle,
+        [] { return CompletionStatus{}; },
+        []() -> ExecutorFailureStatus { throw std::runtime_error("test provider failure"); },
+        [] { return std::vector<ExecutorFailureEvent>{}; },
+        [] { return std::map<std::string, TaskStatistics>{}; });
+
+    const auto snapshot = monitor.collect();
+    const auto text = monitor::format_executor_snapshot(snapshot);
+    TEST_ASSERT(snapshot.partial, "provider failure must create a partial snapshot");
+    TEST_ASSERT(text.find("partial=true\n") != std::string::npos,
+                "partial snapshot text must preserve its consistency marker");
+    TEST_ASSERT(text.find("consistency_note=failures\n") != std::string::npos,
+                "partial snapshot text must identify the unavailable provider");
+    TEST_ASSERT(text.find("gpu.count=0\n") != std::string::npos,
+                "empty GPU map must remain readable in partial snapshot text");
+    return true;
+}
+
+bool test_snapshot_diagnostic_callback_on_timeout_and_start_failure() {
+    Executor executor;
+    ExecutorConfig config;
+    config.min_threads = 1;
+    config.max_threads = 1;
+    TEST_ASSERT(executor.initialize(config), "executor initialization must succeed");
+
+    std::atomic<uint64_t> callback_count{0};
+    std::atomic<uint64_t> last_sequence{0};
+    std::atomic<bool> saw_pending_work{false};
+    executor.set_snapshot_diagnostic_callback(
+        [&callback_count, &last_sequence, &saw_pending_work](const ExecutorSnapshot& snapshot) {
+            callback_count.fetch_add(1, std::memory_order_relaxed);
+            last_sequence.store(snapshot.snapshot_sequence, std::memory_order_relaxed);
+            saw_pending_work.store(snapshot.completion.pending_tasks != 0,
+                                   std::memory_order_relaxed);
+        });
+
+    std::promise<void> release;
+    auto gate = release.get_future().share();
+    std::promise<void> started;
+    auto task = executor.submit([gate, &started]() {
+        started.set_value();
+        gate.wait();
+    });
+    started.get_future().wait();
+
+    const auto wait_result = executor.wait_for_completion_ex(std::chrono::milliseconds{1});
+    TEST_ASSERT(wait_result.timed_out, "blocked task must produce a wait timeout");
+    TEST_ASSERT(wait_result.diagnostic_snapshot.has_value(),
+                "wait timeout must retain a full lifecycle snapshot");
+    TEST_ASSERT(wait_result.diagnostic_snapshot->completion.pending_tasks != 0,
+                "retained timeout snapshot must include pending work evidence");
+    TEST_ASSERT(callback_count.load(std::memory_order_relaxed) == 1,
+                "wait timeout must invoke the snapshot diagnostic callback once");
+    TEST_ASSERT(last_sequence.load(std::memory_order_relaxed) != 0,
+                "timeout callback must receive a collected snapshot");
+    TEST_ASSERT(last_sequence.load(std::memory_order_relaxed) ==
+                    wait_result.diagnostic_snapshot->snapshot_sequence,
+                "timeout callback and WaitResult must share the same snapshot");
+    TEST_ASSERT(saw_pending_work.load(std::memory_order_relaxed),
+                "timeout callback snapshot must retain pending work evidence");
+
+    executor.set_snapshot_diagnostic_callback(
+        [](const ExecutorSnapshot&) { throw std::runtime_error("diagnostic callback failure"); });
+    const auto second_wait_result = executor.wait_for_completion_ex(std::chrono::milliseconds{1});
+    TEST_ASSERT(second_wait_result.timed_out,
+                "diagnostic callback failure must not change timeout result");
+    TEST_ASSERT(second_wait_result.diagnostic_snapshot.has_value(),
+                "callback failure must not discard the timeout snapshot");
+
+    release.set_value();
+    task.get();
+    executor.shutdown();
+
+    Executor invalid_executor;
+    std::atomic<bool> saw_failed_lifecycle{false};
+    invalid_executor.set_snapshot_diagnostic_callback(
+        [&saw_failed_lifecycle](const ExecutorSnapshot& snapshot) {
+            saw_failed_lifecycle.store(snapshot.lifecycle == ExecutorLifecycleState::Failed,
+                                       std::memory_order_relaxed);
+        });
+    ExecutorConfig invalid_config;
+    invalid_config.min_threads = 2;
+    invalid_config.max_threads = 1;
+    TEST_ASSERT(!invalid_executor.initialize(invalid_config),
+                "invalid configuration must fail initialization");
+    TEST_ASSERT(saw_failed_lifecycle.load(std::memory_order_relaxed),
+                "initialization failure callback must include Failed lifecycle snapshot");
     return true;
 }
 
@@ -342,6 +470,9 @@ bool test_snapshot_safe_with_concurrent_shared_ownership_destruction() {
 int main() {
     bool success = true;
     success &= test_snapshot_does_not_lazy_initialize();
+    success &= test_snapshot_text_is_stable_and_complete();
+    success &= test_snapshot_text_handles_partial_providers();
+    success &= test_snapshot_diagnostic_callback_on_timeout_and_start_failure();
     success &= test_snapshot_reports_async_work_and_shutdown();
     success &= test_snapshot_reports_failure_and_failed_initialization();
     success &= test_snapshot_includes_registered_backends();

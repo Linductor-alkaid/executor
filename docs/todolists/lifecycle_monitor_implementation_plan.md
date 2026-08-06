@@ -153,26 +153,26 @@
 - Modify: `include/executor/executor.hpp`
 - Modify: `src/executor/executor.cpp`
 
-- [ ] 提供稳定的文本格式，适用于日志和故障支持包。
-- [ ] 增加 `std::string get_snapshot_text() const`；JSON 作为可选后续 API。
-- [ ] 所有枚举使用稳定字符串，不直接输出整数值。
-- [ ] 时间、计数和容量字段使用固定单位。
-- [ ] 输出中包含 `schema_version`、`snapshot_sequence`、`captured_at`、`lifecycle` 和 `partial`。
-- [ ] 不序列化 `std::exception_ptr`、任务 callable、用户 payload 和通信数据内容。
+- [x] 提供稳定的文本格式，适用于日志和故障支持包。
+- [x] 增加 `std::string get_snapshot_text() const`；JSON 作为可选后续 API。
+- [x] 所有枚举使用稳定字符串，不直接输出整数值。
+- [x] 时间、计数和容量字段使用固定单位。
+- [x] 输出中包含 `schema_version`、`snapshot_sequence`、`captured_at`、`lifecycle` 和 `partial`。
+- [x] 不序列化 `std::exception_ptr`、任务 callable、用户 payload 和通信数据内容。
 
 ### 2.2 关键路径集成
 
-- [ ] `wait_for_completion_ex()` 超时时允许通过显式 callback 或诊断 hook 获取 snapshot。
-- [ ] shutdown 等待超时路径保留完整 snapshot，而不是只输出 active/queued 数量。
-- [ ] 初始化、注册和启动失败路径可附加 snapshot sequence 和 backend 状态。
-- [ ] 导出动作在外部线程或调用线程执行，不在 realtime cycle thread 内执行。
+- [x] `wait_for_completion_ex()` 超时时允许通过显式 callback 或诊断 hook 获取 snapshot。
+- [x] shutdown 等待超时路径保留完整 snapshot，而不是只输出 active/queued 数量。
+- [x] 初始化、注册和启动失败路径可附加 snapshot sequence 和 backend 状态。
+- [x] 导出动作在外部线程或调用线程执行，不在 realtime cycle thread 内执行。
 
 ### 2.3 测试与验收
 
-- [ ] 文本输出字段顺序稳定，便于 golden test 或日志解析。
-- [ ] 空 backend、GPU 未编译和 partial provider 场景输出可读且不崩溃。
-- [ ] 导出失败不会改变 Executor 生命周期和任务结果。
-- [ ] 记录单次采集和格式化耗时、动态分配次数，建立基线。
+- [x] 文本输出字段顺序稳定，便于 golden test 或日志解析。
+- [x] 空 backend、GPU 未编译和 partial provider 场景输出可读且不崩溃。
+- [x] 导出失败不会改变 Executor 生命周期和任务结果。
+- [x] 建立单次采集/格式化耗时和动态分配次数的性能基线：`benchmark_lifecycle_snapshot` 输出 idle initialized 场景的 wall/reported 平均耗时、格式化器本地分配次数和输出字节数。
 
 ---
 

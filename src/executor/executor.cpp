@@ -1,4 +1,6 @@
 #include "executor/executor.hpp"
+
+#include "executor/monitor/executor_snapshot_formatter.hpp"
 #include "executor/monitor/executor_monitor.hpp"
 #include "thread_pool_executor.hpp"
 #include "thread_pool/thread_pool.hpp"
@@ -927,6 +929,11 @@ void Executor::set_failure_callback(ExecutorFailureCallback callback) {
     failure_callback_ = std::move(callback);
 }
 
+void Executor::set_snapshot_diagnostic_callback(ExecutorSnapshotCallback callback) {
+    std::lock_guard<std::mutex> lock(snapshot_diagnostic_mutex_);
+    snapshot_diagnostic_callback_ = std::move(callback);
+}
+
 ExecutorFailureStatus Executor::get_failure_status() const {
     std::lock_guard<std::mutex> lock(failure_mutex_);
     return failure_status_;
@@ -1102,6 +1109,7 @@ void Executor::record_result_failure(const ExecutorResult& result,
     event.message = std::string(executor_error_code_to_string(result.error_code)) +
                     ": " + result.message;
     record_failure(std::move(event));
+    emit_snapshot_diagnostic();
 }
 
 void Executor::record_submit_rejected(const std::string& executor_name,
@@ -1274,6 +1282,8 @@ WaitResult Executor::wait_for_completion_ex(std::chrono::milliseconds timeout) {
                     ", queued=" + std::to_string(result.status.queued_tasks) +
                     ", pending=" + std::to_string(result.status.pending_tasks);
     record_failure(std::move(event));
+    result.diagnostic_snapshot = get_snapshot();
+    emit_snapshot_diagnostic(*result.diagnostic_snapshot);
     return result;
 }
 
@@ -1307,6 +1317,30 @@ CompletionStatus Executor::get_completion_status() const {
 
 ExecutorSnapshot Executor::get_snapshot() const {
     return monitor_->collect();
+}
+
+std::string Executor::get_snapshot_text() const {
+    return monitor::format_executor_snapshot(get_snapshot());
+}
+
+void Executor::emit_snapshot_diagnostic() const {
+    emit_snapshot_diagnostic(get_snapshot());
+}
+
+void Executor::emit_snapshot_diagnostic(const ExecutorSnapshot& snapshot) const {
+    ExecutorSnapshotCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(snapshot_diagnostic_mutex_);
+        callback = snapshot_diagnostic_callback_;
+    }
+    if (!callback) {
+        return;
+    }
+    try {
+        callback(snapshot);
+    } catch (...) {
+        // Diagnostics must not change facade results or lifecycle behavior.
+    }
 }
 
 // 注册 GPU 执行器

@@ -501,6 +501,19 @@ public:
     ExecutorSnapshot get_snapshot() const;
 
     /**
+     * @brief 返回稳定的行式生命周期快照文本，适用于日志和故障支持包。
+     */
+    std::string get_snapshot_text() const;
+
+    /**
+     * @brief 设置低频故障现场回调。
+     *
+     * 回调在 wait 超时及 facade 生命周期/注册/启动失败的调用线程执行；
+     * 回调异常被隔离，且不得从实时周期或任务热路径调用此 API。
+     */
+    void set_snapshot_diagnostic_callback(ExecutorSnapshotCallback callback);
+
+    /**
      * @brief 注册 GPU 执行器
      * 
      * 创建并注册 GPU 执行器。
@@ -735,6 +748,8 @@ private:
      * @brief 当前 facade 最近失败事件缓冲容量
      */
     size_t recent_failure_capacity() const;
+    void emit_snapshot_diagnostic() const;
+    void emit_snapshot_diagnostic(const ExecutorSnapshot& snapshot) const;
 
     // ExecutorManager 指针（单例或实例）
     ExecutorManager* manager_;
@@ -745,6 +760,9 @@ private:
     // 仅由 facade 生命周期边界写入；Monitor 对运行后端状态作保守补充。
     std::atomic<ExecutorLifecycleState> lifecycle_state_{ExecutorLifecycleState::Created};
     std::unique_ptr<monitor::ExecutorMonitor> monitor_;
+
+    mutable std::mutex snapshot_diagnostic_mutex_;
+    ExecutorSnapshotCallback snapshot_diagnostic_callback_;
 
     // 延迟任务结构（使用类型擦除）
     struct DelayedTask {

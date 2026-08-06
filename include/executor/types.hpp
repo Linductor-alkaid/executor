@@ -11,6 +11,7 @@
 #include <functional>
 #include <future>
 #include <map>
+#include <optional>
 #include <utility>
 
 namespace executor {
@@ -208,21 +209,6 @@ struct CompletionStatus {
     size_t pending_tasks = 0;
     size_t completed_tasks = 0;
     size_t failed_tasks = 0;
-};
-
-/**
- * @brief Executor facade 等待结果
- */
-struct WaitResult {
-    bool completed = true;
-    bool timed_out = false;
-    std::chrono::milliseconds timeout{0};
-    CompletionStatus status;
-    std::string message;
-
-    explicit operator bool() const noexcept {
-        return completed;
-    }
 };
 
 /**
@@ -452,6 +438,7 @@ struct ExecutorSnapshot {
     uint32_t schema_version = 1;                  // 快照 schema 版本
     uint64_t snapshot_sequence = 0;               // 同一 Monitor 内严格单调递增
     std::chrono::steady_clock::time_point captured_at{}; // 采集开始时间
+    std::chrono::nanoseconds collection_duration{0}; // 采集耗时（纳秒）
     ExecutorLifecycleState lifecycle = ExecutorLifecycleState::Created;
     bool partial = false;                         // 任一 provider 不可用、移除或采集失败
     std::string consistency_note;                 // partial 的原因或一致性说明
@@ -473,5 +460,32 @@ struct ExecutorSnapshot {
     size_t failed_task_count = 0;
     size_t dropped_work_count = 0;
 };
+
+/**
+ * @brief Executor facade 等待结果。
+ *
+ * timed_out 为 true 时，diagnostic_snapshot 保存同一次超时路径采集的完整
+ * 生命周期现场；正常完成和未初始化等待时为空。
+ */
+struct WaitResult {
+    bool completed = true;
+    bool timed_out = false;
+    std::chrono::milliseconds timeout{0};
+    CompletionStatus status;
+    std::string message;
+    std::optional<ExecutorSnapshot> diagnostic_snapshot;
+
+    explicit operator bool() const noexcept {
+        return completed;
+    }
+};
+
+/**
+ * @brief 低频生命周期诊断快照回调。
+ *
+ * 回调在触发诊断的 facade 调用线程中执行；实现会隔离回调异常。回调不得
+ * 调用实时周期代码，也不应把快照查询或格式化放入任务热路径。
+ */
+using ExecutorSnapshotCallback = std::function<void(const ExecutorSnapshot&)>;
 
 } // namespace executor

@@ -108,6 +108,8 @@ ExecutorSnapshot ExecutorMonitor::collect() const {
         snapshot.lifecycle = ExecutorLifecycleState::Running;
     }
     snapshot.snapshot_sequence = next_sequence_.fetch_add(1, std::memory_order_relaxed) + 1;
+    snapshot.collection_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - snapshot.captured_at);
     return snapshot;
 }
 
