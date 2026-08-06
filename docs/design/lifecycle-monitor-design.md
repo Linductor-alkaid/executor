@@ -84,8 +84,9 @@ ExecutorSnapshot get_snapshot() const;
 
 ```cpp
 struct ExecutorSnapshot {
-    uint32_t schema_version = 1;
+    uint32_t schema_version = 2;
     uint64_t snapshot_sequence = 0;
+    uint64_t state_epoch = 0;
     std::chrono::steady_clock::time_point captured_at{};
     ExecutorLifecycleState lifecycle = ExecutorLifecycleState::Created;
     bool partial = false;
@@ -205,16 +206,23 @@ Monitor 不应在采集时调用会触发懒初始化的接口；应使用现有
 
 这保证每个子状态自身安全，但不保证所有字段来自同一纳秒。文档和 API 名称必须明确这是诊断快照而非事务读。
 
-### 7.2 第二阶段：epoch 校验（可选）
+### 7.2 第二阶段：epoch 校验
 
-若实际故障需要更强一致性，可为 Manager 和各 provider 增加轻量 `state_epoch`：
+Manager 维护轻量 `state_epoch`，覆盖注册表和 Manager 生命周期边界变化；任务
+计数等高频状态变化不递增 epoch。Monitor 采集前后读取 epoch：
 
 ```text
 读取 epoch N -> 读取全部 provider -> 再读 epoch
 若 epoch 变化，重试有限次数；仍变化则 partial=true
 ```
 
-不建议通过一把全局锁包住所有后端状态读取，因为停止、GPU 查询或外部 worker 状态读取可能阻塞，并会放大实时系统抖动。
+最多重试两次；若仍发生变化，返回的 `state_epoch` 为最后一次观测值并设置
+`partial=true`、`consistency_note` 包含 `epoch_changed`。不通过一把全局锁包住所有
+后端状态读取，因为停止、GPU 查询或外部 worker 状态读取可能阻塞，并会放大实时系统抖动。
+
+当前实现将 `state_epoch` 暴露在 `ExecutorSnapshot` 中。它覆盖 Manager 管理的注册表
+和生命周期边界，不覆盖高频任务计数；因此 epoch 变化表示快照的结构性观察窗口被打断，
+而不是表示每个任务计数都必须重新采集。
 
 ### 7.3 生命周期竞态
 

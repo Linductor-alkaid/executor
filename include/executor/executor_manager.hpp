@@ -13,6 +13,7 @@
 #include <map>
 #include <shared_mutex>
 #include <mutex>
+#include <atomic>
 
 namespace executor {
 namespace monitor { class StatisticsCollector; }
@@ -74,6 +75,14 @@ public:
      * @brief 默认异步执行器是否已经 shutdown
      */
     bool is_default_async_shutdown() const;
+
+    /**
+     * @brief 获取 Manager 状态 epoch。
+     *
+     * epoch 只反映注册表和 Manager 生命周期边界变化，不因任务计数变化
+     * 递增；用于低频 snapshot 的一致性校验，不是提交 reservation。
+     */
+    uint64_t get_state_epoch() const noexcept;
 
     /**
      * @brief 获取默认异步执行器（线程池）的非持有裸指针
@@ -295,6 +304,7 @@ public:
     void record_in_flight_task_terminal(const std::string& task_id);
 
 private:
+    void bump_state_epoch() noexcept;
     bool is_executor_name_registered_locked(const std::string& name) const;
 
     // Protects default_async_executor_ and default_async_shutdown_.
@@ -331,6 +341,7 @@ private:
 
     // Once shutdown starts, named registries are sealed against new entries.
     bool registries_shutdown_ = false;
+    std::atomic<uint64_t> state_epoch_{0};
 
     // 统计收集器（任务监控）
     std::unique_ptr<monitor::StatisticsCollector> statistics_collector_;

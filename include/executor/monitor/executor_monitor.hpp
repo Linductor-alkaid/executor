@@ -14,7 +14,8 @@ namespace monitor {
  * @brief 汇总 Executor 各只读 provider 的低频诊断快照采集器。
  *
  * collect() 是 best-effort 操作：单个 provider 异常只会使快照标记为
- * partial，不会向业务调用方传播诊断异常。
+ * partial，不会向业务调用方传播诊断异常。Manager epoch 在采集前后
+ * 校验，发生结构性变化时有限重试，仍不稳定则保留 partial 标记。
  */
 class ExecutorMonitor {
 public:

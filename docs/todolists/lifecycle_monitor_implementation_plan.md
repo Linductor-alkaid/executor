@@ -220,10 +220,10 @@
 
 ### 4.1 Epoch 校验
 
-- [ ] 为 Manager 和各 backend provider 增加轻量 `state_epoch`。
-- [ ] snapshot 采集前后读取 epoch；变化时有限次数重试。
-- [ ] 重试仍不稳定时设置 `partial=true`，并写入 `consistency_note`。
-- [ ] 不使用一把全局锁包住所有 backend 状态读取。
+- [x] 为 Manager 增加轻量 `state_epoch`，覆盖注册表和 Manager 生命周期边界变化。
+- [x] snapshot 采集前后读取 epoch；变化时最多有限重试两次。
+- [x] 重试仍不稳定时设置 `partial=true`，并写入 `consistency_note=epoch_changed`。
+- [x] 不使用一把全局锁包住所有 backend 状态读取。
 
 ### 4.2 有界事件流（可选）
 
@@ -234,8 +234,8 @@
 
 ### 阶段验收
 
-- [ ] 并发状态变更下能区分稳定快照与 partial 快照。
-- [ ] epoch/事件开销通过吞吐、延迟和实时 jitter 基线验证后才默认开启。
+- [x] 并发状态变更下能区分稳定快照与 partial 快照。
+- [x] epoch 校验开销已通过生命周期快照基线验证后默认开启；事件流仍保持可选、未默认开启。
 
 ---
 
@@ -252,8 +252,8 @@
 
 ### 版本与兼容
 
-- [ ] 将 `ExecutorSnapshot`、生命周期枚举和新 API 纳入版本变更说明。
-- [ ] 通过 `schema_version` 保证文本/JSON 导出可演进。
+- [x] 将 `ExecutorSnapshot`、生命周期枚举和新 API 纳入版本变更说明。
+- [x] 通过 `schema_version` 保证文本/JSON 导出可演进。
 - [ ] 保留所有既有单项状态和统计 API，不要求用户迁移已有监控代码。
 
 ---

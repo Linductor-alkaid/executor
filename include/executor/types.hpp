@@ -477,8 +477,9 @@ struct GpuTaskConfig {
  * 也不应在实时周期或任务热路径中调用。
  */
 struct ExecutorSnapshot {
-    uint32_t schema_version = 1;                  // 快照 schema 版本
+    uint32_t schema_version = 2;                  // 快照 schema 版本
     uint64_t snapshot_sequence = 0;               // 同一 Monitor 内严格单调递增
+    uint64_t state_epoch = 0;                     // 最后观测到的 Manager 状态 epoch
     std::chrono::steady_clock::time_point captured_at{}; // 采集开始时间
     std::chrono::nanoseconds collection_duration{0}; // 采集耗时（纳秒）
     ExecutorLifecycleState lifecycle = ExecutorLifecycleState::Created;

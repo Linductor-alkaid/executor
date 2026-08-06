@@ -1050,7 +1050,7 @@ if (wait.timed_out && wait.diagnostic_snapshot) {
 
 `ExecutorSnapshot` 固定包含 `schema_version`、单实例内单调递增的
 `snapshot_sequence`、采集开始时间 `captured_at`、采集耗时 `collection_duration`（纳秒）、生命周期状态、`partial` /
-`consistency_note`、`completion`、`async`、`realtime`、`blocking_io`、`gpu`、
+`consistency_note` 和采集前后校验的 `state_epoch`、`completion`、`async`、`realtime`、`blocking_io`、`gpu`、
 `failures`、`recent_failures`、`task_statistics`、有限采样的 `in_flight_tasks` 及其计数，
 以及运行/停止后端数、活跃/排队/失败/丢弃工作数。
 
@@ -1061,8 +1061,11 @@ if (wait.timed_out && wait.diagnostic_snapshot) {
 生命周期状态为 `Created`、`Initializing`、`Running`、`Draining`、`Stopped` 或
 `Failed`。它是跨后端摘要，不替代具体后端的 `is_running`、停止原因或队列字段。
 
-快照按 provider 独立读取，不承诺跨所有后端的事务级一致性；采集期间后端变更、
-provider 不可用或读取异常会设置 `partial=true` 并在 `consistency_note` 中说明。
+快照按 provider 独立读取，不承诺跨所有后端的事务级一致性。Manager 在采集前后
+读取轻量 `state_epoch`，发生注册表或生命周期边界变化时最多重试两次；仍不稳定、
+provider 不可用或读取异常会设置 `partial=true`，并在 `consistency_note` 中说明
+（持续变化时包含 `epoch_changed`）。epoch 不因任务计数变化递增，因此不会让正常
+运行中的快照持续重试。
 快照不包含任务 callable、业务 payload 或通信 payload，也不应在实时周期线程中调用；
 `in_flight_tasks` 只在其有限采样容量内保存任务标识与状态元数据。
 

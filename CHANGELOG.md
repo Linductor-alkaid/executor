@@ -4,9 +4,9 @@
 
 ---
 
-## [0.3.1] - 2026-08-03
+## [0.3.1] - 2026-08-06
 
-0.3.1 是统一 `Executor` Facade 与按意图自动路由的向后兼容功能版本。它保留各执行模型真实的完成、接收和生命周期语义，而不将它们统一伪装为 `future`。
+0.3.1 是统一 `Executor` Facade、完整生命周期监控与按意图自动路由的功能版本。除实时进程内存锁配置项外，它保留各执行模型真实的完成、接收和生命周期语义，而不将它们统一伪装为 `future`。
 
 ### 新增
 
@@ -15,15 +15,27 @@
 - **有界 dispatch**：新增 `DispatchResult` 和 `dispatch_auto()`。`LowLatency` 只投递到用户指定、运行中的无锁执行器；`RealtimeQueue` 只投递到指定、运行中的实时队列。返回值只表示队列接收，不表示任务完成。
 - **无锁统一管理**：`ExecutorManager` 现注册、启动、停止并枚举 `LockFreeTaskExecutor`，跨异步、GPU、实时、Blocking I/O 和无锁后端保证名称唯一；关闭时先从无锁注册表摘除并停止。
 - **Blocking I/O 统一控制面**：新增 `BlockingWorkerSpec`、`WorkerHandle` 和 `start_worker()`，封装注册、启动、状态查询及 stop/wakeup/join，同时保留 `IBlockingIoWorker` 的 stop token、启动超时和退出原因契约。
+- **完整生命周期 Monitor**：新增 `ExecutorSnapshot`、`ExecutorLifecycleState`、`Executor::get_snapshot()` 和稳定文本导出，统一汇总生命周期、默认异步、Realtime、Blocking I/O、GPU、失败状态、最近失败事件、任务统计及聚合计数；snapshot 明确 `schema_version`、序号、采集时间、`partial` 和一致性说明。
+- **故障现场诊断**：等待完成或 shutdown 超时、初始化/注册/启动失败路径可通过 snapshot callback 获取完整现场；诊断异常与业务执行、future、worker 和 shutdown 隔离。
+- **有界在途任务诊断**：线程池和任务图支持 `Pending`、`Queued`、`Running`、`DependencyBlocked` 等生命周期状态，提供容量、采样率、状态计数、最老任务年龄和有限任务条目；容量溢出会计数并标记诊断不完整，不保存 callable、payload 或异常对象。
+- **一致性校验与性能基线**：Manager 增加轻量 `state_epoch`，snapshot 采集前后最多重试两次，持续变化时标记 `epoch_changed`；idle initialized async 场景完成采集与文本格式化基线，epoch 校验不使用全局大锁。
 
 ### 测试与文档
 
 - 新增自动路由阶段测试，覆盖默认路由、CPU 回退/拒绝、路由 callback 隔离、路由缓冲语义、无锁队列满、实时未启动/有界接收、Blocking worker 生命周期和能力枚举。
+- 新增生命周期快照测试，覆盖未初始化不触发懒初始化、全部后端汇总、等待/关闭故障现场、in-flight 容量溢出、并发 shutdown，以及持续注册变化下的 epoch 有界重试和 partial 标记。
 - `API.md`、`MIGRATION.md`、中英文 README 和 Blocking I/O 教程补充 API 选择表、结果语义、迁移路径及自动路由边界。
+- `API.md`、生命周期 Monitor 设计文档和实施计划同步 snapshot 字段、best-effort/partial 语义、有限在途诊断、state epoch 和稳定文本导出说明。
+- 新增生命周期快照性能基线，记录 idle initialized async 场景的采集/格式化耗时、格式化分配次数和输出字节数。
+
+### 破坏性变更
+
+- **实时进程内存锁配置**：`RealtimeThreadConfig::enable_memory_lock` 更名为 `enable_process_memory_lock`，并改为默认关闭，以明确其 Linux `mlockall` 的进程级语义。需要该能力的调用方必须改用新字段并显式设置为 `true`，同时检查 `RealtimeExecutorStatus::process_memory_lock_applied` 与 `process_memory_lock_errno`。
 
 ### 兼容性
 
-- **无破坏性变更**：`submit()`、`submit_gpu()`、实时和 Blocking I/O 的既有入口保持可用。legacy 四参数 CPU/GPU `submit_auto(TaskCharacteristics, name, kernel, config)` 在 `0.3.x` 保持既有“GPU 未就绪即失败、无隐式 CPU 回退”的行为，暂不添加编译期弃用标记。
+- 除上述配置项外，`submit()`、`submit_gpu()`、实时和 Blocking I/O 的既有入口保持可用；生命周期 snapshot 为新增只读 API，既有单项状态和统计 API 无需迁移。
+- legacy 四参数 CPU/GPU `submit_auto(TaskCharacteristics, name, kernel, config)` 在 `0.3.x` 保持既有“GPU 未就绪即失败、无隐式 CPU 回退”的行为，暂不添加编译期弃用标记。
 - 带返回值的 CPU/GPU 自动任务、`ExecutionReport<T>` 和 legacy overload 的弃用/移除仅在后续允许破坏性变更的主版本评估。
 
 ---

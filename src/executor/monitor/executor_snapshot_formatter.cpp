@@ -128,6 +128,7 @@ void write_executor_snapshot(Output& output, const ExecutorSnapshot& snapshot) {
     output << "executor_snapshot\n";
     output << "schema_version=" << snapshot.schema_version << '\n';
     output << "snapshot_sequence=" << snapshot.snapshot_sequence << '\n';
+    output << "state_epoch=" << snapshot.state_epoch << '\n';
     output << "captured_at_steady_ns=" << time_point_ns(snapshot.captured_at) << '\n';
     output << "collection_duration_ns=" << snapshot.collection_duration.count() << '\n';
     output << "lifecycle=" << lifecycle_to_string(snapshot.lifecycle) << '\n';

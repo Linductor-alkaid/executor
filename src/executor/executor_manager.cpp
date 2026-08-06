@@ -119,6 +119,7 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
 
     // 保存执行器
     default_async_executor_ = std::move(executor);
+    bump_state_epoch();
     return true;
 }
 
@@ -130,6 +131,14 @@ bool ExecutorManager::has_default_async_executor() const {
 bool ExecutorManager::is_default_async_shutdown() const {
     std::lock_guard<std::mutex> lock(default_async_mutex_);
     return default_async_shutdown_;
+}
+
+uint64_t ExecutorManager::get_state_epoch() const noexcept {
+    return state_epoch_.load(std::memory_order_acquire);
+}
+
+void ExecutorManager::bump_state_epoch() noexcept {
+    state_epoch_.fetch_add(1, std::memory_order_release);
 }
 
 // 获取默认异步执行器（线程池）
@@ -172,6 +181,7 @@ bool ExecutorManager::register_realtime_executor(const std::string& name,
     }
     std::unique_lock<std::shared_mutex> lock(mutex_);
     realtime_executors_[name] = std::shared_ptr<IRealtimeExecutor>(std::move(executor));
+    bump_state_epoch();
     return true;
 }
 
@@ -253,6 +263,7 @@ bool ExecutorManager::register_lockfree_executor(
     }
     std::unique_lock<std::shared_mutex> lock(lockfree_mutex_);
     lockfree_executors_[name] = std::shared_ptr<LockFreeTaskExecutor>(std::move(executor));
+    bump_state_epoch();
     return true;
 }
 
@@ -280,11 +291,16 @@ std::vector<std::string> ExecutorManager::get_lockfree_executor_names() const {
 
 bool ExecutorManager::start_lockfree_executor(const std::string& name) {
     auto executor = get_lockfree_executor_snapshot(name);
-    return executor && executor->start();
+    const bool started = executor && executor->start();
+    if (started) bump_state_epoch();
+    return started;
 }
 
 void ExecutorManager::stop_lockfree_executor(const std::string& name) {
-    if (auto executor = get_lockfree_executor_snapshot(name)) executor->stop_and_join();
+    if (auto executor = get_lockfree_executor_snapshot(name)) {
+        executor->stop_and_join();
+        bump_state_epoch();
+    }
 }
 
 bool ExecutorManager::try_push_lockfree_task(const std::string& name,
@@ -306,6 +322,7 @@ bool ExecutorManager::register_blocking_io_executor(
     }
     std::unique_lock<std::shared_mutex> lock(blocking_io_mutex_);
     blocking_io_executors_[name] = std::shared_ptr<IBlockingIoExecutor>(std::move(executor));
+    bump_state_epoch();
     return true;
 }
 
@@ -322,13 +339,19 @@ std::shared_ptr<IBlockingIoExecutor> ExecutorManager::get_blocking_io_executor_s
 
 void ExecutorManager::request_stop_blocking_io_executor(const std::string& name) noexcept {
     try {
-        if (auto executor = get_blocking_io_executor_snapshot(name)) executor->request_stop();
+        if (auto executor = get_blocking_io_executor_snapshot(name)) {
+            executor->request_stop();
+            bump_state_epoch();
+        }
     } catch (...) {
     }
 }
 
 void ExecutorManager::stop_blocking_io_executor(const std::string& name) {
-    if (auto executor = get_blocking_io_executor_snapshot(name)) executor->stop();
+    if (auto executor = get_blocking_io_executor_snapshot(name)) {
+        executor->stop();
+        bump_state_epoch();
+    }
 }
 
 BlockingIoExecutorStatus ExecutorManager::get_blocking_io_executor_status(
@@ -396,6 +419,7 @@ bool ExecutorManager::register_gpu_executor(const std::string& name,
     }
     std::unique_lock<std::shared_mutex> lock(gpu_mutex_);
     gpu_executors_[name] = std::shared_ptr<IGpuExecutor>(std::move(executor));
+    bump_state_epoch();
     return true;
 }
 
@@ -719,6 +743,7 @@ ShutdownResult ExecutorManager::shutdown(bool wait_for_tasks) {
             }
             gpu_executors_.clear();
         }
+        bump_state_epoch();
     }
 
     for (auto& executor : lockfree_executors) {
@@ -755,6 +780,7 @@ ShutdownResult ExecutorManager::shutdown(bool wait_for_tasks) {
             }
         }
         default_async_shutdown_ = true;
+        bump_state_epoch();
     }
     return shutdown_requested_from_worker
                ? ShutdownResult::RequestedFromWorker

@@ -109,8 +109,10 @@ bool test_snapshot_text_is_stable_and_complete() {
 
     TEST_ASSERT(text.rfind("executor_snapshot\n", 0) == 0,
                 "snapshot text must have a stable format marker");
-    TEST_ASSERT(text.find("schema_version=1\n") != std::string::npos,
+    TEST_ASSERT(text.find("schema_version=2\n") != std::string::npos,
                 "snapshot text must include schema version");
+    TEST_ASSERT(text.find("state_epoch=") != std::string::npos,
+                "snapshot text must include the consistency epoch");
     TEST_ASSERT(text.find("snapshot_sequence=") != std::string::npos,
                 "snapshot text must include snapshot sequence");
     TEST_ASSERT(text.find("captured_at_steady_ns=") != std::string::npos,
@@ -561,6 +563,37 @@ bool test_monitor_includes_registered_gpu_backend() {
     return true;
 }
 
+bool test_snapshot_marks_persistent_epoch_changes_partial() {
+    ExecutorManager manager;
+    std::atomic<ExecutorLifecycleState> lifecycle{ExecutorLifecycleState::Running};
+    std::atomic<unsigned> registrations{0};
+    monitor::ExecutorMonitor monitor(
+        manager, lifecycle,
+        [&manager, &registrations] {
+            const auto index = registrations.fetch_add(1, std::memory_order_relaxed);
+            auto backend = std::make_unique<SnapshotMockGpuExecutor>(
+                "epoch_gpu_" + std::to_string(index));
+            (void)manager.register_gpu_executor(
+                "epoch_gpu_" + std::to_string(index), std::move(backend));
+            return CompletionStatus{};
+        },
+        [] { return ExecutorFailureStatus{}; },
+        [] { return std::vector<ExecutorFailureEvent>{}; },
+        [] { return std::map<std::string, TaskStatistics>{}; });
+
+    const auto snapshot = monitor.collect();
+    TEST_ASSERT(snapshot.partial,
+                "persistent Manager changes during collection must mark snapshot partial");
+    TEST_ASSERT(snapshot.consistency_note.find("epoch_changed") != std::string::npos,
+                "partial snapshot must identify exhausted epoch retries");
+    TEST_ASSERT(snapshot.state_epoch == manager.get_state_epoch(),
+                "snapshot must report the final observed Manager epoch");
+    TEST_ASSERT(registrations.load(std::memory_order_relaxed) == 3,
+                "Monitor must use its bounded epoch retry budget");
+    manager.shutdown();
+    return true;
+}
+
 bool test_snapshot_is_safe_during_shutdown() {
     Executor executor;
     ExecutorConfig config;
@@ -682,6 +715,7 @@ int main() {
     success &= test_snapshot_does_not_lazy_initialize();
     success &= test_snapshot_text_is_stable_and_complete();
     success &= test_snapshot_text_handles_partial_providers();
+    success &= test_snapshot_marks_persistent_epoch_changes_partial();
     success &= test_snapshot_diagnostic_callback_on_timeout_and_start_failure();
     success &= test_snapshot_reports_async_work_and_shutdown();
     success &= test_snapshot_reports_bounded_in_flight_tasks();

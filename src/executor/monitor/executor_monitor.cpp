@@ -34,9 +34,17 @@ ExecutorMonitor::ExecutorMonitor(
 }
 
 ExecutorSnapshot ExecutorMonitor::collect() const {
+    constexpr unsigned kMaxEpochRetries = 2;
     ExecutorSnapshot snapshot;
-    snapshot.captured_at = std::chrono::steady_clock::now();
-    snapshot.lifecycle = lifecycle_.load(std::memory_order_acquire);
+    uint64_t first_epoch = 0;
+    uint64_t last_epoch = 0;
+
+    for (unsigned attempt = 0; attempt <= kMaxEpochRetries; ++attempt) {
+        snapshot = ExecutorSnapshot{};
+        snapshot.captured_at = std::chrono::steady_clock::now();
+        first_epoch = manager_.get_state_epoch();
+        snapshot.state_epoch = first_epoch;
+        snapshot.lifecycle = lifecycle_.load(std::memory_order_acquire);
 
     try {
         snapshot.completion = completion_provider_();
@@ -125,6 +133,17 @@ ExecutorSnapshot ExecutorMonitor::collect() const {
         snapshot.running_backend_count != 0) {
         snapshot.lifecycle = ExecutorLifecycleState::Running;
     }
+        last_epoch = manager_.get_state_epoch();
+        snapshot.state_epoch = last_epoch;
+        if (first_epoch == last_epoch) {
+            break;
+        }
+        if (attempt == kMaxEpochRetries) {
+            mark_partial(snapshot, "epoch_changed");
+            break;
+        }
+    }
+
     snapshot.snapshot_sequence = next_sequence_.fetch_add(1, std::memory_order_relaxed) + 1;
     snapshot.collection_duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - snapshot.captured_at);
