@@ -55,6 +55,7 @@ CompletionStatus get_completion_status() const;
 - `wait_for_completion()` 使用公开常量 `executor::kDefaultWaitForCompletionTimeout`，当前为 300 秒；保留 `void` 签名以兼容旧调用方，但超时会记录 `FailureKind::WaitTimeout`。
 - `try_wait_for_completion(timeout)` 返回 `true` 表示所有已提交异步任务在 `timeout` 内完成；返回 `false` 表示等待超时且仍有任务未完成。超时不是 panic，也不抛异常；调用方可继续通过 `get_failure_status().wait_timeout_count` 或 `get_recent_failures()` 观察。
 - `wait_for_completion_for(timeout)` 是支持任意 `std::chrono::duration` 的 bool 入口；`wait_for_completion_ex(timeout)` 返回 `WaitResult`，其中包含 `completed`、`timed_out`、`timeout`、`message`、`CompletionStatus` 快照；超时时 `diagnostic_snapshot` 保存同一次路径采集的完整生命周期现场。
+- `WaitResult::diagnostic_snapshot` 仅在等待超时时有值；它与该次超时诊断回调收到的快照使用同一个 `snapshot_sequence`。它仍是 best-effort 现场，不表示任务已取消或可恢复。
 - `get_completion_status()` 返回默认异步执行器的完成状态快照，包括 `is_initialized`、`is_running`、`is_idle`、`active_tasks`、`queued_tasks`、`pending_tasks`、`completed_tasks` 和 `failed_tasks`；`is_idle()` 是其中 `is_idle` 的便捷入口。状态查询不会触发默认执行器懒初始化。
 - 所有上述等待 API 只覆盖默认异步执行器的 future 型任务；不会等待 GPU、无锁、实时队列或长期 Blocking I/O worker。后者分别使用其返回结果、状态和显式停止接口观察。
 - `initialize_ex(config)` 返回 `ExecutorResult`，可区分 `AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`StartFailed` 等原因；旧 `initialize()` 保持 `bool` 签名，并委托到 `_ex` 后只返回 `ok`。
@@ -1012,7 +1013,7 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 - `get_snapshot`：一次返回 Executor 生命周期、默认异步/实时/Blocking I/O/GPU 后端状态、失败摘要、最近失败事件、任务统计和聚合计数；不会触发默认异步执行器懒初始化。
 - `get_snapshot_text`：以稳定的行式文本导出一次新采集的 snapshot，适合日志和故障支持包；JSON 不属于当前 API。
 - `set_snapshot_diagnostic_callback`：设置超时及 facade 初始化、注册、启动失败时的低频现场回调。回调接收独立的 `ExecutorSnapshot` 值，并在触发操作的调用线程执行；异常被隔离，不能放入实时周期或任务热路径。
-- `format_executor_snapshot_with_metrics`：位于 `executor::monitor`，用于性能基线；返回文本、格式化耗时和格式化器本地分配次数。常规业务日志仍使用 `get_snapshot_text()`。
+- `format_executor_snapshot_with_metrics`：位于 `executor::monitor`，用于性能基线；返回文本、`formatting_duration`（纳秒）和 `formatting_allocation_count`。分配次数只统计 formatter 的流缓冲与最终输出字符串，不统计 snapshot 采集或调用方 logger 的分配；常规业务日志仍使用 `get_snapshot_text()`。
 - `get_task_statistics` / `get_all_task_statistics`：按 `task_type` 或全部的成功/失败/超时次数及执行时间统计。
 
 ### 6.1 完整生命周期快照
@@ -1027,6 +1028,22 @@ if (snapshot.lifecycle == executor::ExecutorLifecycleState::Failed ||
 }
 ```
 
+等待或关闭超时时，可以同时保留 `WaitResult` 中的完整现场，并通过回调把相同快照交给日志/支持包线程：
+
+```cpp
+executor.set_snapshot_diagnostic_callback(
+    [](const executor::ExecutorSnapshot& snapshot) {
+        // 低频写入日志或故障支持包；不要在实时周期线程中序列化。
+        std::cerr << executor::monitor::format_executor_snapshot(snapshot);
+    });
+
+const auto wait = executor.wait_for_completion_ex(std::chrono::seconds{2});
+if (wait.timed_out && wait.diagnostic_snapshot) {
+    // 该快照与回调收到的快照具有相同的 snapshot_sequence。
+    save_diagnostic(*wait.diagnostic_snapshot); // 应用层支持包写入函数
+}
+```
+
 `ExecutorSnapshot` 固定包含 `schema_version`、单实例内单调递增的
 `snapshot_sequence`、采集开始时间 `captured_at`、采集耗时 `collection_duration`（纳秒）、生命周期状态、`partial` /
 `consistency_note`、`completion`、`async`、`realtime`、`blocking_io`、`gpu`、
@@ -1038,6 +1055,18 @@ if (snapshot.lifecycle == executor::ExecutorLifecycleState::Failed ||
 快照按 provider 独立读取，不承诺跨所有后端的事务级一致性；采集期间后端变更、
 provider 不可用或读取异常会设置 `partial=true` 并在 `consistency_note` 中说明。
 快照不包含在途任务明细、任务 callable、业务 payload 或通信 payload，也不应在实时周期线程中调用。
+
+### 6.2 快照文本与性能基线
+
+`get_snapshot_text()` 每次调用都会采集并格式化一份新快照，适合低频日志和故障支持包，输出顺序稳定、时间字段带 `*_ns` 或 `*_ms` 单位，枚举输出稳定字符串。JSON 导出不属于当前 API。
+
+性能基线使用独立的 `benchmark_lifecycle_snapshot`，不会改变生产路径：
+
+```text
+./build/tests/benchmark_lifecycle_snapshot --iterations 1000
+```
+
+输出包含 idle initialized async 场景的快照采集 wall/reported 平均耗时、文本格式化 wall/reported 平均耗时、格式化器本地平均分配次数和输出字节数。该结果受 CPU、编译选项、后端注册数量和失败/统计条目数量影响，只用于同一环境的前后对比，不是性能保证。
 
 ---
 
@@ -1125,6 +1154,8 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 - **ExecutorResult**：`ok`、`error_code`、`message`，用于 `initialize_ex`、`register_realtime_task_ex`、`start_realtime_task_ex`、`register_gpu_executor_ex`。常见 `ExecutorErrorCode`：`AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed`、`PermissionDenied`。`_ex` 失败会写入 failure/diagnostic event，但配置错误不会计入 `task_exception_count`。
 - **CompletionStatus**：`executor_name`、`is_initialized`、`is_running`、`is_idle`、`active_tasks`、`queued_tasks`、`pending_tasks`、`completed_tasks`、`failed_tasks`。由 `get_completion_status()` 和 `WaitResult::status` 返回；状态查询不会触发默认异步执行器懒初始化。它仅描述默认异步执行器，不包含实时线程、实时队列或应用自建的多消费者流水线；跨视觉、控制等消费者的 idle 状态由应用定义并汇总。
 - **WaitResult**：`completed`、`timed_out`、`timeout`、`status`、`message`、可选 `diagnostic_snapshot`。由 `wait_for_completion_ex(timeout)` 返回；超时会记录 `FailureKind::WaitTimeout`，并保留同一次路径采集的完整生命周期快照。
+- **ExecutorSnapshotTextMetrics**：`formatting_duration`（纳秒）和 `formatting_allocation_count`。仅用于 formatter 性能基线；分配计数不包含 snapshot provider、Executor 业务路径或外部日志系统。
+- **ExecutorSnapshotTextExport**：`text` 与 `metrics`，由 `executor::monitor::format_executor_snapshot_with_metrics()` 返回。
 - **CycleStatistics**：`name`、`period_ns`、`cycle_count`、`timeout_count`、`avg_cycle_time_ns`、`max_cycle_time_ns`、`is_running`。由 `ICycleManager::get_statistics()` 返回。
 
 ### 7.4 通信 facade 通用类型
