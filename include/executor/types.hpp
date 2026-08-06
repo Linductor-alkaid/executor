@@ -348,6 +348,21 @@ struct TaskStatistics {
 };
 
 /**
+ * @brief Executor 的整体生命周期摘要。
+ *
+ * 该状态只用于诊断，不作为任务提交的 reservation，也不替代各后端的
+ * is_running、stop_requested 或 stop_reason 状态。
+ */
+enum class ExecutorLifecycleState {
+    Created,      // 已创建 / Created: 默认异步后端尚未初始化
+    Initializing, // 初始化中 / Initializing: 一个或多个后端正在创建或启动
+    Running,      // 运行中 / Running: 至少一个可用后端正在运行
+    Draining,     // 排空中 / Draining: 已请求停止，正在完成已接受的工作
+    Stopped,      // 已停止 / Stopped: Manager 拥有的全部后端均已停止
+    Failed        // 失败 / Failed: 初始化或关键生命周期操作失败
+};
+
+/**
  * @brief 周期统计信息（用于ICycleManager）
  */
 struct CycleStatistics {
@@ -424,5 +439,39 @@ struct GpuTaskConfig {
 };
 
 } // namespace gpu
+
+/**
+ * @brief Executor 的低频诊断快照。
+ *
+ * 每个字段由其 provider 在各自的同步域内复制；跨 provider 的组合为
+ * best-effort，不承诺事务级一致性。captured_at 固定为采集开始时间。
+ * 此接口不包含在途任务明细、任务 callable、业务 payload 或通信 payload，
+ * 也不应在实时周期或任务热路径中调用。
+ */
+struct ExecutorSnapshot {
+    uint32_t schema_version = 1;                  // 快照 schema 版本
+    uint64_t snapshot_sequence = 0;               // 同一 Monitor 内严格单调递增
+    std::chrono::steady_clock::time_point captured_at{}; // 采集开始时间
+    ExecutorLifecycleState lifecycle = ExecutorLifecycleState::Created;
+    bool partial = false;                         // 任一 provider 不可用、移除或采集失败
+    std::string consistency_note;                 // partial 的原因或一致性说明
+
+    CompletionStatus completion;
+    AsyncExecutorStatus async;                    // 默认异步后端；未初始化时为默认值
+    std::map<std::string, RealtimeExecutorStatus> realtime;
+    std::map<std::string, BlockingIoExecutorStatus> blocking_io;
+    std::map<std::string, gpu::GpuExecutorStatus> gpu;
+
+    ExecutorFailureStatus failures;
+    std::vector<ExecutorFailureEvent> recent_failures;
+    std::map<std::string, TaskStatistics> task_statistics;
+
+    size_t running_backend_count = 0;
+    size_t stopping_backend_count = 0;
+    size_t active_task_count = 0;
+    size_t queued_task_count = 0;
+    size_t failed_task_count = 0;
+    size_t dropped_work_count = 0;
+};
 
 } // namespace executor
