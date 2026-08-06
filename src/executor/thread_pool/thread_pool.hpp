@@ -287,6 +287,10 @@ public:
     void set_worker_thread_start_hook_for_test(std::function<void(size_t)> hook) {
         worker_thread_start_hook_for_test_ = std::move(hook);
     }
+
+    void set_worker_entry_hook_for_test(std::function<void(size_t)> hook) {
+        worker_entry_hook_for_test_ = std::move(hook);
+    }
 #endif
 
 private:
@@ -499,6 +503,7 @@ private:
 #ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
     std::function<void(size_t)> worker_queue_create_hook_for_test_;
     std::function<void(size_t)> worker_thread_start_hook_for_test_;
+    std::function<void(size_t)> worker_entry_hook_for_test_;
 #endif
 };
 

@@ -149,6 +149,12 @@ void ThreadPool::rollback_initialization_failure() {
 }
 
 void ThreadPool::worker_thread(size_t worker_id) {
+#ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
+    if (worker_entry_hook_for_test_) {
+        worker_entry_hook_for_test_(worker_id);
+    }
+#endif
+
     struct WorkerContextGuard {
         explicit WorkerContextGuard(ThreadPool* pool)
             : previous(ThreadPool::current_worker_pool_) {
@@ -170,7 +176,8 @@ void ThreadPool::worker_thread(size_t worker_id) {
                    stop_.load(std::memory_order_acquire);
         });
 
-        if (stop_.load(std::memory_order_acquire)) {
+        if (stop_.load(std::memory_order_acquire) &&
+            !initialized_.load(std::memory_order_acquire)) {
             return;
         }
     }

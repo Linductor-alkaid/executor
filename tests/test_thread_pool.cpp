@@ -334,6 +334,49 @@ bool test_thread_pool_init_worker_thread_failure_rolls_back() {
     return true;
 }
 
+bool test_thread_pool_shutdown_drains_when_workers_start_late() {
+    std::cout << "Testing ThreadPool shutdown with delayed worker entry..." << std::endl;
+
+    ThreadPool pool;
+    ThreadPoolConfig config;
+    config.min_threads = 2;
+    config.max_threads = 2;
+    config.queue_capacity = 100;
+
+    std::promise<void> release_workers;
+    std::shared_future<void> release = release_workers.get_future().share();
+    pool.set_worker_entry_hook_for_test([release](size_t) {
+        release.wait();
+    });
+
+    TEST_ASSERT(pool.initialize(config), "delayed-worker pool should initialize");
+
+    std::atomic<int> completed{0};
+    for (int i = 0; i < 10; ++i) {
+        pool.submit([&completed]() noexcept {
+            completed.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+
+    auto shutdown = std::async(std::launch::async, [&pool]() {
+        return pool.shutdown(true);
+    });
+    const auto stop_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (!pool.is_stopped() && std::chrono::steady_clock::now() < stop_deadline) {
+        std::this_thread::yield();
+    }
+    TEST_ASSERT(pool.is_stopped(), "shutdown should publish stop before workers are released");
+
+    release_workers.set_value();
+    TEST_ASSERT(shutdown.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+                "shutdown should finish after delayed workers enter");
+    TEST_ASSERT(completed.load(std::memory_order_relaxed) == 10,
+                "workers starting after stop should drain accepted tasks");
+
+    std::cout << "  ThreadPool shutdown with delayed worker entry: PASSED" << std::endl;
+    return true;
+}
+
 bool test_thread_pool_submit_basic() {
     std::cout << "Testing ThreadPool submit basic..." << std::endl;
     
@@ -1013,6 +1056,7 @@ int main() {
     all_passed &= test_thread_pool_initialize();
     all_passed &= test_thread_pool_init_oom_safety();
     all_passed &= test_thread_pool_init_worker_thread_failure_rolls_back();
+    all_passed &= test_thread_pool_shutdown_drains_when_workers_start_late();
     all_passed &= test_thread_pool_submit_basic();
     all_passed &= test_thread_pool_submit_priority();
     all_passed &= test_thread_pool_concurrent_submit();
