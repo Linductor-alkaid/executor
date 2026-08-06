@@ -1204,6 +1204,15 @@ WaitResult Executor::wait_for_completion_ex(std::chrono::milliseconds timeout) {
     WaitResult result;
     result.timeout = timeout;
 
+    // Waiting for an absent backend is complete; it must not lazily create one.
+    if (!manager_->has_default_async_executor()) {
+        result.completed = true;
+        result.timed_out = false;
+        result.status = get_completion_status();
+        result.message = "Async executor is not initialized";
+        return result;
+    }
+
     auto ex = manager_->get_default_async_executor_snapshot();
     if (!ex) {
         result.completed = true;
@@ -1242,6 +1251,10 @@ bool Executor::is_idle() const {
 
 CompletionStatus Executor::get_completion_status() const {
     CompletionStatus completion;
+    if (!manager_->has_default_async_executor()) {
+        return completion;
+    }
+
     auto ex = manager_->get_default_async_executor_snapshot();
     if (!ex) {
         return completion;
