@@ -28,6 +28,7 @@ LockFreeTaskExecutor::~LockFreeTaskExecutor() {
 }
 
 bool LockFreeTaskExecutor::start() {
+    std::lock_guard<std::mutex> lock(stop_mutex_);
     if (stopped_.load(std::memory_order_acquire)) {
         return false;
     }

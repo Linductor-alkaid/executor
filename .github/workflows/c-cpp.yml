@@ -161,7 +161,8 @@ jobs:
           test_thread_pool_resize_uaf \
           test_thread_pool_resize_status \
           test_dispatcher_resize_under_load \
-          test_concurrent_stop_submit
+          test_concurrent_stop_submit \
+          test_self_stop_handoff
 
     - name: 运行 TSAN 并发测试
       working-directory: build-tsan
@@ -169,7 +170,7 @@ jobs:
         TSAN_OPTIONS: halt_on_error=1 history_size=7 second_deadlock_stack=1
       run: |
         ctest -C Release --output-on-failure --verbose \
-          -R '^(test_thread_pool|test_thread_pool_resize_uaf|test_thread_pool_resize_status|test_dispatcher_resize_under_load|test_concurrent_stop_submit)$'
+          -R '^(test_thread_pool|test_thread_pool_resize_uaf|test_thread_pool_resize_status|test_dispatcher_resize_under_load|test_concurrent_stop_submit|test_self_stop_handoff)$'
 
   gpu-headers-build:
     if: github.event_name != 'schedule'

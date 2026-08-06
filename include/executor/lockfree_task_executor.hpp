@@ -57,7 +57,8 @@ public:
 
     /**
      * @brief 启动消费者线程
-     * @return 成功返回true，已启动返回false
+     * @return 成功返回true；已启动或停止已开始返回false。stop_and_join() 与
+     * start() 并发时按同一生命周期锁线性化；一旦停止开始，之后不能重启。
      */
     bool start();
 
@@ -68,7 +69,8 @@ public:
 
     /**
      * @brief 请求停止并在外部线程中等待消费者线程结束
-     * @return 外部调用返回 true；消费者线程内调用返回 false
+     * @return 外部调用返回 true；消费者线程内调用返回 false。与 start() 并发时，
+     * 先获得生命周期锁的操作决定结果。
      */
     bool stop_and_join();
 

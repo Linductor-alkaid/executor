@@ -97,6 +97,59 @@ TEST(SelfStopHandoff, ConcurrentStopFromTwoExternalThreads) {
     EXPECT_TRUE(second_result);
 }
 
+class CountingLockFreeTaskExecutor : public executor::LockFreeTaskExecutor {
+public:
+    using LockFreeTaskExecutor::LockFreeTaskExecutor;
+
+    std::atomic<unsigned> worker_creations{0};
+
+protected:
+    std::thread create_worker_thread() override {
+        worker_creations.fetch_add(1, std::memory_order_relaxed);
+        return LockFreeTaskExecutor::create_worker_thread();
+    }
+};
+
+TEST(SelfStopHandoff, LockFreeConcurrentStartStopNoLeakedThread) {
+    constexpr unsigned kIterations = 200;
+
+    for (unsigned iteration = 0; iteration < kIterations; ++iteration) {
+        CountingLockFreeTaskExecutor executor(8);
+        std::atomic<unsigned> ready{0};
+        std::atomic<bool> go{false};
+        bool start_result = false;
+        bool stop_result = false;
+
+        std::thread starter([&] {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            start_result = executor.start();
+        });
+        std::thread stopper([&] {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            stop_result = executor.stop_and_join();
+        });
+
+        while (ready.load(std::memory_order_acquire) != 2) {
+            std::this_thread::yield();
+        }
+        go.store(true, std::memory_order_release);
+        starter.join();
+        stopper.join();
+
+        EXPECT_TRUE(stop_result) << "iteration " << iteration;
+        EXPECT_EQ(executor.worker_creations.load(std::memory_order_relaxed),
+                  start_result ? 1U : 0U)
+            << "iteration " << iteration;
+        EXPECT_FALSE(executor.start()) << "iteration " << iteration;
+    }
+}
+
 TEST(RealtimeConcurrentStop, StartRejectedUntilJoinCompletes) {
     executor::RealtimeThreadConfig config;
     config.thread_name = "concurrent_stop_rt";
