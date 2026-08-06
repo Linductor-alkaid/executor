@@ -6,7 +6,11 @@
 
 ## 从 0.3.0 升级到 0.3.1：统一 Facade 与自动路由
 
-0.3.1 是向后兼容扩展。`submit()`、`submit_gpu()`、四参数 legacy `submit_auto(TaskCharacteristics, name, kernel, config)`、实时和 Blocking I/O 的既有入口及返回类型均保持不变。
+0.3.1 除实时进程内存锁配置项外是向后兼容扩展。`submit()`、`submit_gpu()`、四参数 legacy `submit_auto(TaskCharacteristics, name, kernel, config)`、实时和 Blocking I/O 的既有入口及返回类型均保持不变。
+
+### 破坏性变更：实时进程内存锁配置
+
+`RealtimeThreadConfig::enable_memory_lock` 已更名为 `enable_process_memory_lock`，并改为默认关闭，以纠正 Linux `mlockall` 的进程级语义。若需要进程级内存锁，改用 `enable_process_memory_lock = true`，并检查 `RealtimeExecutorStatus::process_memory_lock_applied` 与 `process_memory_lock_errno`；仅在完成整个进程的 memlock 内存预算评估后显式启用。
 
 ### 推荐迁移路径
 
@@ -103,7 +107,7 @@
 
 ### 默认值变化：默认即最优 Facade
 
-- `RealtimeThreadConfig.enable_memory_lock` 已替换为 `enable_process_memory_lock`，默认 `false`：Linux `mlockall` 是进程级操作，会锁定当前和后续映射；仅在部署已为整个进程预留 memlock 预算时显式启用。失败时检查 `RealtimeExecutorStatus::process_memory_lock_errno`。
+- `RealtimeThreadConfig.enable_memory_lock` 默认 `true`：Linux 下尽力尝试 `mlockall`，降低分页导致的实时抖动；平台不支持或权限不足时安全回退，不改变任务状态。
 - `RealtimeThreadConfig.timer_slack_ns` 默认 `1`：Linux 下将 timer slack 调到 1 ns；设置为 `0` 表示显式 opt-out。
 - `ThreadPoolConfig.min_threads` / `max_threads` 默认 `0`：作为 sentinel，初始化时自动探测 `hardware_concurrency()`；探测失败退到安全默认。
 - `ThreadPoolConfig.enable_work_stealing` 默认 `true`：`max_threads == 1` 时自动关闭。
@@ -121,11 +125,11 @@ Facade 的默认调优可以安全回退，但运行时任务状态不能静默�
 
 ### 破坏性变更
 
-`RealtimeThreadConfig::enable_memory_lock` 已更名为 `enable_process_memory_lock`，并改为默认关闭，以纠正 `mlockall` 的进程级语义。更新现有初始化代码并根据部署内存预算显式 opt in。
+**无。** 0.2.2 保持 0.2.1 公开 API 兼容；新增字段、默认值和 API 均为向后兼容扩展。
 
 ### 升级检查清单
 
-- [ ] 若需要进程级内存锁，改用 `enable_process_memory_lock = true`，并检查 `process_memory_lock_applied` 与 `process_memory_lock_errno`；默认无需配置。
+- [ ] 如果业务不希望库自动锁内存或调整 timer slack，显式设置 `enable_memory_lock = false` 或 `timer_slack_ns = 0`。
 - [ ] 如果线程池线程数或 CPU 亲和性必须固定，显式设置 `min_threads`、`max_threads` 与 `cpu_affinity`，不要依赖默认 sentinel。
 - [ ] 实时任务推送路径建议从 `push_task()` 迁移到 `push_task_ex()`，并监控 `dropped_task_count`。
 - [ ] 使用 `task_timeout_ms` 时确认它是软超时：长任务需要在任务内部自行检查取消条件。
