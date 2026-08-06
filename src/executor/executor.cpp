@@ -162,7 +162,8 @@ Executor::Executor(ExecutorManager& manager)
         [this]() { return get_completion_status(); },
         [this]() { return get_failure_status(); },
         [this]() { return get_recent_failures(); },
-        [this]() { return get_all_task_statistics(); });
+        [this]() { return get_all_task_statistics(); },
+        [this]() { return manager_->get_in_flight_task_diagnostics(); });
 }
 
 // 实例化模式构造函数
@@ -177,7 +178,8 @@ Executor::Executor()
         [this]() { return get_completion_status(); },
         [this]() { return get_failure_status(); },
         [this]() { return get_recent_failures(); },
-        [this]() { return get_all_task_statistics(); });
+        [this]() { return get_all_task_statistics(); },
+        [this]() { return manager_->get_in_flight_task_diagnostics(); });
 }
 
 // 析构函数
@@ -280,6 +282,7 @@ TaskHandle Executor::allocate_task_handle() {
         std::lock_guard<std::mutex> lock(task_graph_mutex_);
         task_graph_nodes_.emplace(handle.id(), TaskGraphNode{});
     }
+    manager_->record_in_flight_task_pending(handle.id(), "task_graph", "default");
     return handle;
 }
 
@@ -344,6 +347,7 @@ void Executor::mark_task_graph_running(const TaskHandle& handle) {
     if (it != task_graph_nodes_.end() && it->second.state == TaskGraphState::Pending) {
         it->second.state = TaskGraphState::Running;
     }
+    manager_->record_in_flight_task_state(handle.id(), TaskLifecycleState::Running);
 }
 
 void Executor::mark_task_graph_succeeded(const TaskHandle& handle) {
@@ -359,6 +363,7 @@ void Executor::mark_task_graph_succeeded(const TaskHandle& handle) {
             prune_task_graph_locked(handle.id());
         }
     }
+    manager_->record_in_flight_task_terminal(handle.id());
     task_graph_cv_.notify_all();
 }
 
@@ -376,6 +381,7 @@ void Executor::mark_task_graph_failed(const TaskHandle& handle,
             prune_task_graph_locked(handle.id());
         }
     }
+    manager_->record_in_flight_task_terminal(handle.id());
     task_graph_cv_.notify_all();
 }
 
@@ -408,12 +414,14 @@ void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) 
                 node_it->second.exception = dependency_exception;
                 node_it->second.error_message = "when_all dependency failed";
                 ready_ids.push_back(dependent_id);
+                manager_->record_in_flight_task_terminal(dependent_id);
             } else if (dependencies_succeeded_locked(dependencies)) {
                 node_it->second.state = TaskGraphState::Succeeded;
                 node_it->second.exception = nullptr;
                 node_it->second.error_message.clear();
                 task_dependencies_->mark_completed(dependent_id);
                 ready_ids.push_back(dependent_id);
+                manager_->record_in_flight_task_terminal(dependent_id);
             }
         }
     }
@@ -435,6 +443,7 @@ TaskHandle Executor::when_all(std::vector<TaskHandle> dependencies) {
     TaskHandle handle = allocate_task_handle();
 
     bool dependencies_valid = true;
+    bool terminal = false;
     std::string validation_error;
     {
         std::lock_guard<std::mutex> lock(task_graph_mutex_);
@@ -457,9 +466,11 @@ TaskHandle Executor::when_all(std::vector<TaskHandle> dependencies) {
                 node.state = TaskGraphState::Failed;
                 node.exception = dependency_exception;
                 node.error_message = "when_all dependency failed";
+                terminal = true;
             } else if (dependencies_succeeded_locked(dependencies)) {
                 node.state = TaskGraphState::Succeeded;
                 task_dependencies_->mark_completed(handle.id());
+                terminal = true;
             } else {
                 node.state = TaskGraphState::WhenAll;
             }
@@ -471,6 +482,13 @@ TaskHandle Executor::when_all(std::vector<TaskHandle> dependencies) {
         mark_task_graph_failed(handle, exception, validation_error);
         record_submit_rejected("default", handle.id(), validation_error, exception);
         return handle;
+    }
+
+    if (terminal) {
+        manager_->record_in_flight_task_terminal(handle.id());
+    } else {
+        manager_->record_in_flight_task_state(
+            handle.id(), TaskLifecycleState::DependencyBlocked);
     }
 
     task_graph_cv_.notify_all();
@@ -783,7 +801,6 @@ bool Executor::push_realtime_task(const std::string& name, std::function<void()>
             "Realtime executor not found");
         return false;
     }
-
     const auto before = executor->get_status();
     const bool accepted = executor->push_task_ex(std::move(task));
     if (accepted) {
@@ -1222,6 +1239,14 @@ void Executor::enable_monitoring(bool enable) {
 
 void Executor::set_monitoring_sampling_rate(double rate) {
     manager_->set_monitoring_sampling_rate(rate);
+}
+
+void Executor::set_in_flight_task_capacity(size_t capacity) {
+    manager_->set_in_flight_task_capacity(capacity);
+}
+
+void Executor::set_in_flight_task_sampling_rate(double rate) {
+    manager_->set_in_flight_task_sampling_rate(rate);
 }
 
 TaskStatistics Executor::get_task_statistics(const std::string& task_type) const {

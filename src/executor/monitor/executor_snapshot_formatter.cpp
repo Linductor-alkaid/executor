@@ -32,6 +32,21 @@ const char* failure_kind_to_string(FailureKind kind) {
     }
 }
 
+const char* task_lifecycle_to_string(TaskLifecycleState state) {
+    switch (state) {
+    case TaskLifecycleState::Pending: return "Pending";
+    case TaskLifecycleState::Queued: return "Queued";
+    case TaskLifecycleState::Running: return "Running";
+    case TaskLifecycleState::Succeeded: return "Succeeded";
+    case TaskLifecycleState::Failed: return "Failed";
+    case TaskLifecycleState::TimedOut: return "TimedOut";
+    case TaskLifecycleState::Rejected: return "Rejected";
+    case TaskLifecycleState::Cancelled: return "Cancelled";
+    case TaskLifecycleState::DependencyBlocked: return "DependencyBlocked";
+    default: return "Unknown";
+    }
+}
+
 const char* gpu_backend_to_string(gpu::GpuBackend backend) {
     switch (backend) {
     case gpu::GpuBackend::CUDA: return "CUDA";
@@ -126,6 +141,27 @@ void write_executor_snapshot(Output& output, const ExecutorSnapshot& snapshot) {
     output << "aggregate.queued_task_count=" << snapshot.queued_task_count << '\n';
     output << "aggregate.failed_task_count=" << snapshot.failed_task_count << '\n';
     output << "aggregate.dropped_work_count=" << snapshot.dropped_work_count << '\n';
+    output << "in_flight.count=" << snapshot.in_flight_count << '\n';
+    output << "in_flight.oldest_age_ns=" << snapshot.oldest_in_flight_age.count() << '\n';
+    output << "in_flight.dropped_count=" << snapshot.in_flight_dropped_count << '\n';
+    output << "in_flight.incomplete=";
+    write_bool(output, snapshot.in_flight_diagnostics_incomplete);
+    output << '\n';
+    for (const auto& [state, count] : snapshot.in_flight_state_counts) {
+        output << "in_flight.state[" << task_lifecycle_to_string(state) << "]=" << count << '\n';
+    }
+    output << "in_flight.tasks.count=" << snapshot.in_flight_tasks.size() << '\n';
+    for (size_t index = 0; index < snapshot.in_flight_tasks.size(); ++index) {
+        const auto& task = snapshot.in_flight_tasks[index];
+        output << "in_flight.tasks[" << index << "].id=" << task.task_id << '\n';
+        output << "in_flight.tasks[" << index << "].type=" << task.task_type << '\n';
+        output << "in_flight.tasks[" << index << "].executor_name=" << task.executor_name << '\n';
+        output << "in_flight.tasks[" << index << "].state=" << task_lifecycle_to_string(task.state) << '\n';
+        output << "in_flight.tasks[" << index << "].submitted_at_steady_ns="
+               << time_point_ns(task.submitted_at) << '\n';
+        output << "in_flight.tasks[" << index << "].state_changed_at_steady_ns="
+               << time_point_ns(task.state_changed_at) << '\n';
+    }
     output << "completion.name=" << snapshot.completion.executor_name << '\n';
     output << "completion.initialized=";
     write_bool(output, snapshot.completion.is_initialized);

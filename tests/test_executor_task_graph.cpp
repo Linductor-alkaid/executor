@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <future>
 #include <stdexcept>
@@ -40,6 +41,45 @@ TEST(ExecutorTaskGraphTest, SubmitAfterRunsAfterDependency) {
     EXPECT_EQ(dependent.get(), 42);
     EXPECT_EQ(order.load(std::memory_order_acquire), 2);
 
+    executor.shutdown();
+}
+
+TEST(ExecutorTaskGraphTest, SnapshotIdentifiesDependencyBlockedHandle) {
+    executor::Executor executor;
+    ASSERT_TRUE(executor.initialize(config()));
+    executor.set_in_flight_task_capacity(16);
+
+    std::promise<void> root_started;
+    std::promise<void> release_root;
+    const auto release = release_root.get_future().share();
+    auto root = executor.submit_with_handle([&] {
+        root_started.set_value();
+        release.wait();
+        return 1;
+    });
+    root_started.get_future().wait();
+
+    auto dependent = executor.submit_after_with_handle(root.handle, [] { return 2; });
+    const auto snapshot = executor.get_snapshot();
+    const auto blocked = std::find_if(
+        snapshot.in_flight_tasks.begin(), snapshot.in_flight_tasks.end(),
+        [&](const executor::TaskLifecycleSnapshot& task) {
+            return task.task_id == dependent.handle.id();
+        });
+    ASSERT_NE(blocked, snapshot.in_flight_tasks.end());
+    EXPECT_EQ(blocked->task_type, "task_graph");
+    EXPECT_EQ(blocked->state, executor::TaskLifecycleState::DependencyBlocked);
+
+    release_root.set_value();
+    EXPECT_EQ(root.future.get(), 1);
+    EXPECT_EQ(dependent.future.get(), 2);
+    const auto completed = executor.get_snapshot();
+    EXPECT_EQ(std::count_if(completed.in_flight_tasks.begin(), completed.in_flight_tasks.end(),
+                            [&](const executor::TaskLifecycleSnapshot& task) {
+                                return task.task_id == root.handle.id() ||
+                                       task.task_id == dependent.handle.id();
+                            }),
+              0);
     executor.shutdown();
 }
 

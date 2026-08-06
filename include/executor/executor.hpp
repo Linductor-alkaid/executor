@@ -443,6 +443,17 @@ public:
     void set_monitoring_sampling_rate(double rate);
 
     /**
+     * @brief Limit sampled queued/running task diagnostics retained by snapshots.
+     *
+     * A capacity of 0 disables in-flight retention. It does not disable the
+     * existing aggregate TaskStatistics monitor.
+     */
+    void set_in_flight_task_capacity(size_t capacity);
+
+    /** Set the independent sampling rate for in-flight task diagnostics. */
+    void set_in_flight_task_sampling_rate(double rate);
+
+    /**
      * @brief 按 task_type 获取任务统计
      */
     TaskStatistics get_task_statistics(const std::string& task_type) const;
@@ -998,6 +1009,9 @@ auto Executor::submit_after_with_handle(const std::vector<TaskHandle>& dependenc
         record_submit_rejected("default", handle.id(), validation_error, exception);
         return submission;
     }
+
+    manager_->record_in_flight_task_state(
+        handle.id(), TaskLifecycleState::DependencyBlocked);
 
     submission.future = submit([this,
                                 handle,

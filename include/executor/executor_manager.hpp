@@ -272,6 +272,9 @@ public:
      */
     void set_monitoring_sampling_rate(double rate);
 
+    void set_in_flight_task_capacity(size_t capacity);
+    void set_in_flight_task_sampling_rate(double rate);
+
     /**
      * @brief 按 task_type 获取任务统计
      */
@@ -281,6 +284,15 @@ public:
      * @brief 获取全部 task_type 的任务统计
      */
     std::map<std::string, TaskStatistics> get_all_task_statistics() const;
+
+    InFlightTaskDiagnostics get_in_flight_task_diagnostics() const;
+
+    void record_in_flight_task_pending(const std::string& task_id,
+                                        const std::string& task_type,
+                                        const std::string& executor_name);
+    void record_in_flight_task_state(const std::string& task_id,
+                                     TaskLifecycleState state);
+    void record_in_flight_task_terminal(const std::string& task_id);
 
 private:
     bool is_executor_name_registered_locked(const std::string& name) const;

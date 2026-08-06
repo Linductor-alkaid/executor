@@ -141,13 +141,24 @@ struct TaskLifecycleSnapshot {
     std::string task_type;
     std::string executor_name;
     TaskLifecycleState state = TaskLifecycleState::Pending;
-    int64_t submit_time_ns = 0;
-    int64_t start_time_ns = 0;
-    int64_t elapsed_time_ns = 0;
+    std::chrono::steady_clock::time_point submitted_at{};
+    std::chrono::steady_clock::time_point state_changed_at{};
 };
 ```
 
-应同时提供 `in_flight_count`、最老在途任务年龄和按 backend/state 的计数，而不是默认保存全部任务。
+当前实现覆盖默认异步线程池和 facade 任务图：任务被线程池接受后记录为 `Queued`，worker
+开始执行时转为 `Running`，成功、失败或软超时时立即移除。`TaskHandle` 创建时记录为
+`Pending`，依赖未满足时转为 `DependencyBlocked`，依赖失败或完成时立即移除。状态表默认容量为 128，
+通过 `set_in_flight_task_capacity()` 配置；容量为 0 时关闭该表但不关闭既有聚合统计。
+`set_in_flight_task_sampling_rate()` 与聚合统计采样独立。表满时不驱逐仍在途的条目，
+只增加 `in_flight_dropped_count` 并将 snapshot 标为 `partial` / `in_flight_diagnostics_incomplete`。
+
+`ExecutorSnapshot` 同时提供 `in_flight_count`、最老在途任务年龄、按 state 的计数和
+有限 `in_flight_tasks`，而不是默认保存全部任务。实时、GPU 和 Blocking I/O 仍由各自
+backend 状态描述：realtime 使用 `RealtimeExecutorStatus` 的运行、容量和 drop/rejection
+计数，GPU 使用 `GpuExecutorStatus` 的 active/queued/completed/failed kernel 计数，Blocking
+I/O 使用 `BlockingIoExecutorStatus` 的 running/ready/stop reason/error。它们不会写入普通
+任务表；特别是 realtime cycle thread 不允许为诊断获取 `TaskMonitor` 的互斥锁。
 
 ## 6. 组件架构
 

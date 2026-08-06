@@ -995,6 +995,8 @@ exec.stop();
 ```cpp
 void enable_monitoring(bool enable);
 void set_monitoring_sampling_rate(double rate);
+void set_in_flight_task_capacity(size_t capacity);
+void set_in_flight_task_sampling_rate(double rate);
 
 AsyncExecutorStatus get_async_executor_status() const;
 RealtimeExecutorStatus get_realtime_executor_status(const std::string& name) const;
@@ -1008,6 +1010,8 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
 - `enable_monitoring`：开启/关闭任务监控（默认可在 `ExecutorConfig::enable_monitoring` 配置）。
 - `set_monitoring_sampling_rate`：设置监控采样率（0.0–1.0），1.0 表示每次任务都采样，较低值可减少监控开销。
+- `set_in_flight_task_capacity`：设置 snapshot 保留的默认异步线程池在途诊断容量，默认 128；0 关闭在途表但不关闭聚合任务统计。满容量不会驱逐现有条目，而是累计 `in_flight_dropped_count` 并标记 snapshot 不完整。
+- `set_in_flight_task_sampling_rate`：设置在途诊断独立采样率（0.0–1.0）；不改变 `TaskStatistics` 的采样率或任务执行语义。
 - `get_async_executor_status`：线程池名称、运行状态、活跃/完成/失败任务数、队列大小、平均任务时间等。
 - `get_realtime_executor_status`：实时线程名称、运行状态、周期、周期计数、超时计数、平均/最大周期时间等。
 - `get_snapshot`：一次返回 Executor 生命周期、默认异步/实时/Blocking I/O/GPU 后端状态、失败摘要、最近失败事件、任务统计和聚合计数；不会触发默认异步执行器懒初始化。
@@ -1047,14 +1051,20 @@ if (wait.timed_out && wait.diagnostic_snapshot) {
 `ExecutorSnapshot` 固定包含 `schema_version`、单实例内单调递增的
 `snapshot_sequence`、采集开始时间 `captured_at`、采集耗时 `collection_duration`（纳秒）、生命周期状态、`partial` /
 `consistency_note`、`completion`、`async`、`realtime`、`blocking_io`、`gpu`、
-`failures`、`recent_failures`、`task_statistics` 以及运行/停止后端数、活跃/排队/失败/丢弃工作数。
+`failures`、`recent_failures`、`task_statistics`、有限采样的 `in_flight_tasks` 及其计数，
+以及运行/停止后端数、活跃/排队/失败/丢弃工作数。
+
+在途诊断目前覆盖默认异步线程池和 facade 任务图。普通任务被接受后依次可见为 `Queued` 和 `Running`；`TaskHandle` 在依赖未满足时可见为 `Pending` / `DependencyBlocked`。终态即从表中移除；`in_flight_count`、`in_flight_state_counts` 和 `oldest_in_flight_age` 用于定位队列积压、依赖阻塞和慢任务。`in_flight_tasks` 不含 callable、payload、异常对象或依赖列表。它是有界采样结果，`in_flight_diagnostics_incomplete=true` 或 snapshot `partial=true` 时不得视为完整任务清单。实时、GPU、Blocking I/O 使用各自 backend-specific 状态：realtime 的运行/容量/drop/rejection，GPU 的 active/queued/completed/failed kernel，以及 Blocking I/O 的 running/ready/stop reason/error；它们未伪装成普通 future 任务。
+
+`TaskLifecycleState` 的稳定字符串为 `Pending`、`Queued`、`Running`、`Succeeded`、`Failed`、`TimedOut`、`Rejected`、`Cancelled` 和 `DependencyBlocked`。当前在途表只保留非终态条目；`Rejected`、`Succeeded`、`Failed`、`TimedOut` 和 `Cancelled` 通过 failure/完成统计或 backend 状态观察，不作为无限终态历史。
 
 生命周期状态为 `Created`、`Initializing`、`Running`、`Draining`、`Stopped` 或
 `Failed`。它是跨后端摘要，不替代具体后端的 `is_running`、停止原因或队列字段。
 
 快照按 provider 独立读取，不承诺跨所有后端的事务级一致性；采集期间后端变更、
 provider 不可用或读取异常会设置 `partial=true` 并在 `consistency_note` 中说明。
-快照不包含在途任务明细、任务 callable、业务 payload 或通信 payload，也不应在实时周期线程中调用。
+快照不包含任务 callable、业务 payload 或通信 payload，也不应在实时周期线程中调用；
+`in_flight_tasks` 只在其有限采样容量内保存任务标识与状态元数据。
 
 ### 6.2 快照文本与性能基线
 

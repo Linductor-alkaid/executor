@@ -609,6 +609,18 @@ void ExecutorManager::set_monitoring_sampling_rate(double rate) {
     }
 }
 
+void ExecutorManager::set_in_flight_task_capacity(size_t capacity) {
+    if (statistics_collector_) {
+        statistics_collector_->get_task_monitor().set_in_flight_capacity(capacity);
+    }
+}
+
+void ExecutorManager::set_in_flight_task_sampling_rate(double rate) {
+    if (statistics_collector_) {
+        statistics_collector_->get_task_monitor().set_in_flight_sampling_rate(rate);
+    }
+}
+
 TaskStatistics ExecutorManager::get_task_statistics(
     const std::string& task_type) const {
     return statistics_collector_
@@ -621,6 +633,43 @@ ExecutorManager::get_all_task_statistics() const {
     return statistics_collector_
            ? statistics_collector_->get_all_task_statistics()
            : std::map<std::string, TaskStatistics>{};
+}
+
+InFlightTaskDiagnostics ExecutorManager::get_in_flight_task_diagnostics() const {
+    return statistics_collector_
+           ? statistics_collector_->get_in_flight_task_diagnostics()
+           : InFlightTaskDiagnostics{};
+}
+
+void ExecutorManager::record_in_flight_task_pending(const std::string& task_id,
+                                                     const std::string& task_type,
+                                                     const std::string& executor_name) {
+    if (statistics_collector_) {
+        try {
+            statistics_collector_->get_task_monitor().record_task_pending(
+                task_id, task_type, executor_name);
+        } catch (...) {
+        }
+    }
+}
+
+void ExecutorManager::record_in_flight_task_state(const std::string& task_id,
+                                                   TaskLifecycleState state) {
+    if (statistics_collector_) {
+        try {
+            statistics_collector_->get_task_monitor().record_task_state(task_id, state);
+        } catch (...) {
+        }
+    }
+}
+
+void ExecutorManager::record_in_flight_task_terminal(const std::string& task_id) {
+    if (statistics_collector_) {
+        try {
+            statistics_collector_->get_task_monitor().record_task_terminal(task_id);
+        } catch (...) {
+        }
+    }
 }
 
 // 关闭所有执行器

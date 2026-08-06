@@ -186,33 +186,33 @@
 - Modify: `include/executor/monitor/task_monitor.hpp`
 - Modify: `src/executor/monitor/task_monitor.cpp`
 
-- [ ] 定义 `TaskLifecycleState`：`Pending`、`Queued`、`Running`、`Succeeded`、`Failed`、`TimedOut`、`Rejected`、`Cancelled`、`DependencyBlocked`。
-- [ ] 定义 `TaskLifecycleSnapshot`，只保存 task id/type、executor name、时间戳和状态。
-- [ ] 为 TaskMonitor 增加有限容量 in-flight 表及配置接口。
-- [ ] 增加采样策略：聚合统计采样与在途诊断采样可独立配置。
-- [ ] 容量溢出时保留计数并在统一 snapshot 中标记诊断不完整。
+- [x] 定义 `TaskLifecycleState`：`Pending`、`Queued`、`Running`、`Succeeded`、`Failed`、`TimedOut`、`Rejected`、`Cancelled`、`DependencyBlocked`。
+- [x] 定义 `TaskLifecycleSnapshot`，只保存 task id/type、executor name、时间戳和状态。
+- [x] 为 TaskMonitor 增加有限容量 in-flight 表及配置接口。
+- [x] 增加采样策略：聚合统计采样与在途诊断采样可独立配置。
+- [x] 容量溢出时保留计数并在统一 snapshot 中标记诊断不完整。
 
 ### 3.2 生命周期埋点
 
-- [ ] 在普通任务 submit/accepted/queued/running/complete/fail/timeout/reject 路径接入状态更新。
-- [ ] 在任务图 pending、dependency blocked、dependency failed 路径接入状态更新。
-- [ ] 在实时 push accepted/drop 路径接入 backend-specific 状态，不把实时周期伪装成普通 future 任务。
-- [ ] 在 GPU kernel accepted/running/completed/failed 路径接入 GPU-specific 状态。
-- [ ] 在 Blocking I/O worker start/ready/stop/exception 路径接入 worker 状态。
-- [ ] 所有监控回调异常隔离，不能影响任务完成和 worker 退出。
+- [x] 在默认异步线程池的 accepted/queued/running/complete/fail/timeout 路径接入状态更新；提交拒绝仍由既有 failure status/recent failure 观察，尚不保留为 in-flight 条目。
+- [x] 在任务图 pending、dependency blocked、dependency failed 路径接入状态更新。
+- [x] 在实时 push accepted/drop 路径复用 `RealtimeExecutorStatus` 的运行、队列容量和 drop/rejection 计数；不在 realtime cycle thread 写入有锁的普通任务表。
+- [x] 在 GPU kernel accepted/running/completed/failed 路径复用 `GpuExecutorStatus` 的 active/queued/completed/failed kernel 计数。
+- [x] 在 Blocking I/O worker start/ready/stop/exception 路径复用 `BlockingIoExecutorStatus` 的 running/ready/stop reason/error 状态。
+- [x] 普通线程池和任务图诊断更新均隔离监控异常，不能影响任务提交、完成和 worker 退出。
 
 ### 3.3 查询与测试
 
-- [ ] 在 `ExecutorSnapshot` 中增加 `in_flight_count`、最老任务年龄和按状态计数。
-- [ ] 可选增加有限数量的 `in_flight_tasks`，默认不暴露 payload。
-- [ ] 测试长任务、队列积压、依赖阻塞、软超时、提交拒绝和 shutdown 竞态。
-- [ ] 对账：状态终态数量、TaskStatistics 和 failure counters 不得产生无法解释的重复计数。
+- [x] 在 `ExecutorSnapshot` 中增加 `in_flight_count`、最老任务年龄和按状态计数。
+- [x] 增加有限数量的 `in_flight_tasks`，默认不暴露 payload。
+- [x] 测试长任务、队列积压、容量溢出、依赖阻塞和软超时；提交拒绝仍通过既有 failure status/recent failure 观察，不进入在途表。
+- [x] 对账：普通任务和任务图终态会从在途表移除，既有 `TaskStatistics` 与 failure counters 仍由原路径维护。
 
 ### 阶段验收
 
-- [ ] 在途任务诊断可定位“运行中慢任务”和“排队未执行任务”。
-- [ ] 关闭监控或采样率为 0 时，任务结果和 Executor 生命周期语义不变。
-- [ ] 有界容量和高并发压力下无无限内存增长。
+- [x] 在默认异步线程池中，在途任务诊断可定位“运行中慢任务”和“排队未执行任务”。
+- [x] 关闭监控或在途采样率为 0 时，任务结果和 Executor 生命周期语义不变。
+- [x] 有界容量和高并发压力下无无限内存增长。
 
 ---
 

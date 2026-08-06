@@ -876,6 +876,15 @@ bool ThreadPool::try_submit(std::function<void()> task,
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
     }
 
+    if (auto* monitor = monitor_.load(std::memory_order_acquire);
+        monitor && monitor->is_enabled()) {
+        try {
+            monitor->record_task_queued(executor_task.task_id, "default", "default");
+        } catch (...) {
+            // Diagnostics must never turn an accepted task into a rejection.
+        }
+    }
+
     dispatch_pending_tasks(1);
     notify_workers_after_queue_change();
 
@@ -926,6 +935,15 @@ bool ThreadPool::try_submit_priority(
 
         scheduler_.enqueue(executor_task);
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    if (auto* monitor = monitor_.load(std::memory_order_acquire);
+        monitor && monitor->is_enabled()) {
+        try {
+            monitor->record_task_queued(executor_task.task_id, "default", "default");
+        } catch (...) {
+            // Diagnostics must never turn an accepted task into a rejection.
+        }
     }
 
     dispatch_pending_tasks(1);
@@ -991,6 +1009,14 @@ bool ThreadPool::try_submit_batch(
             executor_task.timeout_ms = config_.task_timeout_ms;
 
             scheduler_.enqueue(executor_task);
+            if (auto* monitor = monitor_.load(std::memory_order_acquire);
+                monitor && monitor->is_enabled()) {
+                try {
+                    monitor->record_task_queued(executor_task.task_id, "default", "default");
+                } catch (...) {
+                    // Diagnostics must never turn an accepted batch into a rejection.
+                }
+            }
         }
 
         total_tasks_.fetch_add(batch_size, std::memory_order_relaxed);

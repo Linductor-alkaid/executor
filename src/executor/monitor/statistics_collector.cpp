@@ -17,6 +17,10 @@ StatisticsCollector::get_all_task_statistics() const {
     return task_monitor_.get_all_statistics();
 }
 
+InFlightTaskDiagnostics StatisticsCollector::get_in_flight_task_diagnostics() const {
+    return task_monitor_.get_in_flight_diagnostics();
+}
+
 void StatisticsCollector::set_gpu_status_provider(
     std::function<std::map<std::string, gpu::GpuExecutorStatus>()> provider) {
     gpu_status_provider_ = std::move(provider);

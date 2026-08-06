@@ -22,13 +22,15 @@ ExecutorMonitor::ExecutorMonitor(
     CompletionProvider completion_provider,
     FailureStatusProvider failure_status_provider,
     RecentFailuresProvider recent_failures_provider,
-    TaskStatisticsProvider task_statistics_provider)
+    TaskStatisticsProvider task_statistics_provider,
+    InFlightTaskDiagnosticsProvider in_flight_task_diagnostics_provider)
     : manager_(manager)
     , lifecycle_(lifecycle)
     , completion_provider_(std::move(completion_provider))
     , failure_status_provider_(std::move(failure_status_provider))
     , recent_failures_provider_(std::move(recent_failures_provider))
-    , task_statistics_provider_(std::move(task_statistics_provider)) {
+    , task_statistics_provider_(std::move(task_statistics_provider))
+    , in_flight_task_diagnostics_provider_(std::move(in_flight_task_diagnostics_provider)) {
 }
 
 ExecutorSnapshot ExecutorMonitor::collect() const {
@@ -77,6 +79,22 @@ ExecutorSnapshot ExecutorMonitor::collect() const {
         snapshot.task_statistics = task_statistics_provider_();
     } catch (...) {
         mark_partial(snapshot, "task_statistics");
+    }
+    if (in_flight_task_diagnostics_provider_) {
+        try {
+            const auto diagnostics = in_flight_task_diagnostics_provider_();
+            snapshot.in_flight_count = diagnostics.count;
+            snapshot.in_flight_state_counts = diagnostics.state_counts;
+            snapshot.oldest_in_flight_age = diagnostics.oldest_age;
+            snapshot.in_flight_dropped_count = diagnostics.dropped_count;
+            snapshot.in_flight_diagnostics_incomplete = diagnostics.incomplete;
+            snapshot.in_flight_tasks = diagnostics.tasks;
+            if (diagnostics.incomplete) {
+                mark_partial(snapshot, "in_flight_tasks_capacity");
+            }
+        } catch (...) {
+            mark_partial(snapshot, "in_flight_tasks");
+        }
     }
 
     snapshot.running_backend_count = snapshot.async.is_running ? 1 : 0;

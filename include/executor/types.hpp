@@ -334,6 +334,48 @@ struct TaskStatistics {
 };
 
 /**
+ * @brief A sampled task's lifecycle state for bounded diagnostics.
+ *
+ * This is diagnostic state, not a future state machine. In particular, a
+ * soft timeout is observed when the worker skips an expired queued task.
+ */
+enum class TaskLifecycleState {
+    Pending,
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    TimedOut,
+    Rejected,
+    Cancelled,
+    DependencyBlocked
+};
+
+/**
+ * @brief A value copy of one sampled in-flight task.
+ *
+ * No callable, payload, exception object, or dependency list is retained.
+ */
+struct TaskLifecycleSnapshot {
+    std::string task_id;
+    std::string task_type;
+    std::string executor_name;
+    TaskLifecycleState state = TaskLifecycleState::Pending;
+    std::chrono::steady_clock::time_point submitted_at{};
+    std::chrono::steady_clock::time_point state_changed_at{};
+};
+
+/** @brief Bounded in-flight diagnostic data collected by TaskMonitor. */
+struct InFlightTaskDiagnostics {
+    size_t count = 0;
+    std::map<TaskLifecycleState, size_t> state_counts;
+    std::chrono::nanoseconds oldest_age{0};
+    size_t dropped_count = 0;
+    bool incomplete = false;
+    std::vector<TaskLifecycleSnapshot> tasks;
+};
+
+/**
  * @brief Executor 的整体生命周期摘要。
  *
  * 该状态只用于诊断，不作为任务提交的 reservation，也不替代各后端的
@@ -452,6 +494,15 @@ struct ExecutorSnapshot {
     ExecutorFailureStatus failures;
     std::vector<ExecutorFailureEvent> recent_failures;
     std::map<std::string, TaskStatistics> task_statistics;
+
+    // Bounded, sampled diagnostics. A full table means some sampled tasks
+    // were omitted; aggregate statistics remain independent and complete.
+    size_t in_flight_count = 0;
+    std::map<TaskLifecycleState, size_t> in_flight_state_counts;
+    std::chrono::nanoseconds oldest_in_flight_age{0};
+    size_t in_flight_dropped_count = 0;
+    bool in_flight_diagnostics_incomplete = false;
+    std::vector<TaskLifecycleSnapshot> in_flight_tasks;
 
     size_t running_backend_count = 0;
     size_t stopping_backend_count = 0;

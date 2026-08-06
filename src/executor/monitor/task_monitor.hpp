@@ -7,6 +7,8 @@
 #include <mutex>
 #include <atomic>
 #include <cstdint>
+#include <chrono>
+#include <vector>
 
 namespace executor {
 namespace monitor {
@@ -35,6 +37,22 @@ public:
     virtual void record_task_start(const std::string& task_id,
                            const std::string& task_type = "default");
 
+    /** Record a successfully accepted task before it reaches a worker. */
+    void record_task_queued(const std::string& task_id,
+                            const std::string& task_type = "default",
+                            const std::string& executor_name = "default");
+
+    /** Record a facade task before it has been accepted by a backend. */
+    void record_task_pending(const std::string& task_id,
+                             const std::string& task_type,
+                             const std::string& executor_name);
+
+    /** Update a previously sampled in-flight task without changing sampling. */
+    void record_task_state(const std::string& task_id, TaskLifecycleState state);
+
+    /** Remove a task whose lifecycle reached a terminal state. */
+    void record_task_terminal(const std::string& task_id);
+
     /**
      * @brief 记录任务完成
      * @param task_id 任务 ID
@@ -50,6 +68,22 @@ public:
      * @param task_id 任务 ID
      */
     void record_task_timeout(const std::string& task_id);
+
+    /** Return a bounded value copy of sampled queued/running tasks. */
+    std::vector<TaskLifecycleSnapshot> get_in_flight_tasks() const;
+    InFlightTaskDiagnostics get_in_flight_diagnostics() const;
+    std::map<TaskLifecycleState, size_t> get_in_flight_state_counts() const;
+    size_t get_in_flight_count() const;
+    size_t get_in_flight_dropped_count() const;
+    std::chrono::nanoseconds get_oldest_in_flight_age() const;
+    bool in_flight_diagnostics_incomplete() const;
+
+    /** Capacity 0 disables in-flight retention without disabling statistics. */
+    void set_in_flight_capacity(size_t capacity);
+    size_t get_in_flight_capacity() const;
+    /** Sampling is independent from aggregate TaskStatistics sampling. */
+    void set_in_flight_sampling_rate(double rate);
+    double get_in_flight_sampling_rate() const;
 
     /**
      * @brief 按 task_type 获取聚合统计
@@ -75,13 +109,19 @@ public:
 
 private:
     bool should_sample() const;
+    bool should_sample_in_flight() const;
     mutable std::mutex mutex_;
     std::atomic<bool> enabled_{true};
     std::atomic<uint32_t> sampling_rate_{100};  // 百分比，100=100%，1=1%
     mutable std::atomic<uint64_t> sample_counter_{0};
+    std::atomic<size_t> in_flight_capacity_{128};
+    std::atomic<uint32_t> in_flight_sampling_rate_{100};
+    mutable std::atomic<uint64_t> in_flight_sample_counter_{0};
 
     /// task_id -> task_type，用于 complete/timeout 时查找
     std::unordered_map<std::string, std::string> task_id_to_type_;
+    std::unordered_map<std::string, TaskLifecycleSnapshot> in_flight_tasks_;
+    size_t in_flight_dropped_count_ = 0;
 
     /// 按 task_type 聚合的统计（内部存储，与 TaskStatistics 一致）
     struct Stats {

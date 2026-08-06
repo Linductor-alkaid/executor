@@ -40,6 +40,8 @@ public:
      */
     std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 
+    InFlightTaskDiagnostics get_in_flight_task_diagnostics() const;
+
     /**
      * @brief 设置 GPU 状态提供者（由 ExecutorManager 注入，避免循环依赖）
      */

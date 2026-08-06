@@ -3,7 +3,9 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <thread>
+#include <vector>
 
 #include <executor/executor.hpp>
 #include <executor/executor_manager.hpp>
@@ -272,6 +274,123 @@ bool test_snapshot_reports_async_work_and_shutdown() {
     return true;
 }
 
+bool test_snapshot_reports_bounded_in_flight_tasks() {
+    Executor executor;
+    ExecutorConfig config;
+    config.min_threads = 1;
+    config.max_threads = 1;
+    config.enable_work_stealing = false;
+    TEST_ASSERT(executor.initialize(config), "executor initialization must succeed");
+
+    executor.set_in_flight_task_capacity(2);
+    executor.set_in_flight_task_sampling_rate(1.0);
+    std::promise<void> running;
+    auto release = std::make_shared<std::promise<void>>();
+    auto release_future = release->get_future().share();
+    auto first = executor.submit([&running, release_future] {
+        running.set_value();
+        release_future.wait();
+    });
+    running.get_future().wait();
+    auto second = executor.submit([] {});
+
+    const auto active = executor.get_snapshot();
+    TEST_ASSERT(active.in_flight_count == 2,
+                "snapshot must retain the sampled running and queued tasks");
+    TEST_ASSERT(active.in_flight_state_counts.at(TaskLifecycleState::Running) == 1,
+                "snapshot must identify the running task");
+    TEST_ASSERT(active.in_flight_state_counts.at(TaskLifecycleState::Queued) == 1,
+                "snapshot must identify the queued task");
+    TEST_ASSERT(active.oldest_in_flight_age.count() >= 0,
+                "snapshot must include an oldest in-flight age");
+    TEST_ASSERT(monitor::format_executor_snapshot(active).find("in_flight.state[Queued]=1\n") !=
+                    std::string::npos,
+                "text snapshot must use stable in-flight state strings");
+
+    release->set_value();
+    first.get();
+    second.get();
+    TEST_ASSERT(executor.get_snapshot().in_flight_count == 0,
+                "completed tasks must be removed from the diagnostic table");
+
+    executor.set_in_flight_task_capacity(1);
+    std::promise<void> running_again;
+    auto release_again = std::make_shared<std::promise<void>>();
+    auto release_again_future = release_again->get_future().share();
+    auto third = executor.submit([&running_again, release_again_future] {
+        running_again.set_value();
+        release_again_future.wait();
+    });
+    running_again.get_future().wait();
+    auto fourth = executor.submit([] {});
+    const auto overflow = executor.get_snapshot();
+    TEST_ASSERT(overflow.in_flight_diagnostics_incomplete,
+                "capacity overflow must explicitly mark diagnostics incomplete");
+    TEST_ASSERT(overflow.in_flight_dropped_count >= 1,
+                "capacity overflow must retain a dropped diagnostic count");
+    release_again->set_value();
+    third.get();
+    fourth.get();
+
+    executor.enable_monitoring(false);
+    auto unmonitored = executor.submit([] {});
+    unmonitored.get();
+    TEST_ASSERT(executor.get_snapshot().in_flight_count == 0,
+                "disabled monitoring must not retain in-flight task diagnostics");
+    executor.enable_monitoring(true);
+    executor.shutdown();
+    return true;
+}
+
+bool test_in_flight_diagnostics_do_not_change_soft_timeout() {
+    Executor executor;
+    ExecutorConfig config;
+    config.min_threads = 1;
+    config.max_threads = 1;
+    config.enable_work_stealing = false;
+    config.task_timeout_ms = 1;
+    TEST_ASSERT(executor.initialize(config), "executor initialization must succeed");
+    executor.set_in_flight_task_capacity(8);
+
+    std::promise<void> running;
+    auto release = std::make_shared<std::promise<void>>();
+    const auto release_future = release->get_future().share();
+    auto first = executor.submit([&running, release_future] {
+        running.set_value();
+        release_future.wait();
+    });
+    running.get_future().wait();
+    auto expired = executor.submit([] {});
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    release->set_value();
+    first.get();
+    bool timed_out = false;
+    try {
+        expired.get();
+    } catch (const TimedOutException&) {
+        timed_out = true;
+    }
+    TEST_ASSERT(timed_out, "soft timeout future semantics must remain unchanged");
+    TEST_ASSERT(executor.get_snapshot().in_flight_count == 0,
+                "soft-timed-out task must leave the in-flight table");
+
+    executor.set_in_flight_task_sampling_rate(0.0);
+    std::promise<void> sampled_running;
+    auto sampled_release = std::make_shared<std::promise<void>>();
+    const auto sampled_release_future = sampled_release->get_future().share();
+    auto unsampled = executor.submit([&sampled_running, sampled_release_future] {
+        sampled_running.set_value();
+        sampled_release_future.wait();
+    });
+    sampled_running.get_future().wait();
+    TEST_ASSERT(executor.get_snapshot().in_flight_count == 0,
+                "zero in-flight sampling must not retain a task");
+    sampled_release->set_value();
+    unsampled.get();
+    executor.shutdown();
+    return true;
+}
+
 bool test_snapshot_reports_failure_and_failed_initialization() {
     Executor invalid_executor;
     ExecutorConfig invalid_config;
@@ -318,6 +437,97 @@ bool test_snapshot_includes_registered_backends() {
                 "snapshot must include registered realtime backend");
     TEST_ASSERT(snapshot.blocking_io.contains("snapshot_io"),
                 "snapshot must include registered Blocking I/O backend");
+    executor.shutdown();
+    return true;
+}
+
+bool test_snapshot_uses_backend_specific_work_states() {
+    Executor executor;
+    RealtimeThreadConfig realtime_config;
+    realtime_config.thread_name = "snapshot-backend-rt";
+    realtime_config.cycle_period_ns = 1'000'000;
+    TEST_ASSERT(executor.register_realtime_task("snapshot_backend_rt", realtime_config),
+                "realtime backend registration must succeed");
+    TEST_ASSERT(executor.start_realtime_task("snapshot_backend_rt"),
+                "realtime backend must start");
+
+    std::promise<void> realtime_ran;
+    TEST_ASSERT(executor.push_realtime_task("snapshot_backend_rt", [&realtime_ran] {
+                    realtime_ran.set_value();
+                }),
+                "running realtime backend must accept a task");
+    realtime_ran.get_future().wait();
+    const auto running = executor.get_snapshot();
+    const auto realtime = running.realtime.find("snapshot_backend_rt");
+    TEST_ASSERT(realtime != running.realtime.end() && realtime->second.is_running,
+                "snapshot must preserve realtime running state");
+
+    executor.stop_realtime_task("snapshot_backend_rt");
+    TEST_ASSERT(!executor.push_realtime_task("snapshot_backend_rt", [] {}),
+                "stopped realtime backend must reject a task");
+    const auto dropped = executor.get_snapshot();
+    TEST_ASSERT(dropped.dropped_work_count >= 1,
+                "realtime drops must contribute to snapshot aggregate counters");
+
+    BlockingIoConfig blocking_config;
+    blocking_config.thread_name = "snapshot-backend-io";
+    TEST_ASSERT(executor.register_blocking_io_worker(
+                    "snapshot_backend_io", blocking_config,
+                    std::make_unique<IdleBlockingWorker>()),
+                "Blocking I/O backend registration must succeed");
+    TEST_ASSERT(executor.start_blocking_io_worker("snapshot_backend_io"),
+                "Blocking I/O backend must start");
+    const auto io_running = executor.get_snapshot();
+    TEST_ASSERT(io_running.blocking_io.at("snapshot_backend_io").is_running,
+                "snapshot must preserve Blocking I/O running state");
+    executor.stop_blocking_io_worker("snapshot_backend_io");
+    const auto io_stopped = executor.get_snapshot();
+    TEST_ASSERT(!io_stopped.blocking_io.at("snapshot_backend_io").is_running,
+                "snapshot must preserve Blocking I/O stop state");
+    executor.shutdown();
+    return true;
+}
+
+bool test_in_flight_capacity_is_bounded_under_concurrent_submission() {
+    Executor executor;
+    ExecutorConfig config;
+    config.min_threads = 4;
+    config.max_threads = 4;
+    config.queue_capacity = 256;
+    config.enable_work_stealing = false;
+    TEST_ASSERT(executor.initialize(config), "executor initialization must succeed");
+    executor.set_in_flight_task_capacity(8);
+
+    auto release = std::make_shared<std::promise<void>>();
+    const auto release_future = release->get_future().share();
+    std::mutex futures_mutex;
+    std::vector<std::future<void>> futures;
+    std::vector<std::thread> producers;
+    for (size_t producer = 0; producer < 4; ++producer) {
+        producers.emplace_back([&] {
+            for (size_t index = 0; index < 32; ++index) {
+                auto future = executor.submit([release_future] { release_future.wait(); });
+                std::lock_guard<std::mutex> lock(futures_mutex);
+                futures.push_back(std::move(future));
+            }
+        });
+    }
+    for (auto& producer : producers) {
+        producer.join();
+    }
+
+    const auto snapshot = executor.get_snapshot();
+    TEST_ASSERT(snapshot.in_flight_count <= 8,
+                "in-flight diagnostics must remain within their configured capacity");
+    TEST_ASSERT(snapshot.in_flight_diagnostics_incomplete,
+                "capacity pressure must mark the sampled table incomplete");
+    TEST_ASSERT(snapshot.in_flight_dropped_count >= 120,
+                "capacity pressure must count omitted diagnostics");
+
+    release->set_value();
+    for (auto& future : futures) {
+        future.get();
+    }
     executor.shutdown();
     return true;
 }
@@ -474,9 +684,13 @@ int main() {
     success &= test_snapshot_text_handles_partial_providers();
     success &= test_snapshot_diagnostic_callback_on_timeout_and_start_failure();
     success &= test_snapshot_reports_async_work_and_shutdown();
+    success &= test_snapshot_reports_bounded_in_flight_tasks();
+    success &= test_in_flight_diagnostics_do_not_change_soft_timeout();
     success &= test_snapshot_reports_failure_and_failed_initialization();
     success &= test_snapshot_includes_registered_backends();
+    success &= test_snapshot_uses_backend_specific_work_states();
     success &= test_monitor_includes_registered_gpu_backend();
+    success &= test_in_flight_capacity_is_bounded_under_concurrent_submission();
     success &= test_snapshot_is_safe_during_shutdown();
     success &= test_snapshot_observes_draining();
     success &= test_snapshot_concurrent_registration_stop_and_query();
