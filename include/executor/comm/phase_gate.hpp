@@ -192,6 +192,7 @@ private:
         let_binding_count_.fetch_sub(1, std::memory_order_acq_rel);
     }
 
+public:
     std::optional<LetWriteLease> try_begin_let_write() noexcept {
         if (let_transition_.load(std::memory_order_acquire) ||
             closed_atomic_.load(std::memory_order_acquire)) {
@@ -220,6 +221,7 @@ private:
         return LetWriteLease(this, let_phase(), false);
     }
 
+private:
     CommResult advance_let_to(uint64_t phase) {
         const uint64_t current = let_phase();
         if (phase == 0 || phase <= current) {

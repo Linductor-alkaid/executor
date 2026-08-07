@@ -378,11 +378,42 @@ latest-wins API 必须保持向后兼容。
 - [x] 将同一 LET 绑定契约扩展到 `LatestMailbox<T>`；未绑定 `publish()` / `try_load()` 仍保持 latest-wins。
 - [x] 明确 `RealtimeChannel<T>` 不自动绑定 LET，避免将 FIFO 周期预算误解为单值相位快照。
 
+### P0：PhaseGate LET 核心边界测试（审查补强）
+
+现有 `DoubleBuffer` / `LatestMailbox` 测试覆盖了外部可见性，但尚未直接锁定
+`PhaseGate` 的 LET 内部机制。以下测试必须直接针对 gate 的 lease 和过渡状态，避免并发回归
+只表现为偶发的 mailbox/buffer 失败：
+
+- [x] 测试 writer lease 生命周期：获取 lease 后推进返回 `NotReady`，lease 析构后推进成功，活跃 writer 计数回落。
+- [x] 测试 reader lease 生命周期：读取 lease 阻止相位复用，lease 释放后下一次推进成功，活跃 reader 计数不泄漏。
+- [x] 测试 `advance()` / `advance_to()` 在绑定模式下都转发到 LET 过渡路径，并保持单调相位和重复推进诊断。
+- [x] 测试 `let_transition_` CAS 竞争：同时推进时最多一个过渡成功，其余返回 `NotReady`，不得死锁或跳相位。
+- [x] 增加多 writer / 多 reader 压力测试，验证推进只发生在所有 lease 释放后，且不出现半写快照、越相位读取或计数下溢。
+- [x] 覆盖 gate close 与 lease/transition 竞争，确认发布、读取和推进都返回可区分的 `Closed` / `NotReady`。
+
 ### P0：实时内存契约
 
 - [x] 文档明确实时回调禁止隐式堆分配、阻塞等待和诊断回调。
 - [x] 为 Debug/Linux 增加可选 C++ `new` 分配检测 guard；检测结果包含组件和调用阶段。
 - [x] 为 LET 关键路径提供固定容量双槽存储，并加入相位和分配 guard 回归测试。
+
+### P1：分配 guard 强度与集成边界（审查补强）
+
+`RealtimeAllocationGuard` 当前是显式、记录型的 Debug/Linux 工具，不应被误解为自动实时
+安全证明。后续强化保持生产默认零开销，并避免无条件侵入宿主程序的 allocator：
+
+- [ ] 增加可选违例策略：`RecordOnly`、测试失败/断言，以及通过 `CommEvent` 低频告警；默认仍不在实时路径分配字符串或调用用户 callback。
+- [ ] 评估将 guard 自动挂载到 `RealtimeThread` 周期入口的 API 设计；必须显式启用并携带组件名/阶段，不能静默改变现有回调行为。
+- [ ] 在文档和构建选项中明确全局 `operator new` 重载仅限 Debug/Linux 诊断构建，检查与宿主 allocator、内存池和共享库的冲突。
+- [ ] 评估更低侵入的替代方案（链接器/`LD_PRELOAD` malloc hook 或平台专用 hook），在可移植性、部署复杂度和诊断完整性之间作出记录决策。
+- [ ] 集成回归测试：自动挂载候选路径能定位组件/阶段；关闭 guard 时不产生计数、事件或额外周期开销。
+
+### P1：LET 对外语义锚点
+
+- [x] 在中英文 README、`docs/API.md`、设计文档和 website 双语手册统一使用 LET 语义说明：
+  “相位 N 的完整输出，只有在 `PhaseGate` 推进到 N+1 后，才对读侧可见。”
+- [x] 明确绑定模式是 `DoubleBuffer<T>` / `LatestMailbox<T>` 的可选 SWSR 双槽模式，不是独立 `LetChannel<T>`。
+- [x] 明确未绑定 mailbox 仍为 latest-wins，绑定 mailbox 为每相位最多一次的单值快照；`RealtimeChannel<T>` 不继承 LET。
 
 ### P1：延迟直方图与端到端度量
 

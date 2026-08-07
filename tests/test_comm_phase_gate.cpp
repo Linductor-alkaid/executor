@@ -136,6 +136,111 @@ TEST(CommPhaseGateTest, ConcurrentWaitersAllWake) {
     EXPECT_EQ(gate.stats().received_count, static_cast<uint64_t>(kWaiterCount));
 }
 
+TEST(CommPhaseGateTest, WriterLeaseBlocksAdvanceUntilReleased) {
+    PhaseGate gate;
+    executor::comm::DoubleBuffer<int> buffer(0);
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+    auto lease = gate.try_begin_let_write();
+    ASSERT_TRUE(lease.has_value());
+    EXPECT_EQ(gate.advance().error_code, CommErrorCode::NotReady);
+    lease->release();
+    EXPECT_TRUE(gate.advance());
+}
+
+TEST(CommPhaseGateTest, ReaderLeaseBlocksAdvanceUntilReleased) {
+    PhaseGate gate;
+    executor::comm::DoubleBuffer<int> buffer(0);
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+    auto lease = gate.try_begin_let_read();
+    ASSERT_TRUE(lease.has_value());
+    EXPECT_EQ(gate.advance().error_code, CommErrorCode::NotReady);
+    lease->release();
+    EXPECT_TRUE(gate.advance());
+}
+
+TEST(CommPhaseGateTest, AdvanceAndAdvanceToShareLetTransitionPath) {
+    PhaseGate gate;
+    executor::comm::DoubleBuffer<int> buffer(0);
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+    EXPECT_TRUE(gate.advance());
+    EXPECT_EQ(gate.current_phase(), 1U);
+    EXPECT_TRUE(gate.advance_to(4));
+    EXPECT_EQ(gate.current_phase(), 4U);
+    EXPECT_EQ(gate.advance_to(4).error_code, CommErrorCode::MissedPhase);
+}
+
+TEST(CommPhaseGateTest, ConcurrentLetAdvancesAllowOnlyOneSuccess) {
+    PhaseGate gate;
+    executor::comm::DoubleBuffer<int> buffer(0);
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+    constexpr int kThreads = 8;
+    std::atomic<int> successes{0};
+    std::vector<std::thread> workers;
+    for (int i = 0; i < kThreads; ++i) {
+        workers.emplace_back([&] {
+            const auto result = gate.advance_to(1);
+            if (result) successes.fetch_add(1, std::memory_order_relaxed);
+            else EXPECT_TRUE(result.error_code == CommErrorCode::MissedPhase ||
+                             result.error_code == CommErrorCode::NotReady);
+        });
+    }
+    for (auto& worker : workers) worker.join();
+    EXPECT_EQ(successes.load(), 1);
+    EXPECT_EQ(gate.current_phase(), 1U);
+}
+
+TEST(CommPhaseGateTest, ConcurrentLeasePressurePreservesMonotonicPhases) {
+    PhaseGate gate;
+    executor::comm::DoubleBuffer<int> buffer(0);
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+    std::atomic<bool> stop{false};
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 2; ++i) {
+        workers.emplace_back([&] {
+            while (!stop.load(std::memory_order_acquire)) {
+                if (auto lease = gate.try_begin_let_write()) {
+                    std::this_thread::yield();
+                }
+            }
+        });
+        workers.emplace_back([&] {
+            while (!stop.load(std::memory_order_acquire)) {
+                if (auto lease = gate.try_begin_let_read()) {
+                    std::this_thread::yield();
+                }
+            }
+        });
+    }
+    uint64_t successful_advances = 0;
+    for (int attempt = 0; attempt < 200 && successful_advances < 20; ++attempt) {
+        const auto result = gate.advance();
+        if (result) {
+            ++successful_advances;
+        } else {
+            EXPECT_EQ(result.error_code, CommErrorCode::NotReady);
+        }
+        std::this_thread::yield();
+    }
+    stop.store(true, std::memory_order_release);
+    for (auto& worker : workers) worker.join();
+    EXPECT_EQ(gate.current_phase(), successful_advances);
+}
+
+TEST(CommPhaseGateTest, LeaseLifecycleAndCloseAreObservable) {
+    PhaseGate gate;
+    executor::comm::DoubleBuffer<int> buffer(0);
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+    {
+        auto reader = gate.try_begin_let_read();
+        ASSERT_TRUE(reader.has_value());
+        EXPECT_TRUE(gate.close());
+        EXPECT_EQ(gate.advance().error_code, CommErrorCode::NotReady);
+    }
+    EXPECT_TRUE(gate.is_closed());
+    EXPECT_FALSE(gate.try_begin_let_read().has_value());
+    EXPECT_EQ(gate.advance().error_code, CommErrorCode::Closed);
+}
+
 TEST(CommSequencerTest, PublishesTicketsAndWaitsForExactTicket) {
     Sequencer sequencer("steps");
     const uint64_t first = sequencer.next_ticket();
