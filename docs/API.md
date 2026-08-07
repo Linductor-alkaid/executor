@@ -1206,12 +1206,14 @@ Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`�
 
 `PhaseGate` 与 `DoubleBuffer<T>` / `LatestMailbox<T>` 支持显式的可选 LET 绑定模式，不新增平行的
 `LetChannel<T>` 类型。调用 `buffer.bind_to_phase_gate(gate)` 或
-`mailbox.bind_to_phase_gate(gate)` 后，写侧使用
-`publish_for_current_phase()`，读侧使用 `load_for_current_phase()`：相位 N 的完整输出只在
-gate 推进到 N+1 后可见。未绑定时，原有 `publish()` / `load()` 最新快照语义保持不变。
+`mailbox.bind_to_phase_gate(gate)` 后，写侧使用 `publish_for_current_phase()`，读侧使用
+`load_for_current_phase()`：相位 N 的完整输出只在 gate 推进到 N+1 后可见。未绑定的
+`DoubleBuffer::publish()` / `load()` 仍是最新完整快照，未绑定的 `LatestMailbox::publish()` /
+`try_load()` 仍是 latest-wins。
 绑定模式是第一版 SWSR，容量固定为两个槽位，成功周期路径不获取 mutex、等待 condition
-variable 或分配堆内存；`T` 必须可无异常复制。未就绪读取、跳相位和相位关闭会返回
-`CommResult`，推进与写入竞争返回 `NotReady`，调用方应在下一个周期重试。
+variable 或分配堆内存；`T` 必须可无异常复制。失败的 `CommResult` 诊断不属于成功周期路径。
+未就绪读取、重复发布、跳相位和相位关闭会返回 `CommResult`，推进与读写竞争返回 `NotReady`，
+调用方应在下一个周期重试。
 
 未绑定的 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和 `RealtimeChannel` 仍不承诺硬实时、
 无锁或零堆分配；实时周期内应使用其非等待 API。通信 P50/P99 是固定对数桶的近似分位数，
@@ -1430,8 +1432,8 @@ if (commands.load_for_current_phase(visible)) {
 以保证周期路径没有隐式分配或异常恢复。
 
 `LatestMailbox<T>` 使用同名相位 API；`load_for_current_phase(out, &visible_phase)` 可返回可见的
-逻辑相位。绑定 mailbox 仍是单值 latest-wins，不提供 FIFO；需要逐条消息时继续使用
-`RealtimeChannel<T>`，它不自动继承 LET。
+逻辑相位。绑定 mailbox 是每相位最多一次发布的单值快照，不提供 FIFO，也不沿用未绑定模式的
+latest-wins 覆盖；需要逐条消息时继续使用 `RealtimeChannel<T>`，它不自动继承 LET。
 
 ### 7.9 TaskPriority
 

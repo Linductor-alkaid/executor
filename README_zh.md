@@ -62,6 +62,9 @@
 - **通信 Facade 可观察性**
   `executor::comm` 组件提供本地 `CommStats`，可观察 drop、overwrite、stale read、missed phase、timeout、深度、lag 和 latency。可选 `set_event_callback()` 用于低频诊断；callback 抛异常会被隔离，通信事件默认不计入 `ExecutorFailureStatus` 的任务失败。
 
+- **相位绑定值的可选 LET 契约**
+  `PhaseGate` 可通过 `bind_to_phase_gate()` 显式绑定 `DoubleBuffer<T>` 或 `LatestMailbox<T>`。写侧用 `publish_for_current_phase()` 提交相位 N 的值后，读侧只能在相位门进入 N+1 时通过 `load_for_current_phase()` 读取。绑定模式使用固定双槽 SWSR 存储：每相位最多一个值、没有 FIFO 语义、重复提交会被拒绝。它不是独立的 `LetChannel<T>` 类型。未绑定 `DoubleBuffer` 仍是最新完整快照，未绑定 `LatestMailbox` 仍是 latest-wins，`RealtimeChannel` 不自动具有 LET 语义。
+
 - **可选 GPU（CUDA/OpenCL）**
   GPU 执行器接口与 CUDA/OpenCL 实现：kernel 提交、设备内存与流管理、多设备、内存池、监控；运行时动态加载，无 GPU 时安全降级；设备查询 API 自动推荐最佳后端
 

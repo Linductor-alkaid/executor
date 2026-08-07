@@ -65,6 +65,9 @@
 - **Communication Facade Observability**
   `executor::comm` components expose local `CommStats` counters for drops, overwrites, stale reads, missed phases, timeouts, depth, lag, and latency. Optional `set_event_callback()` hooks are isolated from the data path: callback exceptions are swallowed and communication events are not counted as `ExecutorFailureStatus` task failures by default.
 
+- **Optional LET Contract for Phase-Bound Values**
+  `PhaseGate` can explicitly bind a `DoubleBuffer<T>` or `LatestMailbox<T>` with `bind_to_phase_gate()`. A value published for phase N through `publish_for_current_phase()` becomes visible only after the gate enters N+1 via `load_for_current_phase()`. The bound mode is fixed two-slot SWSR storage: one value per phase, no FIFO semantics, and duplicate publishes are rejected. It is not a separate `LetChannel<T>` type. Unbound `DoubleBuffer` remains a latest complete snapshot and unbound `LatestMailbox` remains latest-wins; `RealtimeChannel` does not inherit LET semantics.
+
 - **Optional GPU (CUDA/OpenCL)**
   GPU executor interface with CUDA/OpenCL implementations: kernel submission, device memory and stream management, multi-device, memory pool, monitoring. `add_stream_callback` is currently CUDA-only; check `supports_stream_callback()` before use, and inspect `get_status().last_error_message` when it returns `false`. OpenCL callback support via `cl_event` polling is a follow-up. Runtime dynamic loading with safe graceful degradation when no GPU is available. Device query API automatically recommends the best backend.
 

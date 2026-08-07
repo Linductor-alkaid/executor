@@ -57,13 +57,34 @@ if (mailbox.try_load_newer_than(seen, config, seen)) {
 
 需要精确 ticket 顺序时使用 `Sequencer`：`next_ticket()` 分配序号，`publish(ticket)` 推进发布进度，`wait_until_published(ticket, timeout)` 在目标已被越过时返回 `MissedPhase`。它不是数据队列，不能替代 `MpscChannel`。
 
-## 当前时间模型边界
+## 相位绑定的 LET 值
 
-这些组件目前是彼此独立的原语。phase 数字没有绑定 mailbox 或 snapshot；把 `PhaseGate` 与 `DoubleBuffer` 组合使用，并不保证相位 N 的数据一定在 N+1 边界可见，这条可见性规则仍属于应用层协议。
+当 reader 必须推理逻辑时刻时，可将 `DoubleBuffer<T>` 或 `LatestMailbox<T>` 显式绑定到
+`PhaseGate`。这是既有组件的可选模式，不是独立的 `LetChannel<T>` API：
 
-`PhaseGate`、`DoubleBuffer`、`LatestMailbox` 以及当前 `RealtimeChannel` 实现都包含 mutex 保护路径。它们适合控制面、启动同步、监控和有界非等待使用，但不提供硬实时、无锁或零分配保证；有这类要求时应使用经过验证的预分配实现。
+```cpp
+executor::comm::PhaseGate gate;
+executor::comm::DoubleBuffer<ControlState> state(ControlState{});
+state.bind_to_phase_gate(gate);
 
-后续计划中的 `LetChannel<T>` 会使用固定存储和原子发布，把相位提交与快照可见性绑定；它尚不属于当前 API。
+state.publish_for_current_phase(ControlState{/* phase 0 output */});
+gate.advance();
+
+executor::comm::Snapshot<ControlState> visible;
+if (state.load_for_current_phase(visible)) {
+    consume(visible.value); // phase 1 读取完整的 phase 0 输出。
+}
+```
+
+绑定契约第一版是 SWSR，使用固定双槽。每相位最多一次发布；当前相位不能读取自身正在生成的值；
+缺少上一相位的值或推进/读写竞争会通过 `CommResult::NotReady` 报告。`LatestMailbox<T>` 使用
+同名相位 API，但在绑定模式中成为“每相位一个值”的快照；未绑定 `publish()` / `try_load()`
+仍是 latest-wins。
+
+`RealtimeChannel<T>` 不自动继承 LET：FIFO 的周期预算与相位绑定的单值是不同契约。未绑定的
+`PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和 `RealtimeChannel` 保持 mutex 路径，不提供硬实时、
+无锁或零分配保证。绑定模式成功的周期操作使用固定槽，不获取 mutex 或等待 condition variable；
+失败诊断不属于这条成功路径。
 
 ## 下一步阅读
 

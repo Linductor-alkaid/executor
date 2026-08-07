@@ -14,6 +14,7 @@ Ask how data may be lost or overwritten before asking which queue is faster. The
 | A cycle consumes only a bounded number of messages | `RealtimeChannel<T>` | No condition-variable wait, per-cycle budget, drops, handler exceptions; mutex-backed |
 | Several readers need complete consistent state | `DoubleBuffer<T>` | Sequence, old/new values, single-writer/multi-reader boundary |
 | Setup, calibration, and run phases advance in order | `PhaseGate` | Timeout, close, phase regression, missed phase |
+| A complete value from phase N must become visible at N+1 | Bind `DoubleBuffer<T>` or `LatestMailbox<T>` to `PhaseGate` | `CommResult`, one publish per phase, missing prior value |
 | Publication must have strict ticket order | `Sequencer` | Wait timeout, close, missing sequence |
 
 ```mermaid
@@ -41,6 +42,6 @@ Capacity is a pressure-relief contract, not an implementation detail. For `MpscC
 
 `CommStats` and `CommEventCallback` report drops, overwrites, stale reads, latency, lag, and missed phases. They do not automatically contribute to `ExecutorFailureStatus` or invoke `Executor::set_failure_callback()`. Bridge component events to your monitoring system if alerts must be unified.
 
-`RealtimeChannel` and `DoubleBuffer` currently use mutexes internally. Their APIs express bounded cycle consumption and complete value snapshots, respectively; neither is a lock-free or hard-real-time guarantee.
+Unbound `RealtimeChannel` and `DoubleBuffer` use mutex-backed paths. Their APIs express bounded cycle consumption and complete value snapshots, respectively; neither is a lock-free or hard-real-time guarantee. For a phase-bound single value, explicitly call `bind_to_phase_gate()` on `DoubleBuffer` or `LatestMailbox`; this LET mode is fixed two-slot SWSR, not a FIFO `RealtimeChannel` replacement.
 
 See the [complete robot pipeline](/en/tutorial/complete-robot-pipeline) for a connected example. For capacity and alerting, read [Capacity and Alerts](/en/realtime-and-communication/capacity-and-alerting); ordinary background-work selection is covered by [Choose a Submission API](/en/guides/choosing-submit-api).

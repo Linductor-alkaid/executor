@@ -14,6 +14,7 @@ description: 按数据语义选择最新值、消息流、周期消费、状态�
 | 周期内只消费有限消息 | `RealtimeChannel<T>` | 不等待 condition variable、单周期预算、drop 与 handler 异常；内部由 mutex 保护。 |
 | 多个读者需要完整一致的状态 | `DoubleBuffer<T>` | sequence、新旧值判断、单写多读边界。 |
 | 初始化、标定、运行必须按阶段推进 | `PhaseGate` | timeout、close、phase 倒退与 missed phase。 |
+| 相位 N 的完整值必须在 N+1 才可见 | 将 `DoubleBuffer<T>` 或 `LatestMailbox<T>` 绑定到 `PhaseGate` | `CommResult`、每相位一次发布、是否缺少上一相位值。 |
 | 需要严格有序发布 | `Sequencer` | 等待超时、关闭和遗漏序号。 |
 
 ```mermaid
@@ -41,7 +42,7 @@ flowchart TD
 
 通信组件的 `CommStats` 与 `CommEventCallback` 报告 drop、overwrite、stale、latency、lag 和 missed phase。它们默认不计入 `ExecutorFailureStatus`，也不会调用 `Executor::set_failure_callback()`；需要统一告警时，在组件 callback 中桥接到你的监控系统。
 
-`RealtimeChannel` 与 `DoubleBuffer` 当前内部使用 mutex：前者表达有界周期消费，后者表达完整的按值快照；两者都不构成无锁或硬实时保证。
+未绑定的 `RealtimeChannel` 与 `DoubleBuffer` 使用 mutex 路径：前者表达有界周期消费，后者表达完整的按值快照；两者都不构成无锁或硬实时保证。相位绑定单值时，应对 `DoubleBuffer` 或 `LatestMailbox` 显式调用 `bind_to_phase_gate()`；该 LET 模式是固定双槽 SWSR，不是 FIFO `RealtimeChannel` 的替代品。
 
 ## 下一步阅读
 

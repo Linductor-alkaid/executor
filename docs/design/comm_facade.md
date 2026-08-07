@@ -51,13 +51,13 @@
 - 未绑定时，`PhaseGate` / `Sequencer` 只表示阶段或 ticket 顺序，不把阶段与数据快照绑定。
 - `DoubleBuffer` 只保证一次发布得到完整值快照，不说明快照属于哪个逻辑相位。
 - 未绑定时，`LatestMailbox` / `RealtimeChannel` 提供最新值或有界消息消费语义，但不提供端到端相位一致性。
-- `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和当前 `RealtimeChannel` 实现使用 mutex；它们不应被描述为硬实时、无锁或零阻塞数据路径。
+- 未绑定的 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和当前 `RealtimeChannel` 实现使用 mutex；它们不应被描述为硬实时、无锁或零阻塞数据路径。
 
 因此，用户若自行组合未绑定的 phase gate 和 double buffer，仍需自行约定“哪个相位的数据何时可见”；显式绑定模式则提供本节定义的 LET 保证。硬实时路径应使用经过验证的专用无锁/预分配实现，并将未绑定组件限于控制面、启动同步或非硬实时监控面。
 
 ## 阶段 7.8：为既有原语增加 LET 契约
 
-下一阶段不增加独立的 `LetChannel<T>`。LET（Logical Execution Time）应作为
+阶段 7.8 不增加独立的 `LetChannel<T>`。LET（Logical Execution Time）作为
 `PhaseGate` 与 `DoubleBuffer<T>` / `LatestMailbox<T>` 的可选绑定模式：`PhaseGate` 是唯一的
 逻辑时钟，后两者保存与该时钟绑定的相位值。这样用户继续使用已有的阶段、快照和最新值
 原语，而框架负责保证“相位 N 的完整输出只在 N+1 边界对读侧可见”。
@@ -65,14 +65,14 @@
 该模式必须保留现有 API 的兼容语义：未绑定相位门的 `DoubleBuffer<T>::publish()` / `load()`
 仍然是普通的最新完整快照，`LatestMailbox<T>::publish()` / `try_load()` 仍是 latest-wins。
 绑定后，写侧只能为当前逻辑相位提交，推进相位会封存该相位；读侧只能在下一相位取得前一
-相位的完整值。迟到写入、重复提交、跳相位、未就绪读取和读侧落后都必须通过结果与统计
-诊断，而不能退回到应用层约定。
+相位的完整值。重复提交、跳相位、未就绪读取和读侧落后都通过 `CommResult` 诊断，而不能
+退回到应用层约定。
 
 第一版应明确为单写单读；多写者先在非实时控制面仲裁，再由唯一写侧向绑定的
 `DoubleBuffer` 或 `LatestMailbox` 提交。相位绑定模式使用构造期固定容量存储和原子相位发布，成功的周期
-路径不得获取 mutex、等待 condition variable 或进行堆分配；类型需要满足预分配、无异常
-复制/移动的约束。配套验收覆盖同相位不可见、迟到提交、跳相位、半写快照和 RT 路径分配
-检测。
+路径不得获取 mutex、等待 condition variable 或进行堆分配；失败的 `CommResult` 诊断不属于
+成功周期路径。类型需要满足预分配、无异常复制/移动的约束。配套验收覆盖同相位不可见、
+重复提交、跳相位、半写快照和 RT 路径分配检测。
 
 通信观测提供固定开销的对数延迟直方图与近似 P50/P99。组件内 latency 表示本地等待或发布到
 消费的时长，具体含义由组件 API 决定；端到端延迟必须由业务消息携带源时间戳并在目标端计算，
@@ -467,7 +467,8 @@ real-time path.
 `LatestMailbox<T>` 也可通过 `bind_to_phase_gate(PhaseGate&, 2)` 显式加入 LET 契约：
 `publish_for_current_phase(value)` 在当前相位提交一次最新值，`load_for_current_phase(out, phase)`
 只读取上一完整相位。未绑定的 `publish()` / `try_load()` 行为不变；绑定模式第一版为 SWSR、
-固定双槽和无异常复制，重复提交或相位未就绪返回 `CommResult`。`RealtimeChannel` 不自动继承
+固定双槽和无异常复制，重复提交或相位未就绪返回 `CommResult`。绑定 mailbox 是“每相位一条
+单值快照”，而不是未绑定 mailbox 的 latest-wins 覆盖语义。`RealtimeChannel` 不自动继承
 LET，因为 FIFO 消费预算与单值相位快照是不同语义。
 
 ---

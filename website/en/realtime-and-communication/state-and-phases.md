@@ -49,12 +49,36 @@ Use `PhaseGate` for monotonic setup/calibration/running stages. `advance_to()` c
 
 Use `Sequencer` for strict ticket order: `next_ticket()` allocates, `publish(ticket)` advances, and `wait_until_published(ticket, timeout)` returns `MissedPhase` when the target has already been passed. It is not a data queue and cannot replace `MpscChannel`.
 
-## Current time-model boundary
+## Phase-bound LET values
 
-These components are separate primitives. A phase number is not attached to a mailbox or snapshot: combining `PhaseGate` with `DoubleBuffer` does not guarantee that phase N becomes visible exactly at the N+1 boundary. That visibility rule remains an application-level protocol today.
+When a reader must reason about logical time, explicitly bind a `DoubleBuffer<T>` or
+`LatestMailbox<T>` to the gate. This is an optional mode of existing components, not a separate
+`LetChannel<T>` API:
 
-`PhaseGate`, `DoubleBuffer`, `LatestMailbox`, and the current `RealtimeChannel` implementation use mutex-protected paths. They are suitable for control, startup, monitoring, and bounded non-blocking use, but are not a hard-real-time, lock-free, or zero-allocation guarantee. Use a verified preallocated implementation for that requirement.
+```cpp
+executor::comm::PhaseGate gate;
+executor::comm::DoubleBuffer<ControlState> state(ControlState{});
+state.bind_to_phase_gate(gate);
 
-An upcoming `LetChannel<T>` is planned to bind phase publication to snapshot visibility using fixed storage and atomic publication. It is not part of the current API.
+state.publish_for_current_phase(ControlState{/* phase 0 output */});
+gate.advance();
+
+executor::comm::Snapshot<ControlState> visible;
+if (state.load_for_current_phase(visible)) {
+    consume(visible.value); // phase 1 sees the complete phase 0 output.
+}
+```
+
+The bound contract is SWSR with fixed two-slot storage. Each phase accepts at most one publish;
+the current phase cannot read its own in-progress value, and a missing prior value or a competing
+advance/read/write reports `CommResult::NotReady`. `LatestMailbox<T>` uses the same phase APIs,
+but becomes a one-value-per-phase snapshot in bound mode. Its ordinary unbound `publish()` /
+`try_load()` API remains latest-wins.
+
+`RealtimeChannel<T>` does not inherit LET: FIFO cycle budgets and a phase-bound single value are
+different contracts. Unbound `PhaseGate`, `DoubleBuffer`, `LatestMailbox`, and `RealtimeChannel`
+retain their mutex-backed behavior and are not hard-real-time, lock-free, or zero-allocation
+guarantees. In bound mode, successful periodic operations use the fixed slots without a mutex or
+condition-variable wait; failure diagnostics are outside that successful path.
 
 Next: [communication observability](/en/realtime-and-communication/observability).

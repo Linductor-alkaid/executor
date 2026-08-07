@@ -22,9 +22,9 @@ if (stats.dropped_count != 0 || stats.timeout_count != 0) {
 }
 ```
 
-`CommStats` is a local cumulative snapshot, including sends, receives, drops, overwrites, stale reads, sends after close, timeouts, handler exceptions, missed phases, current/peak depth, producer/consumer lag, and latency. `CommEventCallback` is appropriate for low-rate diagnostics. Callback exceptions are isolated and do not change the communication operation's result or component state.
+`CommStats` is a local cumulative snapshot, including sends, receives, drops, overwrites, stale reads, sends after close, timeouts, handler exceptions, missed phases, current/peak depth, producer/consumer lag, and latency. It includes fixed logarithmic latency buckets and approximate `p50_latency` / `p99_latency`; `CommEventCallback` is appropriate for low-rate diagnostics. Callback exceptions are isolated and do not change the communication operation's result or component state.
 
-The current latency fields are component-local average and maximum ages or wait durations. They are not end-to-end pipeline latency and do not provide a P50/P99 distribution. A fixed-cost latency histogram and explicit source/publish timestamps are planned for the LET pipeline work; until then, report these values with their component and measurement boundary.
+Component latency is an age, wait duration, or publish-to-consume duration defined by that component. It is not end-to-end pipeline latency. Carry a source timestamp in the business message and compute the duration at the final consumer, as `comm_robot_pipeline` does for sensor-to-control latency. Report the component, measurement boundary, and sample count with any latency claim.
 
 ## Alert by semantic contract
 
