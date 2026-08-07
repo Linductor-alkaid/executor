@@ -1,9 +1,11 @@
 #pragma once
 
 #include <chrono>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -118,6 +120,7 @@ struct RealtimeChannelOptions {
  * @brief Local cumulative communication statistics.
  */
 struct CommStats {
+    static constexpr size_t kLatencyHistogramBuckets = 64;
     uint64_t sent_count = 0;
     uint64_t received_count = 0;
     uint64_t dropped_count = 0;
@@ -134,6 +137,9 @@ struct CommStats {
     uint64_t consumer_lag = 0;
     std::chrono::nanoseconds max_latency{0};
     std::chrono::nanoseconds avg_latency{0};
+    std::chrono::nanoseconds p50_latency{0};
+    std::chrono::nanoseconds p99_latency{0};
+    std::array<uint64_t, kLatencyHistogramBuckets> latency_histogram{};
 };
 
 enum class CommEventKind {
@@ -200,6 +206,40 @@ inline void emit_comm_event_noexcept(const CommEventCallback& callback,
     }
 }
 
+inline size_t latency_histogram_bucket(std::chrono::nanoseconds latency) noexcept {
+    uint64_t value = static_cast<uint64_t>(latency.count());
+    size_t bucket = 0;
+    while (value > 1 && bucket + 1 < CommStats::kLatencyHistogramBuckets) {
+        value >>= 1U;
+        ++bucket;
+    }
+    return bucket;
+}
+
+inline std::chrono::nanoseconds latency_histogram_upper_bound(size_t bucket) noexcept {
+    if (bucket >= CommStats::kLatencyHistogramBuckets - 1) {
+        return std::chrono::nanoseconds{std::numeric_limits<int64_t>::max()};
+    }
+    return std::chrono::nanoseconds{static_cast<int64_t>(uint64_t{1} << (bucket + 1U))};
+}
+
+inline std::chrono::nanoseconds latency_histogram_quantile(const CommStats& stats,
+                                                            uint64_t numerator,
+                                                            uint64_t denominator) noexcept {
+    if (stats.received_count == 0 || denominator == 0) {
+        return std::chrono::nanoseconds{0};
+    }
+    const uint64_t target = (stats.received_count * numerator + denominator - 1) / denominator;
+    uint64_t seen = 0;
+    for (size_t bucket = 0; bucket < stats.latency_histogram.size(); ++bucket) {
+        seen += stats.latency_histogram[bucket];
+        if (seen >= target) {
+            return latency_histogram_upper_bound(bucket);
+        }
+    }
+    return stats.max_latency;
+}
+
 inline void update_latency_stats(CommStats& stats,
                                  std::chrono::nanoseconds& total_latency,
                                  std::chrono::nanoseconds latency) noexcept {
@@ -207,8 +247,11 @@ inline void update_latency_stats(CommStats& stats,
         stats.max_latency = latency;
     }
     total_latency += latency;
+    ++stats.latency_histogram[latency_histogram_bucket(latency)];
     if (stats.received_count > 0) {
         stats.avg_latency = total_latency / static_cast<int64_t>(stats.received_count);
+        stats.p50_latency = latency_histogram_quantile(stats, 50, 100);
+        stats.p99_latency = latency_histogram_quantile(stats, 99, 100);
     }
 }
 

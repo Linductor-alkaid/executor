@@ -19,6 +19,10 @@
 #include <numeric>
 #include <string>
 #include <vector>
+#include <thread>
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 namespace {
 
@@ -32,6 +36,37 @@ struct Config {
     size_t cycles_per_period = kDefaultCyclesPerPeriod;
     bool json_output = false;
 };
+
+struct EnvironmentInfo {
+    std::string compiler;
+    std::string scheduler;
+    int cpu = -1;
+};
+
+EnvironmentInfo environment_info() {
+    EnvironmentInfo info;
+#if defined(__clang__)
+    info.compiler = "clang-" __clang_version__;
+#elif defined(__GNUC__)
+    info.compiler = "gcc-" __VERSION__;
+#elif defined(_MSC_VER)
+    info.compiler = "msvc-" + std::to_string(_MSC_VER);
+#else
+    info.compiler = "unknown";
+#endif
+#ifdef __linux__
+    info.cpu = sched_getcpu();
+    switch (sched_getscheduler(0)) {
+    case SCHED_FIFO: info.scheduler = "SCHED_FIFO"; break;
+    case SCHED_RR: info.scheduler = "SCHED_RR"; break;
+    case SCHED_OTHER: info.scheduler = "SCHED_OTHER"; break;
+    default: info.scheduler = "unknown"; break;
+    }
+#else
+    info.scheduler = "platform-default";
+#endif
+    return info;
+}
 
 size_t parse_size_t(const char* s, size_t default_val) {
     if (!s || !*s) return default_val;
@@ -93,6 +128,7 @@ JitterStats compute_jitter_stats(std::vector<double>& samples_us) {
 }
 
 void run_realtime_precision(const Config& cfg, bool json_only) {
+    const EnvironmentInfo env = environment_info();
     executor::Executor ex;
     executor::ExecutorConfig ec;
     ec.min_threads = 2;
@@ -163,8 +199,13 @@ void run_realtime_precision(const Config& cfg, bool json_only) {
 
     if (cfg.json_output) {
         std::cout << std::fixed << std::setprecision(2);
-        std::cout << "  {\"name\":\"realtime_precision\",\"config\":{"
-                  << "\"periods_ms\":[";
+        std::cout << "  {\"name\":\"realtime_precision\",\"measurement\":{"
+                  << "\"jitter_definition\":\"cycle_callback_entry_minus_expected\","
+                  << "\"first_sample_is_baseline\":true,\"startup_wait_excluded\":true},"
+                  << "\"environment\":{";
+        std::cout << "\"compiler\":\"" << env.compiler << "\",\"scheduler\":\""
+                  << env.scheduler << "\",\"cpu\":" << env.cpu << "},\"config\":{";
+        std::cout << "\"periods_ms\":[";
         for (size_t i = 0; i < cfg.periods_ms.size(); ++i)
             std::cout << (i ? "," : "") << cfg.periods_ms[i];
         std::cout << "],\"cycles_per_period\":" << cfg.cycles_per_period << "},\"metrics\":{";
@@ -187,6 +228,10 @@ void run_realtime_precision(const Config& cfg, bool json_only) {
     }
     if (json_only) return;
     std::cout << "--- Real-time Thread Cycle Precision ---\n";
+    std::cout << "  compiler=" << env.compiler << ", scheduler=" << env.scheduler
+              << ", sample_cpu=" << env.cpu << "\n";
+    std::cout << "  measurement: callback entry minus expected deadline; first sample is baseline;"
+                 " startup wait excluded\n";
     for (int64_t p : cfg.periods_ms) {
         auto it = jitters_us.find(p);
         if (it == jitters_us.end()) continue;

@@ -10,6 +10,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(EXECUTOR_BUILD_TESTS "Build tests" ON)
 option(EXECUTOR_BUILD_EXAMPLES "Build examples" OFF)
 option(EXECUTOR_BUILD_SHARED "Build shared library" OFF)
+option(EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD
+       "Enable Linux debug allocation diagnostics for explicitly guarded realtime paths" OFF)
 
 # GPU 支持选项
 option(EXECUTOR_ENABLE_GPU "Enable GPU support" ON)
@@ -20,6 +22,14 @@ option(EXECUTOR_ENABLE_OPENCL "Enable OpenCL support" OFF)
 option(EXECUTOR_LOCKFREE_QUEUE "Use LockFreeWorkerQueue as the worker local queue implementation" OFF)
 if(EXECUTOR_LOCKFREE_QUEUE)
     add_definitions(-DUSE_LOCKFREE_WORKER_QUEUE)
+endif()
+
+if(EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_compile_definitions(EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD)
+    else()
+        message(WARNING "Realtime allocation guard is only supported on Linux")
+    endif()
 endif()
 
 # MSVC: define NOMINMAX to prevent macro conflicts with std::min/std::max

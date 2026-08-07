@@ -87,6 +87,25 @@ TEST(CommTypesTest, StatsDefaultToZeroLatencyAndCounts) {
     EXPECT_EQ(stats.consumer_lag, 0U);
     EXPECT_EQ(stats.max_latency, std::chrono::nanoseconds{0});
     EXPECT_EQ(stats.avg_latency, std::chrono::nanoseconds{0});
+    EXPECT_EQ(stats.p50_latency, std::chrono::nanoseconds{0});
+    EXPECT_EQ(stats.p99_latency, std::chrono::nanoseconds{0});
+    EXPECT_EQ(stats.latency_histogram[0], 0U);
+}
+
+TEST(CommTypesTest, LatencyHistogramComputesBoundedQuantiles) {
+    CommStats stats;
+    std::chrono::nanoseconds total_latency{0};
+    for (const auto latency : {std::chrono::nanoseconds{10}, std::chrono::nanoseconds{20},
+                               std::chrono::nanoseconds{40}, std::chrono::nanoseconds{80},
+                               std::chrono::nanoseconds{160}}) {
+        ++stats.received_count;
+        update_latency_stats(stats, total_latency, latency);
+    }
+
+    EXPECT_EQ(stats.avg_latency, std::chrono::nanoseconds{62});
+    EXPECT_GE(stats.p50_latency, std::chrono::nanoseconds{40});
+    EXPECT_GE(stats.p99_latency, std::chrono::nanoseconds{160});
+    EXPECT_LE(stats.p99_latency, std::chrono::nanoseconds{256});
 }
 
 TEST(CommTypesTest, EventDefaultsAreUsableAndCallbackIsInvocable) {

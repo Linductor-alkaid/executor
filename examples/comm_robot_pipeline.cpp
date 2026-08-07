@@ -25,7 +25,9 @@ namespace {
 
 struct SensorFrame {
     int sequence = 0;
+    uint64_t logical_phase = 0;
     double speed_mps = 0.0;
+    std::chrono::steady_clock::time_point captured_at{};
 };
 
 struct ControlConfig {
@@ -35,7 +37,9 @@ struct ControlConfig {
 
 struct ControlCommand {
     int frame_sequence = 0;
+    uint64_t logical_phase = 0;
     double throttle = 0.0;
+    std::chrono::steady_clock::time_point captured_at{};
 };
 
 struct SystemState {
@@ -56,6 +60,8 @@ void print_stats(const char* name, const executor::comm::CommStats& stats) {
               << ", producer_lag=" << stats.producer_lag
               << ", consumer_lag=" << stats.consumer_lag
               << ", max_latency_ns=" << stats.max_latency.count()
+              << ", p50_latency_ns=" << stats.p50_latency.count()
+              << ", p99_latency_ns=" << stats.p99_latency.count()
               << "\n";
 }
 
@@ -118,7 +124,9 @@ int main() {
         }
 
         for (int i = 0; i < 8; ++i) {
-            while (!sensor_frames.try_send(SensorFrame{i, 2.0 + i * 0.25})) {
+            while (!sensor_frames.try_send(
+                SensorFrame{i, static_cast<uint64_t>(i), 2.0 + i * 0.25,
+                            std::chrono::steady_clock::now()})) {
                 std::this_thread::yield();
             }
             std::this_thread::sleep_for(1ms);
@@ -141,7 +149,8 @@ int main() {
             }
 
             const double throttle = config.enabled ? frame.speed_mps * config.gain : 0.0;
-            control_commands.try_send(ControlCommand{frame.sequence, throttle});
+            control_commands.try_send(
+                ControlCommand{frame.sequence, frame.logical_phase, throttle, frame.captured_at});
             system_state.publish(SystemState{frame.sequence, frame.speed_mps, throttle});
         }
 
@@ -155,8 +164,12 @@ int main() {
 
         while (!planner_done.load(std::memory_order_acquire) || !control_commands.empty()) {
             control_commands.drain_for_cycle([](const ControlCommand& command) {
+                const auto end_to_end_latency = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - command.captured_at);
                 std::cout << "[rt] frame=" << command.frame_sequence
-                          << ", throttle=" << command.throttle << "\n";
+                          << ", phase=" << command.logical_phase
+                          << ", throttle=" << command.throttle
+                          << ", sensor_to_control_ns=" << end_to_end_latency.count() << "\n";
             });
             std::this_thread::sleep_for(1ms);
         }

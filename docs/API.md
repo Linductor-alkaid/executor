@@ -1197,7 +1197,7 @@ if (!result) {
 - **ChannelOptions**：`capacity`、`drop_policy`、`enable_stats`、`name`，用于配置 typed channel。
 - **RealtimeChannelOptions**：`capacity`、`max_items_per_cycle`、`drop_policy`、`enable_stats`、`name`，用于配置实时周期内有限 drain 的消息通道。
 - **DropPolicy**：`RejectNewest`（默认策略）、`DropOldest`、`KeepLatest`。
-- **CommStats**：发送/接收/drop/覆盖/stale/关闭后发送/超时、handler 异常、missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency 等本地累计统计。
+- **CommStats**：发送/接收/drop/覆盖/stale/关闭后发送/超时、handler 异常、missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency，以及固定对数桶估算的 P50/P99 latency 等本地累计统计。
 - **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。各组件通过 `set_event_callback(...)` 注册 callback；callback 抛出的异常会被隔离，不改变通信 API 的返回值或组件状态。
 
 Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot` 和 `DoubleBuffer` 已开放。
@@ -1214,8 +1214,16 @@ variable 或分配堆内存；`T` 必须可无异常复制。未就绪读取、�
 `CommResult`，推进与写入竞争返回 `NotReady`，调用方应在下一个周期重试。
 
 未绑定的 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和 `RealtimeChannel` 仍不承诺硬实时、
-无锁或零堆分配；实时周期内应使用其非等待 API。通信 latency 目前是组件本地的 avg/max
-累计值，不是端到端管线延迟；P50/P99 直方图和管线时间戳属于后续观测增强。
+无锁或零堆分配；实时周期内应使用其非等待 API。通信 P50/P99 是固定对数桶的近似分位数，
+组件 latency 不是端到端管线延迟；业务消息应携带源时间戳，在目标端计算完整管线时间。
+
+Linux Debug 可使用 `-DEXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD=ON`，再用
+`RealtimeAllocationGuard(component, phase)` 包围待验证的周期。它记录当前线程中守卫范围内的
+C++ `new` 分配次数和字节数，供测试定位；生产实时回调仍应避免分配、阻塞和诊断 callback。
+
+运行 `build/tests/benchmark_realtime_precision --json` 可生成 jitter 证据。JSON 同时记录编译器、
+调度策略、采样 CPU 和测量边界：jitter 是周期回调入口相对期望截止时间的偏差，首个样本作为
+基线，启动等待不计入。该指标与消息携带时间戳计算的端到端延迟应分别分析。
 
 推荐从综合场景示例 [examples/comm_robot_pipeline.cpp](../examples/comm_robot_pipeline.cpp) 开始阅读：它把采集线程、规划线程、实时控制周期、状态监控、启动顺序、任务依赖和通信诊断串成一条完整流水线。
 

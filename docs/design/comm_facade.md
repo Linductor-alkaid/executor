@@ -74,7 +74,18 @@
 复制/移动的约束。配套验收覆盖同相位不可见、迟到提交、跳相位、半写快照和 RT 路径分配
 检测。
 
-通信观测也将从累计 `avg/max` 扩展为固定开销的延迟直方图（P50/P99）和端到端时间戳；在此之前，现有 latency 只能作为组件本地诊断，不能被解释为完整管线延迟。
+通信观测提供固定开销的对数延迟直方图与近似 P50/P99。组件内 latency 表示本地等待或发布到
+消费的时长，具体含义由组件 API 决定；端到端延迟必须由业务消息携带源时间戳并在目标端计算，
+`comm_robot_pipeline` 展示了传感器到控制的测量方式。
+
+`benchmark_realtime_precision --json` 是配套 jitter 基准：它报告周期回调入口相对期望截止时间
+的 min/avg/P50/P95/P99，并在 JSON 中记录 compiler、scheduler、采样 CPU 和采样边界（首样本为
+基线，启动等待不计入）。该报告应与管线端到端延迟分开解读，不能用单一 jitter 数值替代消息
+年龄或传感器到控制延迟。
+
+实时内存规则是：周期回调不得进行隐式堆分配、阻塞等待或执行诊断回调。Linux Debug 可用
+`-DEXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD=ON` 启用 `RealtimeAllocationGuard`；它只在显式
+包围的线程/阶段记录 C++ `new` 分配，用于回归测试和定位，不应作为生产运行时机制。
 
 ---
 
