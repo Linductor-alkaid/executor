@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -15,6 +16,33 @@ namespace executor::comm {
 
 class PhaseGate {
 public:
+    struct LetWriteLease {
+        PhaseGate* gate = nullptr;
+        uint64_t phase = 0;
+        bool writer = true;
+        LetWriteLease() = default;
+        LetWriteLease(PhaseGate* owner, uint64_t value, bool is_writer = true)
+            : gate(owner), phase(value), writer(is_writer) {}
+        LetWriteLease(const LetWriteLease&) = delete;
+        LetWriteLease& operator=(const LetWriteLease&) = delete;
+        LetWriteLease(LetWriteLease&& other) noexcept
+            : gate(other.gate), phase(other.phase), writer(other.writer) {
+            other.gate = nullptr;
+        }
+        ~LetWriteLease() { release(); }
+        void release() noexcept {
+            if (gate) {
+                if (writer) {
+                    gate->let_active_writers_.fetch_sub(1, std::memory_order_release);
+                } else {
+                    gate->let_active_readers_.fetch_sub(1, std::memory_order_release);
+                }
+                gate = nullptr;
+            }
+        }
+        explicit operator bool() const noexcept { return gate != nullptr; }
+    };
+
     explicit PhaseGate(std::string name = {})
         : name_(std::move(name)) {}
 
@@ -24,6 +52,9 @@ public:
     }
 
     CommResult advance_to(uint64_t phase) {
+        if (let_binding_count_.load(std::memory_order_acquire) != 0) {
+            return advance_let_to(phase);
+        }
         std::optional<CommEvent> event;
         CommEventCallback callback;
         CommResult result;
@@ -43,6 +74,7 @@ public:
                                              "phase must advance monotonically");
             } else {
                 current_phase_ = phase;
+                phase_atomic_.store(phase, std::memory_order_release);
                 if (enable_stats_) {
                     ++stats_.sent_count;
                     stats_.producer_lag = current_phase_;
@@ -60,6 +92,9 @@ public:
     }
 
     CommResult advance() {
+        if (let_binding_count_.load(std::memory_order_acquire) != 0) {
+            return advance_let_to(let_phase() + 1);
+        }
         std::optional<CommEvent> event;
         CommEventCallback callback;
         CommResult result;
@@ -74,6 +109,7 @@ public:
                                              "phase gate is closed");
             } else {
                 ++current_phase_;
+                phase_atomic_.store(current_phase_, std::memory_order_release);
                 if (enable_stats_) {
                     ++stats_.sent_count;
                     stats_.producer_lag = current_phase_;
@@ -93,6 +129,10 @@ public:
     bool has_reached(uint64_t phase) const {
         std::lock_guard<std::mutex> lock(mutex_);
         return current_phase_ >= phase;
+    }
+
+    uint64_t let_phase() const noexcept {
+        return phase_atomic_.load(std::memory_order_acquire);
     }
 
     template <class Rep, class Period>
@@ -115,6 +155,7 @@ public:
                                            "phase gate is already closed");
             }
             closed_ = true;
+            closed_atomic_.store(true, std::memory_order_release);
         }
         cv_.notify_all();
         return CommResult::success();
@@ -128,7 +169,8 @@ public:
     CommStats stats() const {
         std::lock_guard<std::mutex> lock(mutex_);
         CommStats snapshot = stats_;
-        snapshot.producer_lag = current_phase_;
+        snapshot.sent_count += let_advance_count_.load(std::memory_order_relaxed);
+        snapshot.producer_lag = current_phase_.load(std::memory_order_relaxed);
         snapshot.consumer_lag = waiter_count_;
         return snapshot;
     }
@@ -139,6 +181,76 @@ public:
     }
 
 private:
+    template <class> friend class DoubleBuffer;
+    template <class> friend class LatestMailbox;
+
+    void register_let_binding() noexcept {
+        let_binding_count_.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    void unregister_let_binding() noexcept {
+        let_binding_count_.fetch_sub(1, std::memory_order_acq_rel);
+    }
+
+    std::optional<LetWriteLease> try_begin_let_write() noexcept {
+        if (let_transition_.load(std::memory_order_acquire) ||
+            closed_atomic_.load(std::memory_order_acquire)) {
+            return std::nullopt;
+        }
+        let_active_writers_.fetch_add(1, std::memory_order_acq_rel);
+        if (let_transition_.load(std::memory_order_acquire) ||
+            closed_atomic_.load(std::memory_order_acquire)) {
+            let_active_writers_.fetch_sub(1, std::memory_order_release);
+            return std::nullopt;
+        }
+        return LetWriteLease(this, let_phase());
+    }
+
+    std::optional<LetWriteLease> try_begin_let_read() noexcept {
+        if (let_transition_.load(std::memory_order_acquire) ||
+            closed_atomic_.load(std::memory_order_acquire)) {
+            return std::nullopt;
+        }
+        let_active_readers_.fetch_add(1, std::memory_order_acq_rel);
+        if (let_transition_.load(std::memory_order_acquire) ||
+            closed_atomic_.load(std::memory_order_acquire)) {
+            let_active_readers_.fetch_sub(1, std::memory_order_release);
+            return std::nullopt;
+        }
+        return LetWriteLease(this, let_phase(), false);
+    }
+
+    CommResult advance_let_to(uint64_t phase) {
+        const uint64_t current = let_phase();
+        if (phase == 0 || phase <= current) {
+            return CommResult::failure(CommErrorCode::MissedPhase,
+                                       "phase must advance monotonically");
+        }
+        bool expected = false;
+        if (!let_transition_.compare_exchange_strong(expected, true,
+                                                      std::memory_order_acq_rel)) {
+            return CommResult::failure(CommErrorCode::NotReady,
+                                       "phase transition is already in progress");
+        }
+        if (let_active_writers_.load(std::memory_order_acquire) != 0 ||
+            let_active_readers_.load(std::memory_order_acquire) != 0) {
+            let_transition_.store(false, std::memory_order_release);
+            return CommResult::failure(CommErrorCode::NotReady,
+                                       "phase still has an active writer");
+        }
+        if (closed_atomic_.load(std::memory_order_acquire)) {
+            let_transition_.store(false, std::memory_order_release);
+            return CommResult::failure(CommErrorCode::Closed,
+                                       "phase gate is closed");
+        }
+        current_phase_.store(phase, std::memory_order_release);
+        phase_atomic_.store(phase, std::memory_order_release);
+        let_advance_count_.fetch_add(1, std::memory_order_relaxed);
+        let_transition_.store(false, std::memory_order_release);
+        cv_.notify_all();
+        return CommResult::success();
+    }
+
     template <class Rep, class Period>
     CommResult wait_until_impl(uint64_t phase,
                                std::chrono::duration<Rep, Period> timeout,
@@ -252,7 +364,14 @@ private:
     std::string name_;
     mutable std::mutex mutex_;
     std::condition_variable cv_;
-    uint64_t current_phase_ = 0;
+    std::atomic<uint64_t> current_phase_{0};
+    std::atomic<uint64_t> phase_atomic_{0};
+    std::atomic<uint64_t> let_binding_count_{0};
+    std::atomic<uint64_t> let_active_writers_{0};
+    std::atomic<uint64_t> let_active_readers_{0};
+    std::atomic<bool> let_transition_{false};
+    std::atomic<bool> closed_atomic_{false};
+    std::atomic<uint64_t> let_advance_count_{0};
     bool closed_ = false;
     bool enable_stats_ = true;
     uint64_t waiter_count_ = 0;

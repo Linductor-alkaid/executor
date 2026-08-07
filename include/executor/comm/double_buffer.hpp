@@ -1,11 +1,15 @@
 #pragma once
 
 #include <executor/comm/fwd.hpp>
+#include <executor/comm/phase_gate.hpp>
 #include <executor/comm/types.hpp>
 
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <atomic>
+#include <type_traits>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -33,6 +37,82 @@ public:
         stats_.current_depth = 1;
         stats_.peak_depth = 1;
         stats_.capacity = 2;
+    }
+
+    ~DoubleBuffer() {
+        if (let_gate_) {
+            let_gate_->unregister_let_binding();
+        }
+    }
+
+    // Opt into phase-bound LET semantics. This is a construction/configuration
+    // operation; the periodic APIs below do not allocate or lock.
+    CommResult bind_to_phase_gate(PhaseGate& gate, size_t capacity = 2) {
+        static_assert(std::is_nothrow_copy_assignable_v<T>,
+                      "LET DoubleBuffer requires nothrow copy assignment");
+        static_assert(std::is_nothrow_copy_constructible_v<T>,
+                      "LET DoubleBuffer requires nothrow copy construction");
+        if (capacity != 2 || let_gate_) {
+            return CommResult::failure(CommErrorCode::InvalidArgument,
+                                       "LET DoubleBuffer capacity is fixed at two and may bind once");
+        }
+        let_gate_ = &gate;
+        gate.register_let_binding();
+        let_tags_[0].store(std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
+        let_tags_[1].store(std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
+        return CommResult::success();
+    }
+
+    bool is_phase_bound() const noexcept { return let_gate_ != nullptr; }
+
+    CommResult publish_for_current_phase(T value) noexcept {
+        if (!let_gate_) {
+            return CommResult::failure(CommErrorCode::InvalidArgument,
+                                       "double buffer is not phase-bound");
+        }
+        auto lease = let_gate_->try_begin_let_write();
+        if (!lease) {
+            return CommResult::failure(CommErrorCode::NotReady,
+                                       "phase is closed for publication");
+        }
+        const uint64_t phase = lease->phase;
+        const size_t index = static_cast<size_t>(phase & 1U);
+        if (let_tags_[index].load(std::memory_order_acquire) == phase) {
+            return CommResult::failure(CommErrorCode::MissedPhase,
+                                       "a snapshot was already published for this phase");
+        }
+        let_buffers_[index] = value;
+        let_timestamps_[index] = std::chrono::steady_clock::now();
+        let_tags_[index].store(phase, std::memory_order_release);
+        let_sequence_.store(phase, std::memory_order_release);
+        return CommResult::success();
+    }
+
+    CommResult load_for_current_phase(Snapshot<T>& out) const noexcept {
+        if (!let_gate_) {
+            return CommResult::failure(CommErrorCode::InvalidArgument,
+                                       "double buffer is not phase-bound");
+        }
+        auto lease = let_gate_->try_begin_let_read();
+        if (!lease) {
+            return CommResult::failure(CommErrorCode::NotReady,
+                                       "phase is transitioning");
+        }
+        const uint64_t phase = lease->phase;
+        if (phase == 0) {
+            return CommResult::failure(CommErrorCode::NotReady,
+                                       "no completed phase is visible yet");
+        }
+        const uint64_t expected = phase - 1;
+        const size_t index = static_cast<size_t>(expected & 1U);
+        if (let_tags_[index].load(std::memory_order_acquire) != expected) {
+            return CommResult::failure(CommErrorCode::NotReady,
+                                       "the previous phase has no published snapshot");
+        }
+        out.value = let_buffers_[index];
+        out.sequence = expected;
+        out.timestamp = let_timestamps_[index];
+        return CommResult::success();
     }
 
     uint64_t publish(T value) {
@@ -164,6 +244,12 @@ private:
     mutable CommStats stats_;
     mutable std::chrono::nanoseconds total_latency_{0};
     CommEventCallback event_callback_;
+    PhaseGate* let_gate_ = nullptr;
+    T let_buffers_[2]{};
+    std::chrono::steady_clock::time_point let_timestamps_[2]{};
+    std::atomic<uint64_t> let_tags_[2]{{std::numeric_limits<uint64_t>::max()},
+                                       {std::numeric_limits<uint64_t>::max()}};
+    std::atomic<uint64_t> let_sequence_{0};
 };
 
 } // namespace executor::comm

@@ -360,16 +360,23 @@
 
 ---
 
-## 阶段 7.8：逻辑时间与实时证据链（规划中）
+## 阶段 7.8：逻辑时间与实时证据链（进行中）
 
-当前阶段 7 的通信组件仍是独立原语：`PhaseGate` / `Sequencer` 不绑定数据版本，`DoubleBuffer` 不绑定逻辑相位，且现有 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和 `RealtimeChannel` 含 mutex 路径。因此不能把它们的组合描述为 LET、硬实时或无锁通信。
+未绑定的阶段 7 通信组件仍是独立原语：`PhaseGate` / `Sequencer` 不绑定数据版本，`DoubleBuffer` 不绑定逻辑相位，且现有 `LatestMailbox` 和 `RealtimeChannel` 含 mutex 路径。因此不能把这些未绑定组合描述为 LET、硬实时或无锁通信。相位绑定的 `DoubleBuffer` 是 7.8 已实现的例外，其余实时证据链工作仍在推进。
 
-### P0：LET 通道
+### P0：既有 `PhaseGate` × 快照/最新值原语的 LET 契约
 
-- [ ] 设计并实现 `LetChannel<T>`，明确单写单读或多写仲裁模型。
-- [ ] 将相位 N 的提交与 N+1 边界的数据可见性绑定；迟到写入、重复提交和跳相位必须可诊断。
-- [ ] 使用固定存储和原子相位发布；周期路径不得等待 mutex、condition variable 或堆分配。
-- [ ] 约束 `T` 的预分配、无异常复制/移动语义，并提供构造期容量验证。
+不新增独立的 `LetChannel<T>`。LET 是既有 `PhaseGate` 与 `DoubleBuffer<T>` /
+`LatestMailbox<T>` 的可选绑定模式：前者是唯一逻辑时钟，后者保存相位值；普通快照和
+latest-wins API 必须保持向后兼容。
+
+- [x] 设计并实现 `PhaseGate` 驱动的相位感知 `DoubleBuffer<T>` 模式，第一版明确为单写单读；多写仲裁留在非实时控制面。
+- [x] 将相位 N 的提交、相位推进和 N+1 边界读取绑定为一个契约；迟到/竞争写入、跳相位和未就绪读取返回可诊断 `CommResult`。
+- [x] 保持未绑定 `DoubleBuffer<T>::publish()` / `load()` 的最新完整快照语义不变；绑定模式只通过显式 API 启用。
+- [x] 绑定模式使用固定双槽存储和原子相位发布；成功周期路径不得等待 mutex、condition variable 或堆分配。
+- [x] 约束绑定模式的 `T` 满足无异常复制语义，并提供固定容量（仅允许两个槽位）验证。
+- [x] 将同一 LET 绑定契约扩展到 `LatestMailbox<T>`；未绑定 `publish()` / `try_load()` 仍保持 latest-wins。
+- [x] 明确 `RealtimeChannel<T>` 不自动绑定 LET，避免将 FIFO 周期预算误解为单值相位快照。
 
 ### P0：实时内存契约
 

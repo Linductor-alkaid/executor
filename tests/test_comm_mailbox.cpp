@@ -11,8 +11,10 @@
 namespace {
 
 using executor::comm::CommEventKind;
+using executor::comm::CommErrorCode;
 using executor::comm::DropPolicy;
 using executor::comm::LatestMailbox;
+using executor::comm::PhaseGate;
 using executor::comm::RealtimeChannel;
 using executor::comm::RealtimeChannelOptions;
 
@@ -93,6 +95,50 @@ TEST(CommMailboxTest, EmitsOverwriteAndStaleEventsOutsideLock) {
     ASSERT_EQ(events.size(), 2U);
     EXPECT_EQ(events[0], CommEventKind::Overwritten);
     EXPECT_EQ(events[1], CommEventKind::StaleRead);
+}
+
+TEST(CommMailboxTest, PhaseBoundModeMakesLatestValueVisibleAtNextPhase) {
+    PhaseGate gate("config");
+    LatestMailbox<int> mailbox("phase_config");
+    ASSERT_TRUE(mailbox.bind_to_phase_gate(gate));
+
+    int value = 0;
+    uint64_t visible_phase = 0;
+    const auto initial_read = mailbox.load_for_current_phase(value);
+    EXPECT_FALSE(initial_read);
+    EXPECT_EQ(initial_read.error_code, CommErrorCode::NotReady);
+    EXPECT_TRUE(mailbox.publish_for_current_phase(10));
+    const auto duplicate = mailbox.publish_for_current_phase(11);
+    EXPECT_FALSE(duplicate);
+    EXPECT_EQ(duplicate.error_code, CommErrorCode::MissedPhase);
+    EXPECT_FALSE(mailbox.load_for_current_phase(value));
+
+    ASSERT_TRUE(gate.advance());
+    ASSERT_TRUE(mailbox.load_for_current_phase(value, &visible_phase));
+    EXPECT_EQ(value, 10);
+    EXPECT_EQ(visible_phase, 0U);
+
+    ASSERT_TRUE(mailbox.publish_for_current_phase(20));
+    ASSERT_TRUE(mailbox.load_for_current_phase(value, &visible_phase));
+    EXPECT_EQ(value, 10);
+    EXPECT_EQ(visible_phase, 0U);
+
+    ASSERT_TRUE(gate.advance());
+    ASSERT_TRUE(mailbox.load_for_current_phase(value, &visible_phase));
+    EXPECT_EQ(value, 20);
+    EXPECT_EQ(visible_phase, 1U);
+}
+
+TEST(CommMailboxTest, PhaseBoundModeRejectsMissingPreviousValue) {
+    PhaseGate gate;
+    LatestMailbox<int> mailbox;
+    ASSERT_TRUE(mailbox.bind_to_phase_gate(gate));
+    ASSERT_TRUE(gate.advance_to(3));
+
+    int value = 0;
+    const auto result = mailbox.load_for_current_phase(value);
+    EXPECT_FALSE(result);
+    EXPECT_EQ(result.error_code, CommErrorCode::NotReady);
 }
 
 TEST(CommRealtimeChannelTest, DrainForCycleUsesConfiguredBudget) {

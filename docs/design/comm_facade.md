@@ -48,18 +48,31 @@
 
 阶段 7 的组件是通信原语集合，不是统一的时间模型：
 
-- `PhaseGate` / `Sequencer` 只表示阶段或 ticket 顺序，不把阶段与数据快照绑定。
+- 未绑定时，`PhaseGate` / `Sequencer` 只表示阶段或 ticket 顺序，不把阶段与数据快照绑定。
 - `DoubleBuffer` 只保证一次发布得到完整值快照，不说明快照属于哪个逻辑相位。
-- `LatestMailbox` / `RealtimeChannel` 提供最新值或有界消息消费语义，但不提供端到端相位一致性。
+- 未绑定时，`LatestMailbox` / `RealtimeChannel` 提供最新值或有界消息消费语义，但不提供端到端相位一致性。
 - `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和当前 `RealtimeChannel` 实现使用 mutex；它们不应被描述为硬实时、无锁或零阻塞数据路径。
 
-因此，用户若自行组合 phase gate 和 double buffer，仍需自行约定“哪个相位的数据何时可见”。这属于应用层协议，不是当前 facade 的保证。硬实时路径应使用经过验证的专用无锁/预分配实现，并将现有组件限于控制面、启动同步或非硬实时监控面。
+因此，用户若自行组合未绑定的 phase gate 和 double buffer，仍需自行约定“哪个相位的数据何时可见”；显式绑定模式则提供本节定义的 LET 保证。硬实时路径应使用经过验证的专用无锁/预分配实现，并将未绑定组件限于控制面、启动同步或非硬实时监控面。
 
-## 后续方向：LET 通道
+## 阶段 7.8：为既有原语增加 LET 契约
 
-下一阶段拟增加 `LetChannel<T>`（Logical Execution Time）作为独立组件，把数据可见性与逻辑相位绑定：相位 N 完成提交后，读侧只能在 N+1 边界看到相位 N 的完整输出。目标 API 需要显式区分写入、提交和读取，并拒绝迟到写入或跳过相位；实现应采用固定存储、原子相位发布，不在周期路径中获取 mutex、等待条件变量或进行堆分配。
+下一阶段不增加独立的 `LetChannel<T>`。LET（Logical Execution Time）应作为
+`PhaseGate` 与 `DoubleBuffer<T>` / `LatestMailbox<T>` 的可选绑定模式：`PhaseGate` 是唯一的
+逻辑时钟，后两者保存与该时钟绑定的相位值。这样用户继续使用已有的阶段、快照和最新值
+原语，而框架负责保证“相位 N 的完整输出只在 N+1 边界对读侧可见”。
 
-该能力尚未实现，不能用现有 `PhaseGate` + `DoubleBuffer` 组合替代。设计时必须先确定单写单读/多写仲裁模型，并约束 `T` 的预分配、无异常复制或移动语义。配套验收应覆盖同相位不可见、迟到提交、跳相位、半写快照和 RT 路径分配检测。
+该模式必须保留现有 API 的兼容语义：未绑定相位门的 `DoubleBuffer<T>::publish()` / `load()`
+仍然是普通的最新完整快照，`LatestMailbox<T>::publish()` / `try_load()` 仍是 latest-wins。
+绑定后，写侧只能为当前逻辑相位提交，推进相位会封存该相位；读侧只能在下一相位取得前一
+相位的完整值。迟到写入、重复提交、跳相位、未就绪读取和读侧落后都必须通过结果与统计
+诊断，而不能退回到应用层约定。
+
+第一版应明确为单写单读；多写者先在非实时控制面仲裁，再由唯一写侧向绑定的
+`DoubleBuffer` 或 `LatestMailbox` 提交。相位绑定模式使用构造期固定容量存储和原子相位发布，成功的周期
+路径不得获取 mutex、等待 condition variable 或进行堆分配；类型需要满足预分配、无异常
+复制/移动的约束。配套验收覆盖同相位不可见、迟到提交、跳相位、半写快照和 RT 路径分配
+检测。
 
 通信观测也将从累计 `avg/max` 扩展为固定开销的延迟直方图（P50/P99）和端到端时间戳；在此之前，现有 latency 只能作为组件本地诊断，不能被解释为完整管线延迟。
 
@@ -411,12 +424,24 @@ public:
     Snapshot<T> load() const;
     bool load_newer_than(uint64_t last_seen_sequence, Snapshot<T>& out) const;
 
+    // Explicit LET binding; fixed two-slot SWSR storage.
+    CommResult bind_to_phase_gate(PhaseGate& gate, size_t capacity = 2);
+    CommResult publish_for_current_phase(T value);
+    CommResult load_for_current_phase(Snapshot<T>& out) const;
+
     uint64_t sequence() const;
     CommStats stats() const;
 };
 
 } // namespace executor::comm
 ```
+
+`bind_to_phase_gate()` is opt-in and does not alter unbound `publish()` / `load()` behavior. In
+bound mode the successful periodic operations use preallocated slots and acquire no mutex or
+condition-variable wait. The gate rejects a phase transition while a writer lease is active;
+the caller retries a `NotReady` result in the next cycle. This deliberately constrains the first
+implementation to one writer and one reader; multi-writer arbitration remains outside the
+real-time path.
 
 ### 语义
 
@@ -425,6 +450,14 @@ public:
 - `load_newer_than()` 帮助读者避免重复消费旧状态。
 - 初期目标是单写多读；多写场景建议先用 `MpscChannel` 汇聚到一个状态 owner。
 - 对大型不可复制对象，后续可增加 `SnapshotPtr<T>`，内部使用 `std::shared_ptr<const T>`。
+
+### LET 绑定模式
+
+`LatestMailbox<T>` 也可通过 `bind_to_phase_gate(PhaseGate&, 2)` 显式加入 LET 契约：
+`publish_for_current_phase(value)` 在当前相位提交一次最新值，`load_for_current_phase(out, phase)`
+只读取上一完整相位。未绑定的 `publish()` / `try_load()` 行为不变；绑定模式第一版为 SWSR、
+固定双槽和无异常复制，重复提交或相位未就绪返回 `CommResult`。`RealtimeChannel` 不自动继承
+LET，因为 FIFO 消费预算与单值相位快照是不同语义。
 
 ---
 

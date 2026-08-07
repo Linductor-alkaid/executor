@@ -1204,9 +1204,18 @@ Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`�
 
 通信事件默认只属于 `executor::comm` 组件本地诊断，不计入 `ExecutorFailureStatus`，也不会触发 `Executor::set_failure_callback(...)`。阶段 7.6 暂不增加 Executor 级聚合入口；调用方如需统一上报，可在各组件 callback 中桥接到自己的监控系统。
 
-当前 `executor::comm` 仍是独立原语集合，不提供统一逻辑时间（LET）语义。`PhaseGate`/`Sequencer` 的阶段顺序没有绑定 `DoubleBuffer` 或 `LatestMailbox` 的数据版本；把它们组合成“相位 N 在 N+1 可见”属于应用层约定。`PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和 `RealtimeChannel` 当前实现也不承诺硬实时、无锁或零堆分配，实时周期内应使用其非等待 API；有硬实时要求时应采用经过验证的专用实现。
+`PhaseGate` 与 `DoubleBuffer<T>` / `LatestMailbox<T>` 支持显式的可选 LET 绑定模式，不新增平行的
+`LetChannel<T>` 类型。调用 `buffer.bind_to_phase_gate(gate)` 或
+`mailbox.bind_to_phase_gate(gate)` 后，写侧使用
+`publish_for_current_phase()`，读侧使用 `load_for_current_phase()`：相位 N 的完整输出只在
+gate 推进到 N+1 后可见。未绑定时，原有 `publish()` / `load()` 最新快照语义保持不变。
+绑定模式是第一版 SWSR，容量固定为两个槽位，成功周期路径不获取 mutex、等待 condition
+variable 或分配堆内存；`T` 必须可无异常复制。未就绪读取、跳相位和相位关闭会返回
+`CommResult`，推进与写入竞争返回 `NotReady`，调用方应在下一个周期重试。
 
-后续计划中的 `LetChannel<T>` 将把相位提交和快照可见性绑定，并提供固定存储、原子发布和迟到/跳相位诊断；该 API 在实现和验收完成前不属于当前版本能力。通信 latency 目前是组件本地的 avg/max 累计值，不是端到端管线延迟；P50/P99 直方图和管线时间戳属于后续观测增强。
+未绑定的 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和 `RealtimeChannel` 仍不承诺硬实时、
+无锁或零堆分配；实时周期内应使用其非等待 API。通信 latency 目前是组件本地的 avg/max
+累计值，不是端到端管线延迟；P50/P99 直方图和管线时间戳属于后续观测增强。
 
 推荐从综合场景示例 [examples/comm_robot_pipeline.cpp](../examples/comm_robot_pipeline.cpp) 开始阅读：它把采集线程、规划线程、实时控制周期、状态监控、启动顺序、任务依赖和通信诊断串成一条完整流水线。
 
@@ -1360,7 +1369,7 @@ waiter.join();
 
 ### 7.8 Snapshot / DoubleBuffer
 
-`Snapshot<T>` / `DoubleBuffer<T>` 适合把共享 mutable state 改成“发布完整快照、读者按值读取”的模式。读者不会拿到可变引用，也不会看到 writer 更新到一半的对象。当前版本以 mutex 保证完整快照，不承诺无锁读取。
+`Snapshot<T>` / `DoubleBuffer<T>` 适合把共享 mutable state 改成“发布完整快照、读者按值读取”的模式。读者不会拿到可变引用，也不会看到 writer 更新到一半的对象。未绑定模式以 mutex 保证完整快照；显式 LET 绑定模式使用固定双槽和原子相位发布。
 
 ```cpp
 struct SystemState {
@@ -1391,6 +1400,30 @@ if (snapshot.value.checksum == snapshot.value.tick * 17) {
 - `sequence()` / `stats()` / `set_event_callback(...)`：观察版本、统计和低频诊断事件。
 
 第一版写入模型是单写多读；多写场景建议先通过 `MpscChannel` 汇聚到一个状态 owner，再由 owner 调用 `publish()` 或 `update()`。`load()` 和 `load_newer_than()` 会复制 `T`，大型对象需要评估复制成本；后续可增加 `SnapshotPtr<T>`，用 `std::shared_ptr<const T>` 降低大对象快照复制成本。
+
+需要固定逻辑相位时，可在构造/配置阶段显式绑定：
+
+```cpp
+executor::comm::PhaseGate gate;
+executor::comm::DoubleBuffer<Command> commands(Command{});
+commands.bind_to_phase_gate(gate);  // 固定为两个预分配槽位，SWSR。
+
+commands.publish_for_current_phase(Command{/* phase 0 output */});
+gate.advance();
+
+executor::comm::Snapshot<Command> visible;
+if (commands.load_for_current_phase(visible)) {
+    apply(visible.value);  // 在 phase 1 读取完整的 phase 0 输出。
+}
+```
+
+`publish_for_current_phase()` 和 `load_for_current_phase()` 返回 `CommResult`。同相位读取不会看到
+正在生成的值；遗漏上一相位时读取返回 `NotReady`。绑定模式的 `T` 必须满足无异常复制构造和赋值，
+以保证周期路径没有隐式分配或异常恢复。
+
+`LatestMailbox<T>` 使用同名相位 API；`load_for_current_phase(out, &visible_phase)` 可返回可见的
+逻辑相位。绑定 mailbox 仍是单值 latest-wins，不提供 FIFO；需要逐条消息时继续使用
+`RealtimeChannel<T>`，它不自动继承 LET。
 
 ### 7.9 TaskPriority
 

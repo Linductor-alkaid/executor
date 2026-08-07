@@ -13,7 +13,9 @@ using namespace std::chrono_literals;
 namespace {
 
 using executor::comm::CommEventKind;
+using executor::comm::CommErrorCode;
 using executor::comm::DoubleBuffer;
+using executor::comm::PhaseGate;
 using executor::comm::Snapshot;
 
 struct State {
@@ -175,6 +177,46 @@ TEST(CommDoubleBufferTest, HighFrequencyWriterNeverExposesHalfUpdatedState) {
 
     EXPECT_EQ(inconsistent.load(std::memory_order_acquire), 0);
     EXPECT_EQ(buffer.sequence(), 500U);
+}
+
+TEST(CommDoubleBufferTest, PhaseBoundModeMakesOutputVisibleAtNextPhase) {
+    PhaseGate gate("control");
+    DoubleBuffer<int> buffer(0, "command");
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+
+    Snapshot<int> snapshot;
+    EXPECT_FALSE(buffer.load_for_current_phase(snapshot));
+    EXPECT_TRUE(buffer.publish_for_current_phase(10));
+    const auto duplicate = buffer.publish_for_current_phase(11);
+    EXPECT_FALSE(duplicate);
+    EXPECT_EQ(duplicate.error_code, CommErrorCode::MissedPhase);
+    EXPECT_FALSE(buffer.load_for_current_phase(snapshot));
+
+    ASSERT_TRUE(gate.advance());
+    ASSERT_TRUE(buffer.load_for_current_phase(snapshot));
+    EXPECT_EQ(snapshot.sequence, 0U);
+    EXPECT_EQ(snapshot.value, 10);
+
+    ASSERT_TRUE(buffer.publish_for_current_phase(20));
+    ASSERT_TRUE(buffer.load_for_current_phase(snapshot));
+    EXPECT_EQ(snapshot.value, 10);
+
+    ASSERT_TRUE(gate.advance());
+    ASSERT_TRUE(buffer.load_for_current_phase(snapshot));
+    EXPECT_EQ(snapshot.sequence, 1U);
+    EXPECT_EQ(snapshot.value, 20);
+}
+
+TEST(CommDoubleBufferTest, PhaseBoundModeDiagnosesMissingPriorPhase) {
+    PhaseGate gate;
+    DoubleBuffer<int> buffer;
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+    ASSERT_TRUE(gate.advance_to(3));
+
+    Snapshot<int> snapshot;
+    const auto result = buffer.load_for_current_phase(snapshot);
+    EXPECT_FALSE(result);
+    EXPECT_EQ(result.error_code, CommErrorCode::NotReady);
 }
 
 } // namespace
