@@ -49,4 +49,12 @@ Use `PhaseGate` for monotonic setup/calibration/running stages. `advance_to()` c
 
 Use `Sequencer` for strict ticket order: `next_ticket()` allocates, `publish(ticket)` advances, and `wait_until_published(ticket, timeout)` returns `MissedPhase` when the target has already been passed. It is not a data queue and cannot replace `MpscChannel`.
 
+## Current time-model boundary
+
+These components are separate primitives. A phase number is not attached to a mailbox or snapshot: combining `PhaseGate` with `DoubleBuffer` does not guarantee that phase N becomes visible exactly at the N+1 boundary. That visibility rule remains an application-level protocol today.
+
+`PhaseGate`, `DoubleBuffer`, `LatestMailbox`, and the current `RealtimeChannel` implementation use mutex-protected paths. They are suitable for control, startup, monitoring, and bounded non-blocking use, but are not a hard-real-time, lock-free, or zero-allocation guarantee. Use a verified preallocated implementation for that requirement.
+
+An upcoming `LetChannel<T>` is planned to bind phase publication to snapshot visibility using fixed storage and atomic publication. It is not part of the current API.
+
 Next: [communication observability](/en/realtime-and-communication/observability).

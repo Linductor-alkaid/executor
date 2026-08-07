@@ -24,6 +24,8 @@ if (stats.dropped_count != 0 || stats.timeout_count != 0) {
 
 `CommStats` 是本地累计快照，可包含发送、接收、drop、覆盖、stale read、关闭后发送、超时、handler 异常、missed phase、当前/峰值深度、producer/consumer lag 和延迟。`CommEventCallback` 适合少量诊断事件；callback 自身抛出的异常会被隔离，不会改变通信操作的返回值或组件状态。
 
+当前 latency 字段只是组件本地的平均值和最大值，表示数据年龄或等待时长，不能当作端到端流水线延迟，也不提供 P50/P99 分布。LET 管线后续会增加固定开销的延迟直方图和明确的源时间戳/发布时间戳；在此之前，报告这些数值时必须同时注明组件和测量边界。
+
 ## 根据语义设置告警
 
 | 组件 | 重点字段/事件 | 含义 |

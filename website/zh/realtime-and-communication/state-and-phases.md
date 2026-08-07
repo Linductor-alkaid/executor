@@ -57,6 +57,14 @@ if (mailbox.try_load_newer_than(seen, config, seen)) {
 
 需要精确 ticket 顺序时使用 `Sequencer`：`next_ticket()` 分配序号，`publish(ticket)` 推进发布进度，`wait_until_published(ticket, timeout)` 在目标已被越过时返回 `MissedPhase`。它不是数据队列，不能替代 `MpscChannel`。
 
+## 当前时间模型边界
+
+这些组件目前是彼此独立的原语。phase 数字没有绑定 mailbox 或 snapshot；把 `PhaseGate` 与 `DoubleBuffer` 组合使用，并不保证相位 N 的数据一定在 N+1 边界可见，这条可见性规则仍属于应用层协议。
+
+`PhaseGate`、`DoubleBuffer`、`LatestMailbox` 以及当前 `RealtimeChannel` 实现都包含 mutex 保护路径。它们适合控制面、启动同步、监控和有界非等待使用，但不提供硬实时、无锁或零分配保证；有这类要求时应使用经过验证的预分配实现。
+
+后续计划中的 `LetChannel<T>` 会使用固定存储和原子发布，把相位提交与快照可见性绑定；它尚不属于当前 API。
+
 ## 下一步阅读
 
 [通信可观察性](/zh/realtime-and-communication/observability)说明如何用本地统计与事件处理 drop、覆盖、陈旧读取和 missed phase。

@@ -24,6 +24,8 @@ if (stats.dropped_count != 0 || stats.timeout_count != 0) {
 
 `CommStats` is a local cumulative snapshot, including sends, receives, drops, overwrites, stale reads, sends after close, timeouts, handler exceptions, missed phases, current/peak depth, producer/consumer lag, and latency. `CommEventCallback` is appropriate for low-rate diagnostics. Callback exceptions are isolated and do not change the communication operation's result or component state.
 
+The current latency fields are component-local average and maximum ages or wait durations. They are not end-to-end pipeline latency and do not provide a P50/P99 distribution. A fixed-cost latency histogram and explicit source/publish timestamps are planned for the LET pipeline work; until then, report these values with their component and measurement boundary.
+
 ## Alert by semantic contract
 
 | Component | Fields/events to focus on | Meaning |

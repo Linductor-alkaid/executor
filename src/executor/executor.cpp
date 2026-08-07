@@ -220,6 +220,11 @@ ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
     }
 
     lifecycle_state_.store(ExecutorLifecycleState::Initializing, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(task_graph_mutex_);
+        task_graph_retention_capacity_ = config.task_graph_retention_capacity;
+        trim_task_graph_retention_locked();
+    }
     if (!manager_->initialize_async_executor(config)) {
         auto code = manager_->is_default_async_shutdown()
                         ? ExecutorErrorCode::AlreadyShutdown
@@ -286,6 +291,17 @@ TaskHandle Executor::allocate_task_handle() {
     return handle;
 }
 
+void Executor::set_task_graph_retention_capacity(size_t capacity) {
+    std::lock_guard<std::mutex> lock(task_graph_mutex_);
+    task_graph_retention_capacity_ = capacity;
+    trim_task_graph_retention_locked();
+}
+
+size_t Executor::task_graph_retention_capacity() const {
+    std::lock_guard<std::mutex> lock(task_graph_mutex_);
+    return task_graph_retention_capacity_;
+}
+
 bool Executor::task_handle_known_locked(const TaskHandle& handle) const {
     return handle.valid() && task_graph_nodes_.find(handle.id()) != task_graph_nodes_.end();
 }
@@ -305,6 +321,7 @@ bool Executor::register_task_graph_dependencies(
             return false;
         }
         task_graph_dependents_[dependency.id()].push_back(handle.id());
+        task_graph_nodes_[handle.id()].dependencies.push_back(dependency.id());
     }
     return true;
 }
@@ -360,7 +377,7 @@ void Executor::mark_task_graph_succeeded(const TaskHandle& handle) {
             it->second.error_message.clear();
             task_dependencies_->mark_completed(handle.id());
             resolve_task_graph_dependents_locked(handle.id());
-            prune_task_graph_locked(handle.id());
+            finalize_task_graph_node_locked(handle.id());
         }
     }
     manager_->record_in_flight_task_terminal(handle.id());
@@ -378,7 +395,7 @@ void Executor::mark_task_graph_failed(const TaskHandle& handle,
             it->second.exception = exception;
             it->second.error_message = std::move(message);
             resolve_task_graph_dependents_locked(handle.id());
-            prune_task_graph_locked(handle.id());
+            finalize_task_graph_node_locked(handle.id());
         }
     }
     manager_->record_in_flight_task_terminal(handle.id());
@@ -387,6 +404,7 @@ void Executor::mark_task_graph_failed(const TaskHandle& handle,
 
 void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) {
     std::vector<std::string> ready_ids{task_id};
+    std::vector<std::string> terminal_ids;
 
     while (!ready_ids.empty()) {
         const std::string current_id = std::move(ready_ids.back());
@@ -397,7 +415,8 @@ void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) 
             continue;
         }
 
-        for (const auto& dependent_id : dependents_it->second) {
+        const auto dependent_ids = dependents_it->second;
+        for (const auto& dependent_id : dependent_ids) {
             auto node_it = task_graph_nodes_.find(dependent_id);
             if (node_it == task_graph_nodes_.end() ||
                 node_it->second.state != TaskGraphState::WhenAll) {
@@ -405,7 +424,8 @@ void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) 
             }
 
             std::vector<TaskHandle> dependencies;
-            for (const auto& dependency_id : task_dependencies_->get_dependencies(dependent_id)) {
+            const auto& dependent_node = node_it->second;
+            for (const auto& dependency_id : dependent_node.dependencies) {
                 dependencies.emplace_back(dependency_id);
             }
 
@@ -414,6 +434,7 @@ void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) 
                 node_it->second.exception = dependency_exception;
                 node_it->second.error_message = "when_all dependency failed";
                 ready_ids.push_back(dependent_id);
+                terminal_ids.push_back(dependent_id);
                 manager_->record_in_flight_task_terminal(dependent_id);
             } else if (dependencies_succeeded_locked(dependencies)) {
                 node_it->second.state = TaskGraphState::Succeeded;
@@ -421,18 +442,69 @@ void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) 
                 node_it->second.error_message.clear();
                 task_dependencies_->mark_completed(dependent_id);
                 ready_ids.push_back(dependent_id);
+                terminal_ids.push_back(dependent_id);
                 manager_->record_in_flight_task_terminal(dependent_id);
             }
         }
     }
+
+    for (const auto& terminal_id : terminal_ids) {
+        finalize_task_graph_node_locked(terminal_id);
+    }
 }
 
-void Executor::prune_task_graph_locked(const std::string& task_id) {
-    auto dependents_it = task_graph_dependents_.find(task_id);
-    if (dependents_it != task_graph_dependents_.end() && !dependents_it->second.empty()) {
+void Executor::finalize_task_graph_node_locked(const std::string& task_id) {
+    auto node_it = task_graph_nodes_.find(task_id);
+    if (node_it == task_graph_nodes_.end()) {
         return;
     }
-    task_dependencies_->prune(task_id);
+
+    auto& node = node_it->second;
+    if (node.state != TaskGraphState::Succeeded &&
+        node.state != TaskGraphState::Failed) {
+        return;
+    }
+
+    // Remove this node from every dependency's reverse edge.  A dependency
+    // becomes evictable only after all active dependents have finished.
+    for (const auto& dependency_id : node.dependencies) {
+        auto dependents_it = task_graph_dependents_.find(dependency_id);
+        if (dependents_it != task_graph_dependents_.end()) {
+            auto& dependents = dependents_it->second;
+            dependents.erase(
+                std::remove(dependents.begin(), dependents.end(), task_id),
+                dependents.end());
+            if (dependents.empty()) {
+                task_graph_dependents_.erase(dependents_it);
+            }
+        }
+        task_dependencies_->remove_dependency(task_id, dependency_id);
+    }
+    node.dependencies.clear();
+    task_graph_terminal_order_.push_back(task_id);
+    trim_task_graph_retention_locked();
+}
+
+void Executor::trim_task_graph_retention_locked() {
+    while (task_graph_terminal_order_.size() > task_graph_retention_capacity_) {
+        auto candidate = std::find_if(
+            task_graph_terminal_order_.begin(), task_graph_terminal_order_.end(),
+            [this](const std::string& task_id) {
+                const auto it = task_graph_dependents_.find(task_id);
+                return it == task_graph_dependents_.end() || it->second.empty();
+            });
+        if (candidate == task_graph_terminal_order_.end()) {
+            // Every old terminal node is still needed by an active dependent.
+            // The active graph is allowed to exceed the terminal cache bound.
+            break;
+        }
+
+        const std::string task_id = *candidate;
+        task_graph_terminal_order_.erase(candidate);
+        task_graph_nodes_.erase(task_id);
+        task_graph_dependents_.erase(task_id);
+        task_dependencies_->prune(task_id);
+    }
 }
 
 std::exception_ptr Executor::make_dependency_exception(const std::string& message) const {
@@ -459,6 +531,7 @@ TaskHandle Executor::when_all(std::vector<TaskHandle> dependencies) {
                 break;
             }
             task_graph_dependents_[dependency.id()].push_back(handle.id());
+            task_graph_nodes_[handle.id()].dependencies.push_back(dependency.id());
         }
         if (dependencies_valid) {
             auto& node = task_graph_nodes_[handle.id()];
@@ -473,6 +546,9 @@ TaskHandle Executor::when_all(std::vector<TaskHandle> dependencies) {
                 terminal = true;
             } else {
                 node.state = TaskGraphState::WhenAll;
+            }
+            if (terminal) {
+                finalize_task_graph_node_locked(handle.id());
             }
         }
     }

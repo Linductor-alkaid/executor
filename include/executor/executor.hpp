@@ -142,6 +142,16 @@ public:
     TaskHandle when_all(std::vector<TaskHandle> dependencies);
 
     /**
+     * @brief Configure how many terminal task-graph handles remain usable.
+     *
+     * A terminal handle can be used to create a later dependent task while it
+     * remains retained.  Evicted handles are rejected as expired.  Active
+     * dependency chains are never evicted early.
+     */
+    void set_task_graph_retention_capacity(size_t capacity);
+    size_t task_graph_retention_capacity() const;
+
+    /**
      * @brief 提交优先级任务
      * 
      * @tparam F 可调用对象类型
@@ -737,6 +747,7 @@ private:
         TaskGraphState state = TaskGraphState::Pending;
         std::exception_ptr exception;
         std::string error_message;
+        std::vector<std::string> dependencies;
     };
 
     TaskHandle allocate_task_handle();
@@ -752,7 +763,8 @@ private:
                                 std::exception_ptr exception,
                                 std::string message);
     void resolve_task_graph_dependents_locked(const std::string& task_id);
-    void prune_task_graph_locked(const std::string& task_id);
+    void finalize_task_graph_node_locked(const std::string& task_id);
+    void trim_task_graph_retention_locked();
     std::exception_ptr make_dependency_exception(const std::string& message) const;
 
     /**
@@ -831,6 +843,8 @@ private:
     std::unique_ptr<TaskDependencyManager> task_dependencies_;
     std::unordered_map<std::string, TaskGraphNode> task_graph_nodes_;
     std::unordered_map<std::string, std::vector<std::string>> task_graph_dependents_;
+    std::deque<std::string> task_graph_terminal_order_;
+    size_t task_graph_retention_capacity_ = 1024;
 
     // GPU 调度器
     gpu::GpuScheduler scheduler_;

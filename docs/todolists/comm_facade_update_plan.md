@@ -226,7 +226,7 @@
   - 默认不执行 dependent task。
   - dependent future 返回可诊断异常。
   - 依赖图 cycle 或无效 handle 返回 ready future 异常或失败逻辑 handle，并记录 `SubmitRejected`。
-- [ ] 增加具有明确 `TaskHandle` 保留/过期语义的依赖状态裁剪，避免长生命周期服务中任务 ID 无限增长。
+- [x] 增加具有明确 `TaskHandle` 保留/过期语义的依赖状态裁剪，默认保留最近 1024 个终态 handle，支持容量 0 和运行时调整；活动依赖不会提前回收。
 
 ### 测试
 
@@ -240,7 +240,7 @@
 ### 验收
 
 - [x] 用户可通过 facade 表达任务时序，而不是手写 promise/future 链或轮询 `TaskDependencyManager`。
-- [ ] 长生命周期任务图状态有界；当前实现保留已完成 handle，以支持完成后再创建 dependent task。
+- [x] 长生命周期任务图状态有界；已完成 handle 在保留窗口内可继续建 dependent task，过期后以可诊断错误拒绝。
 
 ---
 
@@ -308,6 +308,7 @@
 6. 阶段 7.6：通信时序监控贯穿补齐，也可随每个组件同步落地。
 7. 阶段 7.5：submit_after / when_all，作为较大任务图扩展单独推进。
 8. 阶段 7.7：示例、README/API/MIGRATION 同步。
+9. 阶段 7.8：先定义 LET 与实时内存边界，再实现可验证的时间语义和延迟证据链。
 
 这个顺序先覆盖最高频、最高风险的跨线程数据传递和实时消费，再扩展任务图 API。
 
@@ -356,3 +357,29 @@
 - [x] `send_for()` / `receive_for()` 第一版通过 `close()` 唤醒，不引入 stop token。
 - [x] `submit_after()` 使用 `std::future` 返回结果；需要继续依赖链时使用 `TaskSubmission<T>`、`submit_with_handle()`、`submit_after_with_handle()`。
 - [x] 通信诊断保持独立 `CommEvent` / `CommStats`，默认不进入 `FailureKind`。
+
+---
+
+## 阶段 7.8：逻辑时间与实时证据链（规划中）
+
+当前阶段 7 的通信组件仍是独立原语：`PhaseGate` / `Sequencer` 不绑定数据版本，`DoubleBuffer` 不绑定逻辑相位，且现有 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和 `RealtimeChannel` 含 mutex 路径。因此不能把它们的组合描述为 LET、硬实时或无锁通信。
+
+### P0：LET 通道
+
+- [ ] 设计并实现 `LetChannel<T>`，明确单写单读或多写仲裁模型。
+- [ ] 将相位 N 的提交与 N+1 边界的数据可见性绑定；迟到写入、重复提交和跳相位必须可诊断。
+- [ ] 使用固定存储和原子相位发布；周期路径不得等待 mutex、condition variable 或堆分配。
+- [ ] 约束 `T` 的预分配、无异常复制/移动语义，并提供构造期容量验证。
+
+### P0：实时内存契约
+
+- [ ] 文档明确实时回调禁止隐式堆分配、阻塞等待和诊断回调。
+- [ ] 为 Debug/Linux 增加可选分配检测 hook；检测失败必须可定位到组件和调用阶段。
+- [ ] 为关键路径提供预分配对象池或固定容量存储，并加入运行时回归测试。
+
+### P1：延迟直方图与端到端度量
+
+- [ ] 为通信组件增加固定开销的延迟直方图，至少提供 P50/P99。
+- [ ] 区分数据年龄、等待时长、发布到消费和端到端流水线延迟。
+- [ ] 更新 `comm_robot_pipeline` 示例，输出传感器→规划→控制的端到端延迟与相位编号。
+- [ ] 将 jitter benchmark 与管线报告关联，记录 CPU、调度策略、编译器和采样边界。

@@ -73,6 +73,8 @@ struct ExecutorConfig {
     int64_t task_timeout_ms = 0;         // 任务超时时间（毫秒）
     bool enable_work_stealing = true;    // 默认开, 无锁工作窃取 -10.7% 退化; max_threads==1 时自动关
     bool enable_monitoring = true;       // 启用任务监控（默认开启）
+    // 已完成 TaskHandle 的有界保留数；0 表示终态 handle 不保留。
+    size_t task_graph_retention_capacity = 1024;
 };
 
 /**

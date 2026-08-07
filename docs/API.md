@@ -250,7 +250,7 @@ auto fused = executor.submit_after(both, [] {
 - `submit_after_with_handle(...)`：同时返回 dependent task 的 handle 和 future，适合继续构造任务链。
 - `when_all(dependencies)`：返回逻辑 handle；所有依赖成功后该 handle 成功，任一依赖失败后该 handle 失败，可继续传给 `submit_after()`。
 
-依赖失败时，dependent task 默认不执行；dependent future 进入异常状态，`future.get()` 会重新抛出依赖异常或依赖图错误。无效 handle、跨 `Executor` 实例 handle 或 cycle 会记录 `SubmitRejected`，并返回 ready exceptional future 或失败的逻辑 handle。已完成 handle 仍可用于后续建图，因此当前版本不自动删除任务图节点；长生命周期服务应控制依赖图规模，带有明确 handle 保留/过期语义的状态裁剪仍待实现。`submit_after()` 的等待任务当前会占用一个 worker 等待条件变量，超大规模任务图后续可演进为纯调度侧唤醒。
+依赖失败时，dependent task 默认不执行；dependent future 进入异常状态，`future.get()` 会重新抛出依赖异常或依赖图错误。无效 handle、跨 `Executor` 实例 handle 或 cycle 会记录 `SubmitRejected`，并返回 ready exceptional future 或失败的逻辑 handle。已完成 handle 按 `ExecutorConfig::task_graph_retention_capacity` 保留，默认保留最近 1024 个终态 handle；容量为 0 时终态 handle 立即过期。仍被活动任务依赖的终态 handle 不会提前回收。过期 handle 再用于 `submit_after()` / `when_all()` 会被拒绝并返回可诊断异常。也可通过 `set_task_graph_retention_capacity()` 在运行时调整容量。`submit_after()` 的等待任务当前会占用一个 worker 等待条件变量，超大规模任务图后续可演进为纯调度侧唤醒。
 
 ### 3.5 软超时
 
@@ -1120,6 +1120,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `task_timeout_ms` | `int64_t` | `0` | > 0: 软超时 (执行前 check elapsed >= timeout 则 skip + 记录 timeout_count; 暴露的 future 抛 `TimedOutException`; 不计入 fail_count; 0 = 不超时; 注意: 执行中不强制中断, C++ 无安全 kill 机制) |
 | `enable_work_stealing` | `bool` | `true` | 无锁工作窃取；`max_threads == 1` 时自动关；-10.7% 性能退化关闭 |
 | `enable_monitoring` | `bool` | `true` | 是否启用监控 |
+| `task_graph_retention_capacity` | `size_t` | `1024` | 已完成任务图 handle 的保留上限；`0` 表示终态 handle 立即过期，活动依赖不会提前回收 |
 
 内部动态 resize 扩容时，新增 worker 的负载元数据会重置为零负载，并将 `last_update` 初始化为当前 `std::chrono::steady_clock::now()`。
 
@@ -1202,6 +1203,10 @@ if (!result) {
 Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot` 和 `DoubleBuffer` 已开放。
 
 通信事件默认只属于 `executor::comm` 组件本地诊断，不计入 `ExecutorFailureStatus`，也不会触发 `Executor::set_failure_callback(...)`。阶段 7.6 暂不增加 Executor 级聚合入口；调用方如需统一上报，可在各组件 callback 中桥接到自己的监控系统。
+
+当前 `executor::comm` 仍是独立原语集合，不提供统一逻辑时间（LET）语义。`PhaseGate`/`Sequencer` 的阶段顺序没有绑定 `DoubleBuffer` 或 `LatestMailbox` 的数据版本；把它们组合成“相位 N 在 N+1 可见”属于应用层约定。`PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和 `RealtimeChannel` 当前实现也不承诺硬实时、无锁或零堆分配，实时周期内应使用其非等待 API；有硬实时要求时应采用经过验证的专用实现。
+
+后续计划中的 `LetChannel<T>` 将把相位提交和快照可见性绑定，并提供固定存储、原子发布和迟到/跳相位诊断；该 API 在实现和验收完成前不属于当前版本能力。通信 latency 目前是组件本地的 avg/max 累计值，不是端到端管线延迟；P50/P99 直方图和管线时间戳属于后续观测增强。
 
 推荐从综合场景示例 [examples/comm_robot_pipeline.cpp](../examples/comm_robot_pipeline.cpp) 开始阅读：它把采集线程、规划线程、实时控制周期、状态监控、启动顺序、任务依赖和通信诊断串成一条完整流水线。
 

@@ -215,6 +215,68 @@ TEST(ExecutorTaskGraphTest, CompletedHandleCanStillCreateDependentTask) {
     executor.shutdown();
 }
 
+TEST(ExecutorTaskGraphTest, TerminalHandleRetentionIsBounded) {
+    executor::Executor executor;
+    auto cfg = config();
+    cfg.task_graph_retention_capacity = 1;
+    ASSERT_TRUE(executor.initialize(cfg));
+
+    auto first = executor.submit_with_handle([] { return 1; });
+    EXPECT_EQ(first.future.get(), 1);
+
+    auto second = executor.submit_with_handle([] { return 2; });
+    EXPECT_EQ(second.future.get(), 2);
+
+    auto retained_dependent = executor.submit_after(second.handle, [] { return 4; });
+    EXPECT_EQ(retained_dependent.get(), 4);
+
+    auto expired_dependent = executor.submit_after(first.handle, [] { return 3; });
+    EXPECT_THROW(expired_dependent.get(), std::runtime_error);
+    EXPECT_EQ(executor.task_graph_retention_capacity(), 1U);
+
+    executor.shutdown();
+}
+
+TEST(ExecutorTaskGraphTest, ZeroRetentionExpiresTerminalHandlesImmediately) {
+    executor::Executor executor;
+    auto cfg = config();
+    cfg.task_graph_retention_capacity = 0;
+    ASSERT_TRUE(executor.initialize(cfg));
+
+    auto root = executor.submit_with_handle([] { return 1; });
+    EXPECT_EQ(root.future.get(), 1);
+
+    auto dependent = executor.submit_after(root.handle, [] { return 2; });
+    EXPECT_THROW(dependent.get(), std::runtime_error);
+
+    executor.shutdown();
+}
+
+TEST(ExecutorTaskGraphTest, ActiveDependentPreventsEarlyHandleExpiration) {
+    executor::Executor executor;
+    auto cfg = config();
+    cfg.task_graph_retention_capacity = 0;
+    ASSERT_TRUE(executor.initialize(cfg));
+
+    std::promise<void> root_started;
+    std::promise<void> release_root;
+    const auto release = release_root.get_future().share();
+    auto root = executor.submit_with_handle([&] {
+        root_started.set_value();
+        release.wait();
+        return 1;
+    });
+    root_started.get_future().wait();
+
+    auto dependent = executor.submit_after(root.handle, [] { return 2; });
+    release_root.set_value();
+
+    EXPECT_EQ(root.future.get(), 1);
+    EXPECT_EQ(dependent.get(), 2);
+
+    executor.shutdown();
+}
+
 TEST(ExecutorTaskGraphTest, InvalidHandleReturnsReadyExceptionalFuture) {
     executor::Executor executor;
     ASSERT_TRUE(executor.initialize(config()));
