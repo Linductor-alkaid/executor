@@ -207,6 +207,7 @@ int main() {
 | [gpu_executor.md](docs/design/gpu_executor.md) | GPU 执行器扩展设计（CUDA 等） |
 | [cpp-project-design.md](docs/design/cpp-project-design.md) | 项目结构与实现 |
 | [COVERAGE.md](docs/COVERAGE.md) | 代码覆盖率（gcov/lcov） |
+| [Executor 维护者 skill](docs/skill/executor-maintainer/SKILL.md) | 面向 AI 的渐进式项目地图；agent 维护 Executor 行为前应优先阅读 |
 
 ## 安装与集成
 

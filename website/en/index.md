@@ -37,6 +37,7 @@ executor.shutdown();
 - Learn the library boundary: [what is Executor?](/en/getting-started/what-is-executor).
 - Upgrade existing code: [versions and migration](/en/reference/version-and-migration).
 - The complete API signatures, options, and compatibility notes remain in [`docs/API.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md).
+- AI agents maintaining this repository should start with the progressive [Executor maintainer skill](https://github.com/Linductor-alkaid/executor/blob/master/docs/skill/executor-maintainer/SKILL.md).
 
 ## Release information
 

@@ -210,6 +210,7 @@ int main() {
 | [gpu_executor.md](docs/design/gpu_executor.md) | GPU executor extension design (CUDA, etc.) |
 | [cpp-project-design.md](docs/design/cpp-project-design.md) | Project structure and implementation |
 | [COVERAGE.md](docs/COVERAGE.md) | Code coverage (gcov/lcov) |
+| [Executor maintainer skill](docs/skill/executor-maintainer/SKILL.md) | AI-first, progressive repository map; agents should read this before maintaining Executor behavior |
 
 ## Installation & Integration
 
