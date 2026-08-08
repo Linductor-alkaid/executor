@@ -210,7 +210,12 @@ int main() {
 | [gpu_executor.md](docs/design/gpu_executor.md) | GPU executor extension design (CUDA, etc.) |
 | [cpp-project-design.md](docs/design/cpp-project-design.md) | Project structure and implementation |
 | [COVERAGE.md](docs/COVERAGE.md) | Code coverage (gcov/lcov) |
-| [Executor maintainer skill](docs/skill/executor-maintainer/SKILL.md) | AI-first, progressive repository map; agents should read this before maintaining Executor behavior |
+| [Executor integration skill](docs/skill/executor-integration/SKILL.md) | AI-first, progressive integration guide; agents should read this before adding Executor to an application |
+| [Executor maintainer skill](docs/skill/executor-maintainer/SKILL.md) | AI-first repository maintenance map for Executor contributors |
+
+### Integrate With AI
+
+For an AI working from another project, tell it to read [`docs/skill/executor-integration/SKILL.md`](docs/skill/executor-integration/SKILL.md) from the Executor checkout before integration. If the checkout is not available to that AI, copy the complete `docs/skill/executor-integration/` directory into the application repository and reference its `SKILL.md` in that project's agent instruction. See [skill adoption](docs/skill/executor-integration/references/adoption.md).
 
 ## Installation & Integration
 

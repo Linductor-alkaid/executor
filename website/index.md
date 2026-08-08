@@ -39,7 +39,7 @@ executor.shutdown();
 - 验证服务端模型：[数据导入案例](/zh/tutorial/service-data-import)讲清部分失败、幂等与请求排空。
 - 准备接入服务：[生产接入检查清单](/zh/guides/production-readiness)。
 - 深入原理：[高级与原理](/zh/advanced/)；按需了解实时线程、通信、GPU 与底层执行路径。
-- 维护本仓库的 AI agent 应优先阅读渐进式 [Executor 维护者 skill](https://github.com/Linductor-alkaid/executor/blob/master/docs/skill/executor-maintainer/SKILL.md)。
+- 使用 AI 集成 Executor 时，先阅读渐进式 [Executor 集成 skill](https://github.com/Linductor-alkaid/executor/blob/master/docs/skill/executor-integration/SKILL.md)；其中也说明了如何让下游项目中的 AI 获取该 skill。
 
 ## 发布信息
 

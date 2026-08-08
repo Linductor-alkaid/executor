@@ -207,7 +207,12 @@ int main() {
 | [gpu_executor.md](docs/design/gpu_executor.md) | GPU 执行器扩展设计（CUDA 等） |
 | [cpp-project-design.md](docs/design/cpp-project-design.md) | 项目结构与实现 |
 | [COVERAGE.md](docs/COVERAGE.md) | 代码覆盖率（gcov/lcov） |
-| [Executor 维护者 skill](docs/skill/executor-maintainer/SKILL.md) | 面向 AI 的渐进式项目地图；agent 维护 Executor 行为前应优先阅读 |
+| [Executor 集成 skill](docs/skill/executor-integration/SKILL.md) | 面向 AI 的渐进式集成指南；agent 将 Executor 接入应用前应优先阅读 |
+| [Executor 维护者 skill](docs/skill/executor-maintainer/SKILL.md) | 面向贡献者的 AI 优先仓库维护导航图 |
+
+### 使用 AI 集成
+
+当 AI 运行在其他项目中时，先让它读取 Executor 检出目录中的 [`docs/skill/executor-integration/SKILL.md`](docs/skill/executor-integration/SKILL.md)，再开始接入。如果该 AI 无法访问该检出目录，将完整的 `docs/skill/executor-integration/` 目录复制到应用仓库，并在该项目的 agent 指令中引用其中的 `SKILL.md`。具体做法见 [skill 接入方式](docs/skill/executor-integration/references/adoption.md)。
 
 ## 安装与集成
 
