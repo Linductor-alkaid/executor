@@ -9,6 +9,8 @@ namespace {
 struct GuardState {
     bool active = false;
     executor::comm::RealtimeAllocationStats stats;
+    executor::comm::RealtimeAllocationViolationPolicy policy =
+        executor::comm::RealtimeAllocationViolationPolicy::RecordOnly;
 };
 
 thread_local GuardState guard_state;
@@ -18,21 +20,39 @@ thread_local GuardState guard_state;
 namespace executor::comm {
 
 RealtimeAllocationGuard::RealtimeAllocationGuard(std::string_view component,
-                                                 std::string_view phase) noexcept {
+                                                 std::string_view phase,
+                                                 RealtimeAllocationViolationPolicy policy,
+                                                 bool enabled) noexcept {
 #ifdef EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD
+    if (!enabled) {
+        return;
+    }
+    previous_active_ = guard_state.active;
+    previous_stats_ = guard_state.stats;
+    previous_policy_ = guard_state.policy;
     guard_state.active = true;
     guard_state.stats.component = component;
     guard_state.stats.phase = phase;
+    guard_state.policy = policy;
     active_ = true;
 #else
     (void)component;
     (void)phase;
+    (void)policy;
+    (void)enabled;
 #endif
 }
 
 RealtimeAllocationGuard::~RealtimeAllocationGuard() noexcept {
     if (active_) {
-        guard_state.active = false;
+        const RealtimeAllocationStats completed_stats = guard_state.stats;
+        guard_state.active = previous_active_;
+        guard_state.policy = previous_policy_;
+        if (previous_active_) {
+            guard_state.stats = completed_stats;
+            guard_state.stats.component = previous_stats_.component;
+            guard_state.stats.phase = previous_stats_.phase;
+        }
     }
 }
 
@@ -59,6 +79,9 @@ void* operator new(std::size_t size) {
     if (guard_state.active) {
         ++guard_state.stats.allocation_count;
         guard_state.stats.allocated_bytes += size;
+        if (guard_state.policy == executor::comm::RealtimeAllocationViolationPolicy::Abort) {
+            std::abort();
+        }
     }
     if (void* pointer = std::malloc(size)) {
         return pointer;

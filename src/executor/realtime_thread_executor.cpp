@@ -1,4 +1,5 @@
 #include "realtime_thread_executor.hpp"
+#include <executor/comm/realtime_memory.hpp>
 #include "util/timer_period_guard.hpp"
 #include <stdexcept>
 #include <algorithm>
@@ -367,6 +368,9 @@ void RealtimeThreadExecutor::simple_cycle_loop() {
 
         // 执行周期回调函数
         if (config_.cycle_callback) {
+            comm::RealtimeAllocationGuard allocation_guard(
+                name_, "cycle_callback", comm::RealtimeAllocationViolationPolicy::RecordOnly,
+                config_.enable_allocation_guard);
             try {
                 config_.cycle_callback();
             } catch (...) {
@@ -417,6 +421,9 @@ void RealtimeThreadExecutor::cycle_loop() {
 
     // 执行周期回调函数
     if (config_.cycle_callback) {
+        comm::RealtimeAllocationGuard allocation_guard(
+            name_, "cycle_callback", comm::RealtimeAllocationViolationPolicy::RecordOnly,
+            config_.enable_allocation_guard);
         try {
             config_.cycle_callback();
         } catch (...) {

@@ -84,8 +84,12 @@
 年龄或传感器到控制延迟。
 
 实时内存规则是：周期回调不得进行隐式堆分配、阻塞等待或执行诊断回调。Linux Debug 可用
-`-DEXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD=ON` 启用 `RealtimeAllocationGuard`；它只在显式
-包围的线程/阶段记录 C++ `new` 分配，用于回归测试和定位，不应作为生产运行时机制。
+`-DEXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD=ON` 启用 Linux 诊断构建中的
+`RealtimeAllocationGuard`。它记录显式包围的线程/阶段中的 C++ `new` 分配，用于回归测试和
+定位，不应作为生产运行时机制；它通过进程级 `operator new` 重载工作，可能与宿主 allocator、
+内存池或共享库重载冲突。`RealtimeThreadConfig::enable_allocation_guard` 默认关闭，显式开启后
+才会在 `cycle_callback` 外层自动挂载记录型 guard（组件为执行器名，阶段为 `cycle_callback`）。
+违例策略可选记录或 `Abort`，而事件回调不在实时路径自动调用。
 
 ---
 

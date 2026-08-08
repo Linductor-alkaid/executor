@@ -1137,6 +1137,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
 | `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |
+| `enable_allocation_guard` | `bool` | Linux 诊断构建中在 `cycle_callback` 外挂载记录型分配 guard；默认 `false`，仅在构建时启用 `EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD` 后生效。它不构成实时安全证明。 |
 | `enable_process_memory_lock` | `bool` | 是否显式请求 Linux `mlockall(MCL_CURRENT \| MCL_FUTURE)`；这是进程级操作，会锁定当前映射及后续映射，默认 `false`。权限或 `RLIMIT_MEMLOCK` 不足时安全回退，并在状态中报告 errno。 |
 | `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，尽力设置，不可用或权限不足时安全回退）；`0` = 显式 opt-out 保留内核默认 |
 
@@ -1219,9 +1220,13 @@ variable 或分配堆内存；`T` 必须可无异常复制。失败的 `CommResu
 无锁或零堆分配；实时周期内应使用其非等待 API。通信 P50/P99 是固定对数桶的近似分位数，
 组件 latency 不是端到端管线延迟；业务消息应携带源时间戳，在目标端计算完整管线时间。
 
-Linux Debug 可使用 `-DEXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD=ON`，再用
+Linux 诊断构建可使用 `-DEXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD=ON`，再用
 `RealtimeAllocationGuard(component, phase)` 包围待验证的周期。它记录当前线程中守卫范围内的
-C++ `new` 分配次数和字节数，供测试定位；生产实时回调仍应避免分配、阻塞和诊断 callback。
+C++ `new` 分配次数和字节数，供测试定位；`RealtimeAllocationViolationPolicy::Abort` 可让测试在
+首次分配时终止。`RealtimeThreadConfig::enable_allocation_guard` 默认关闭，显式开启后会在
+`cycle_callback` 外自动使用记录型 guard，组件为执行器名、阶段为 `cycle_callback`。
+该诊断通过进程级 `operator new` 重载实现，仅限 Linux 诊断构建，可能与宿主 allocator、内存池或
+共享库重载冲突；生产实时回调仍应避免分配、阻塞和诊断 callback。
 
 运行 `build/tests/benchmark_realtime_precision --json` 可生成 jitter 证据。JSON 同时记录编译器、
 调度策略、采样 CPU 和测量边界：jitter 是周期回调入口相对期望截止时间的偏差，首个样本作为

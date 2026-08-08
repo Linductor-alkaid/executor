@@ -11,7 +11,7 @@ option(EXECUTOR_BUILD_TESTS "Build tests" ON)
 option(EXECUTOR_BUILD_EXAMPLES "Build examples" OFF)
 option(EXECUTOR_BUILD_SHARED "Build shared library" OFF)
 option(EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD
-       "Enable Linux debug allocation diagnostics for explicitly guarded realtime paths" OFF)
+       "Enable Linux diagnostic allocation tracking for explicitly guarded realtime paths" OFF)
 
 # GPU 支持选项
 option(EXECUTOR_ENABLE_GPU "Enable GPU support" ON)

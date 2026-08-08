@@ -402,11 +402,11 @@ latest-wins API 必须保持向后兼容。
 `RealtimeAllocationGuard` 当前是显式、记录型的 Debug/Linux 工具，不应被误解为自动实时
 安全证明。后续强化保持生产默认零开销，并避免无条件侵入宿主程序的 allocator：
 
-- [ ] 增加可选违例策略：`RecordOnly`、测试失败/断言，以及通过 `CommEvent` 低频告警；默认仍不在实时路径分配字符串或调用用户 callback。
-- [ ] 评估将 guard 自动挂载到 `RealtimeThread` 周期入口的 API 设计；必须显式启用并携带组件名/阶段，不能静默改变现有回调行为。
-- [ ] 在文档和构建选项中明确全局 `operator new` 重载仅限 Debug/Linux 诊断构建，检查与宿主 allocator、内存池和共享库的冲突。
+- [ ] 增加可选违例策略：已实现 `RecordOnly` 与测试用 `Abort`；`CommEvent` 低频告警仍待设计为非实时路径桥接，默认不在实时路径分配字符串或调用用户 callback。
+- [x] 实现 guard 自动挂载到 `RealtimeThread` 周期入口的显式 API：`RealtimeThreadConfig::enable_allocation_guard` 默认关闭，开启后携带执行器名和 `cycle_callback` 阶段，保持旧回调默认行为不变。
+- [x] 在文档和构建选项中明确全局 `operator new` 重载仅限 Linux 诊断构建，说明与宿主 allocator、内存池和共享库的冲突边界。
 - [ ] 评估更低侵入的替代方案（链接器/`LD_PRELOAD` malloc hook 或平台专用 hook），在可移植性、部署复杂度和诊断完整性之间作出记录决策。
-- [ ] 集成回归测试：自动挂载候选路径能定位组件/阶段；关闭 guard 时不产生计数、事件或额外周期开销。
+- [x] 集成回归测试：自动挂载路径定位执行器组件/阶段；关闭 guard 时不产生计数或事件，默认构建不启用全局分配跟踪。
 
 ### P1：LET 对外语义锚点
 

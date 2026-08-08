@@ -43,6 +43,9 @@ struct RealtimeThreadConfig {
     // (cycle_time 爆涨 / cycle_timeout_count 尖刺). 剩余任务自然滚到后续周期处理
     // (MPSC 无锁队列, 无需额外锁). 0 = 不限 (保留旧行为, 向后兼容); 默认 64.
     uint64_t max_tasks_per_cycle = 64;
+    // Linux Debug allocation diagnostics. This is opt-in and only takes effect
+    // when EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD is enabled at build time.
+    bool enable_allocation_guard = false;
 };
 
 /**
