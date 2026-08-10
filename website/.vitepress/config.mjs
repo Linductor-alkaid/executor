@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   lang: 'zh-CN',
   title: 'Executor 使用手册',
-  description: '从第一个任务开始构建可靠的 C++ 并发程序。',
+  description: '面向实时系统与机器人应用的高性能 C++20 任务执行器：线程池、优先级调度、实时任务与无锁通信。',
   locales: {
     root: {
       label: '简体中文',
@@ -13,7 +13,7 @@ export default defineConfig({
       label: 'English',
       lang: 'en-US',
       title: 'Executor Guide',
-      description: 'Build reliable C++ concurrent programs from your first task.',
+      description: 'A high-performance C++20 task executor for real-time systems and robotics, with thread pools, priority scheduling, realtime tasks, and lock-free communication.',
       themeConfig: {
         logo: '/executor.svg',
         siteTitle: 'Executor Guide',
@@ -163,6 +163,9 @@ export default defineConfig({
   base: '/executor/',
   cleanUrls: true,
   lastUpdated: true,
+  sitemap: {
+    hostname: 'https://linductor-alkaid.github.io/executor/'
+  },
   markdown: {
     config(md) {
       const defaultFence = md.renderer.rules.fence
@@ -180,6 +183,7 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/executor/executor.svg?v=1', sizes: 'any' }],
     ['link', { rel: 'shortcut icon', type: 'image/svg+xml', href: '/executor/executor.svg?v=1' }],
+    ['meta', { name: 'keywords', content: 'C++20, task executor, thread pool, real-time, realtime, robotics, lock-free, concurrent programming, C++ 任务执行器, 线程池, 实时系统, 机器人, 无锁' }],
     ['meta', { name: 'theme-color', content: '#181d26' }]
   ],
   themeConfig: {
