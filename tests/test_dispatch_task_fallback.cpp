@@ -21,11 +21,12 @@ void make_task(Task& task, const std::string& id, std::atomic<int>& completed) {
     };
 }
 
-std::vector<WorkerQueueImpl> make_queues(size_t count, size_t capacity) {
-    std::vector<WorkerQueueImpl> queues;
-    queues.reserve(count);
+std::shared_ptr<std::vector<WorkerQueueImpl>> make_queues(size_t count,
+                                                           size_t capacity) {
+    auto queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+    queues->reserve(count);
     for (size_t i = 0; i < count; ++i) {
-        queues.emplace_back(capacity);
+        queues->emplace_back(capacity);
     }
     return queues;
 }
@@ -36,17 +37,17 @@ TEST(DispatchTaskFallbackTest, LocalQueueFullFallbackReenqueuesTask) {
     LoadBalancer balancer(1);
     PriorityScheduler scheduler;
     auto queues = make_queues(1, 1);
-    TaskDispatcher<WorkerQueueImpl> dispatcher(balancer, scheduler, queues);
+    TaskDispatcher<WorkerQueueImpl> dispatcher(balancer, scheduler, &queues);
     std::atomic<int> completed{0};
 
     Task resident;
     make_task(resident, "resident", completed);
-    ASSERT_TRUE(queues[0].push(resident));
+    ASSERT_TRUE((*queues)[0].push(resident));
     Task fallback;
     make_task(fallback, "queue-full-fallback", completed);
 
     EXPECT_FALSE(dispatcher.dispatch_task(fallback));
-    EXPECT_EQ(queues[0].size(), 1U);
+    EXPECT_EQ((*queues)[0].size(), 1U);
     ASSERT_EQ(scheduler.size(), 1U);
 
     Task recovered;
@@ -63,7 +64,7 @@ TEST(DispatchTaskFallbackTest, OutOfRangeWorkerIdFallbackReenqueuesTask) {
     LoadBalancer balancer(2);
     PriorityScheduler scheduler;
     auto queues = make_queues(1, 1);
-    TaskDispatcher<WorkerQueueImpl> dispatcher(balancer, scheduler, queues);
+    TaskDispatcher<WorkerQueueImpl> dispatcher(balancer, scheduler, &queues);
     std::atomic<int> completed{0};
 
     ASSERT_EQ(balancer.select_worker(), 0U);
@@ -71,7 +72,7 @@ TEST(DispatchTaskFallbackTest, OutOfRangeWorkerIdFallbackReenqueuesTask) {
     make_task(fallback, "out-of-range-fallback", completed);
 
     EXPECT_FALSE(dispatcher.dispatch_task(fallback));
-    EXPECT_TRUE(queues[0].empty());
+    EXPECT_TRUE((*queues)[0].empty());
     ASSERT_EQ(scheduler.size(), 1U);
 
     Task recovered;

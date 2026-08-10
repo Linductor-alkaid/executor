@@ -14,9 +14,8 @@
 //   2. 任务计数对账: 提交 N -> 完成后 completed == N
 //   3. resize 期间 worker 持续 pop/execute 不触发 UAF
 //
-// 注意: 由于 TaskDispatcher 持 std::vector<QueueT>& 引用，跨 vector 替换
-// 触发的"双 vector"问题在 P-002 范围内暂以"size 不变的元素重建"覆盖。
-// 真扩缩容留作后续 plan (需把 local_queues_ 改 unique_ptr<vector>)。
+// P-260629-001 后 TaskDispatcher 通过 shared_ptr slot 获取队列快照，支持
+// resize 期间以原子指针交换替换整个 vector。
 
 #include <atomic>
 #include <chrono>
@@ -205,14 +204,11 @@ static bool test_get_status_during_resize() {
 // Stub queue type for P-260626-004 dispatch_batch num_workers=0 guard test.
 //
 // Real WorkerLocalQueue is non-movable (contains std::mutex), which makes
-// constructing std::vector<WorkerLocalQueue> in test code painful (see
-// test_dispatch_task_fallback.cpp's placement-new hack).
+// constructing std::vector<WorkerLocalQueue> in test code painful.
 //
 // StubQueue implements only the minimum surface that TaskDispatcher<QueueT>
-// touches: push, push_batch, size.  The P-260626-004 fix path
-// (task_dispatcher.hpp:214-219) never calls push / push_batch -- it only
-// reads local_queues_.size() and re-enqueues the dequeued batch into the
-// scheduler -- so stub methods returning false / 0 are never exercised.
+// touches.  This test replaces the queue slot with an empty vector before
+// dispatch_batch acquires its shared lock, so no queue operation is reached.
 // ----------------------------------------------------------------------------
 struct StubQueue {
     bool push(const Task&) { return false; }
@@ -224,43 +220,32 @@ struct StubQueue {
 };
 
 // ----------------------------------------------------------------------------
-// Test 4 (P-260626-004): dispatch_batch must not OOB-index local_queues_[w]
-// when local_queues_ is cleared (size==0) under the same shared_mutex that
-// guards the dispatcher's read path.
-//
-// Pre-fix: L210's `if (worker_id >= num_workers) worker_id = 0;` clamp falls
-// through to L225's `local_queues_[w].push_batch(...)` with num_workers==0
-// and worker_id==0 -- vector<QueueT>::operator[] at index >= size() is UB.
-// In practice: out-of-range access, silent mis-read, or SIGSEGV.
-//
-// Post-fix: L214-219 re-checks num_workers>0 *after* acquiring shared_lock.
-// When num_workers==0, the already-dequeued batch is re-enqueued into the
-// scheduler and the function returns 0.  Tasks are not lost, dispatcher
-// does not crash.
+// Test 4: dispatch_batch must return without dequeuing or indexing when the
+// current local-queue slot contains an empty vector.
 //
 // Test strategy: ThreadPool::resize_local_queues(0) is rejected at the
 // public API (returns false on size change), so this test bypasses that
 // gate and constructs a TaskDispatcher<StubQueue> directly.  Main thread
-// holds unique_lock(lq_mutex) and clears the vector; worker thread is
-// blocked on shared_lock acquisition; once the unique_lock is released,
-// the worker resumes with an empty local_queues_ and hits the fix path.
+// holds unique_lock(lq_mutex) and swaps in an empty vector; worker thread is
+// blocked on shared_lock acquisition; once the unique_lock is released, the
+// worker resumes with an empty queue snapshot.
 // ----------------------------------------------------------------------------
 static bool test_dispatch_batch_resize_zero_workers() {
-    std::cout << "[P-260626-004] dispatch_batch num_workers=0 guard: "
-                 "race vector-clear under unique_lock vs dispatch_batch "
+    std::cout << "[P-260626-004] dispatch_batch empty-slot guard: "
+                 "race pointer-swap under unique_lock vs dispatch_batch "
                  "shared_lock..." << std::endl;
     std::cout.flush();
 
     auto balancer_ptr = std::make_unique<LoadBalancer>(1);
     PriorityScheduler scheduler;
 
-    std::vector<StubQueue> queues;
-    queues.emplace_back();
+    auto queues = std::make_shared<std::vector<StubQueue>>();
+    queues->emplace_back();
 
     std::shared_mutex lq_mutex;
 
     TaskDispatcher<StubQueue> dispatcher(
-        *balancer_ptr, scheduler, queues, &lq_mutex);
+        *balancer_ptr, scheduler, &queues, &lq_mutex);
 
     // Pre-fill scheduler with 100 tasks.
     for (int i = 0; i < 100; ++i) {
@@ -284,7 +269,7 @@ static bool test_dispatch_batch_resize_zero_workers() {
 
     std::thread worker([&]() {
         // Will block on shared_lock until writer releases; upon wakeup,
-        // local_queues_ will be empty -- this is the bug scenario.
+        // the local queue snapshot will be empty.
         size_t ret = dispatcher.dispatch_batch(100);
         dispatch_return = ret;
         worker_done.store(true, std::memory_order_release);
@@ -294,11 +279,13 @@ static bool test_dispatch_batch_resize_zero_workers() {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     std::cout.flush();
 
-    // Inside the unique_lock window: clear local_queues_, simulating the
-    // post-resize(0) state described in P-260626-004 evidence.
-    queues.clear();
-    std::cout << "  main thread: cleared local_queues_, size="
-              << queues.size() << std::endl;
+    // Inside the unique_lock window: atomically replace the local queue
+    // snapshot with an empty vector, matching the real resize model.
+    std::atomic_store_explicit(&queues,
+                               std::make_shared<std::vector<StubQueue>>(),
+                               std::memory_order_release);
+    std::cout << "  main thread: replaced local_queues_, size="
+              << queues->size() << std::endl;
     std::cout.flush();
 
     writer_lock.unlock();  // Worker now acquires shared_lock, sees size==0
@@ -315,12 +302,10 @@ static bool test_dispatch_batch_resize_zero_workers() {
     std::cout << "  scheduler pre=" << pre_size << " post=" << post_size
               << std::endl;
     TEST_ASSERT(post_size == 100,
-                "all 100 dequeued tasks must be re-enqueued to scheduler "
-                "(fix path re-enqueues batch when num_workers==0)");
+                "empty queue snapshot must leave scheduler tasks untouched");
 
-    // Round-trip stress: with local_queues_ permanently empty, repeated
-    // dispatch_batch calls must keep bouncing the batch back to scheduler
-    // without ever crashing or losing tasks.
+    // With the local queue snapshot permanently empty, repeated calls must
+    // leave all tasks in the scheduler without crashing.
     for (int round = 0; round < 5; ++round) {
         size_t ret = dispatcher.dispatch_batch(100);
         TEST_ASSERT(ret == 0,

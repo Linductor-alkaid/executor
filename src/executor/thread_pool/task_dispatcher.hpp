@@ -51,22 +51,11 @@ public:
      *
      * @param balancer 负载均衡器引用
      * @param scheduler 优先级调度器引用
-     * @param local_queues 工作线程本地队列数组引用
+     * @param local_queues_slot 工作线程本地队列 shared_ptr slot
      * @param local_queues_mutex 保护 local_queues_ 的 shared_mutex 指针
      *        (P-260617-002: dispatch 路径持 shared_lock，与 resize 路径
      *        的 unique_lock 配对，防 vector element 重建期间悬空访问)
      */
-    TaskDispatcher(LoadBalancer& balancer,
-                   PriorityScheduler& scheduler,
-                   std::vector<QueueT>& local_queues,
-                   std::shared_mutex* local_queues_mutex = nullptr)
-        : balancer_(balancer)
-        , scheduler_(scheduler)
-        , local_queues_slot_(nullptr)
-        , legacy_local_queues_(&local_queues)
-        , local_queues_snapshot_()
-        , local_queues_mutex_(local_queues_mutex) {}
-
     TaskDispatcher(LoadBalancer& balancer,
                    PriorityScheduler& scheduler,
                    const std::shared_ptr<std::vector<QueueT>>* local_queues_slot,
@@ -74,8 +63,6 @@ public:
         : balancer_(balancer)
         , scheduler_(scheduler)
         , local_queues_slot_(local_queues_slot)
-        , legacy_local_queues_(nullptr)
-        , local_queues_snapshot_()
         , local_queues_mutex_(local_queues_mutex) {}
 
     /**
@@ -220,21 +207,7 @@ public:
         const size_t n = scheduler_.dequeue_batch(batch.get(), max_tasks);
         if (n == 0) return 0;
 
-        // P-260626-004: num_workers 是 shared_lock 内的本地快照，但
-        // resize() 持 unique_lock(local_queues_mutex_) 重建 vector，因此
-        // 持锁期间 num_workers 与 local_queues_ 一致 — 然而 L192 的早返回
-        // 仅在 *函数入口* 检测 local_queues_ 非空；存在一条 race: 调用方
-        // 在 L192 检查通过后, 持锁前被 resize(0) 抢先, 进入本函数时
-        // local_queues_ 为空, 但 batch 已从 scheduler 出队。统一防线:
-        // 持锁后再断言 num_workers > 0, 否则把已出队的 batch 全部回 enqueue
-        // 到 scheduler, 避免钳位到 0 后的越界访问 (local_queues_[w]) 与静默丢任务。
         const size_t num_workers = local_queues->size();
-        if (num_workers == 0) {
-            for (size_t i = 0; i < n; ++i) {
-                scheduler_.enqueue(batch[i]);
-            }
-            return 0;
-        }
         std::vector<std::vector<size_t>> by_worker(num_workers);
 
         for (size_t i = 0; i < n; ++i) {
@@ -280,26 +253,13 @@ public:
 
 private:
     std::shared_ptr<std::vector<QueueT>> queues_snapshot_locked() const {
-        if (local_queues_slot_) {
-            return std::atomic_load_explicit(local_queues_slot_,
-                                             std::memory_order_acquire);
-        }
-        if (legacy_local_queues_) {
-            if (!local_queues_snapshot_) {
-                local_queues_snapshot_ =
-                    std::shared_ptr<std::vector<QueueT>>(legacy_local_queues_,
-                                                         [](std::vector<QueueT>*) {});
-            }
-            return local_queues_snapshot_;
-        }
-        return {};
+        return std::atomic_load_explicit(local_queues_slot_,
+                                         std::memory_order_acquire);
     }
 
     LoadBalancer& balancer_;                      // 负载均衡器
     PriorityScheduler& scheduler_;                // 优先级调度器
     const std::shared_ptr<std::vector<QueueT>>* local_queues_slot_;
-    std::vector<QueueT>* legacy_local_queues_;
-    mutable std::shared_ptr<std::vector<QueueT>> local_queues_snapshot_;
     std::shared_mutex* local_queues_mutex_;       // P-260617-002: 保护 local_queues_ 的 shared_mutex
 };
 
