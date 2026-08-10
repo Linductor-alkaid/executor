@@ -210,6 +210,18 @@ public:
     ThreadPoolStatus get_status() const;
 
     /**
+     * @brief 调整工作线程数量。
+     *
+     * 新数量必须位于初始化配置的 [min_threads, max_threads] 范围内。
+     * 扩容会先发布新的本地队列，再启动新 worker；缩容会先迁移待执行任务，
+     * 请求被移除的 worker 退出并完成 join，保证返回时状态已稳定。
+     *
+     * @param new_size 目标工作线程数量
+     * @return 成功完成调整返回 true；线程池未运行、超出范围或无调整返回 false
+     */
+    bool resize(size_t new_size);
+
+    /**
      * @brief 关闭线程池
      *
      * @param wait_for_tasks 是否等待所有任务完成（默认true）
@@ -222,20 +234,6 @@ public:
      * @brief 当前线程是否是此线程池的 worker。
      */
     bool is_current_worker_thread() const noexcept;
-
-    /**
-     * @brief 重建工作线程本地队列（动态扩缩容 API）
-     *
-     * local_queues_ 通过 shared_ptr 发布新 vector。resize 路径持
-     * unique_lock(local_queues_mutex_)，所有 worker / dispatcher 访问路径持
-     * shared_lock 并先取得 shared_ptr 快照；旧 vector 会在最后一个快照释放后
-     * 析构，不会因指针发布导致悬空引用。发布前会把旧队列中未执行任务放回
-     * scheduler_，避免 shrink / replace 丢任务。
-     *
-     * @param new_num_queues 新的本地队列数量（与 worker 数一致）
-     * @return 成功返回 true
-     */
-    bool resize_local_queues(size_t new_num_queues);
 
     /**
      * @brief 等待所有任务完成
@@ -294,6 +292,14 @@ public:
 #endif
 
 private:
+    /**
+     * @brief 重建工作线程本地队列。
+     *
+     * 仅由 resize() 在 resize_mutex_ 保护下调用，保证队列数与 worker 数
+     * 一致。发布前会将旧本地队列的待执行任务移回 scheduler_。
+     */
+    bool resize_local_queues(size_t new_num_queues);
+
     /**
      * @brief RAII guard that increments active_threads_ on construction
      *        and decrements on destruction. Guarantees that any exception
@@ -470,6 +476,10 @@ private:
 
     // 互斥锁：保护共享状态
     mutable std::mutex mutex_;
+
+    // 串行化扩缩容，并与 shutdown 中的 worker join 配对，避免同一 std::thread
+    // 被两个控制路径同时 join / 移除。
+    std::mutex resize_mutex_;
 
     // shutdown() 的两阶段状态：worker 只能请求关闭，外部调用者负责最终 wait/join。
     std::mutex shutdown_mutex_;

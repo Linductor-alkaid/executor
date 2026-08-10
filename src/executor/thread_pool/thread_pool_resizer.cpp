@@ -34,8 +34,9 @@ void ThreadPoolResizer::check_and_resize() {
         size_t max_threads = config_.max_threads;
         if (current_threads < max_threads) {
             size_t threads_to_add = std::min(size_t(1), max_threads - current_threads);
-            expand(threads_to_add);
-            last_resize_time_ = now;
+            if (expand(threads_to_add)) {
+                last_resize_time_ = now;
+            }
             return;
         }
     }
@@ -45,8 +46,9 @@ void ThreadPoolResizer::check_and_resize() {
         size_t min_threads = config_.min_threads;
         if (current_threads > min_threads) {
             size_t threads_to_remove = std::min(size_t(1), current_threads - min_threads);
-            shrink(threads_to_remove);
-            last_resize_time_ = now;
+            if (shrink(threads_to_remove)) {
+                last_resize_time_ = now;
+            }
         }
     }
 }
@@ -116,19 +118,29 @@ bool ThreadPoolResizer::should_shrink() {
 }
 
 bool ThreadPoolResizer::expand(size_t num_threads) {
-    // 实际扩容逻辑在 ThreadPool 中实现
-    // 这里只是接口，ThreadPool 需要提供 expand_threads 方法
-    // 暂时返回 true，实际实现需要在 ThreadPool 中完成
-    (void)num_threads;
-    return true;
+    if (num_threads == 0) {
+        return false;
+    }
+
+    const size_t current_threads = pool_.get_status().total_threads;
+    if (current_threads > config_.max_threads ||
+        num_threads > config_.max_threads - current_threads) {
+        return false;
+    }
+    return pool_.resize(current_threads + num_threads);
 }
 
 bool ThreadPoolResizer::shrink(size_t num_threads) {
-    // 实际缩容逻辑在 ThreadPool 中实现
-    // 这里只是接口，ThreadPool 需要提供 shrink_threads 方法
-    // 暂时返回 true，实际实现需要在 ThreadPool 中完成
-    (void)num_threads;
-    return true;
+    if (num_threads == 0) {
+        return false;
+    }
+
+    const size_t current_threads = pool_.get_status().total_threads;
+    if (current_threads < config_.min_threads ||
+        num_threads > current_threads - config_.min_threads) {
+        return false;
+    }
+    return pool_.resize(current_threads - num_threads);
 }
 
 void ThreadPoolResizer::set_enabled(bool enabled) {

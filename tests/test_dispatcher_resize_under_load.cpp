@@ -25,8 +25,8 @@ static bool test_dispatcher_resize_under_load() {
     std::cout << "[P-260629-001] dispatcher resize under load..." << std::endl;
 
     ThreadPoolConfig config;
-    config.min_threads = 4;
-    config.max_threads = 4;
+    config.min_threads = 1;
+    config.max_threads = 8;
     config.queue_capacity = 4096;
     config.enable_work_stealing = true;
 
@@ -46,7 +46,7 @@ static bool test_dispatcher_resize_under_load() {
             if (current < 1) current = 1;
             if (current > 8) current = 8;
 
-            if (pool.resize_local_queues(current)) {
+            if (pool.resize(current)) {
                 resize_calls.fetch_add(1, std::memory_order_relaxed);
             } else {
                 resize_failures.fetch_add(1, std::memory_order_relaxed);

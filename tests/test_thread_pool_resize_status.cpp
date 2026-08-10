@@ -35,10 +35,8 @@ using namespace executor;
 // ----------------------------------------------------------------------------
 // Test 1: Repeatedly submit tasks and call get_status() while a long-running
 // task is in flight. Verify idle_threads never underflows to a huge value.
-// We can't drive resize() from the public API (shrink()/expand() are stubs
-// in the current codebase), but we can still stress the read path against
-// worker count == active count == N, which is the steady-state boundary the
-// saturation must hold on.
+// Stress the read path against worker count == active count == N, which is
+// the steady-state boundary the saturation must hold on.
 // ----------------------------------------------------------------------------
 static bool test_get_status_idle_saturation_steady_state() {
     std::cout << "[P-006] get_status() saturation under steady-state load..."
@@ -198,6 +196,63 @@ static bool test_get_status_loop_100x() {
     return true;
 }
 
+// ----------------------------------------------------------------------------
+// Test 4: The resizer-to-pool protocol must create and remove real workers.
+// Queue replacement moves pending tasks back to the scheduler before the
+// removed workers exit, so every submitted task must still complete.
+// ----------------------------------------------------------------------------
+static bool test_resize_expands_and_shrinks_workers() {
+    std::cout << "[P-006] resizer expands and shrinks workers..."
+              << std::endl;
+
+    ThreadPoolConfig config;
+    config.min_threads = 2;
+    config.max_threads = 4;
+    config.queue_capacity = 128;
+    config.enable_work_stealing = true;
+
+    ThreadPool pool;
+    TEST_ASSERT(pool.initialize(config), "ThreadPool should initialize");
+    TEST_ASSERT(pool.get_status().total_threads == 2, "initial worker count");
+    ThreadPoolResizer resizer(pool, config);
+
+    // check_and_resize() is the exact method invoked by the monitor thread.
+    // Supply a high-queue, high-wait snapshot after its one-second cooldown
+    // and verify that the policy produces a real worker, not a stub success.
+    resizer.update_status(/*queue_size=*/127, /*active_threads=*/2,
+                          /*total_threads=*/2, /*avg_wait_time_ms=*/200.0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    resizer.check_and_resize();
+    TEST_ASSERT(pool.get_status().total_threads == 3,
+                "automatic expansion must create a worker");
+
+    TEST_ASSERT(resizer.expand(1), "manual resizer expansion should succeed");
+    TEST_ASSERT(pool.get_status().total_threads == 4, "expansion must create workers");
+
+    std::atomic<size_t> completed{0};
+    std::vector<std::future<void>> futures;
+    futures.reserve(64);
+    for (size_t i = 0; i < 64; ++i) {
+        futures.emplace_back(pool.submit([&completed]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            completed.fetch_add(1, std::memory_order_relaxed);
+        }));
+    }
+
+    TEST_ASSERT(resizer.shrink(2), "resizer shrink should succeed");
+    TEST_ASSERT(pool.get_status().total_threads == 2, "shrink must remove workers");
+    for (auto& future : futures) {
+        TEST_ASSERT(future.wait_for(std::chrono::seconds(5)) == std::future_status::ready,
+                    "all tasks must finish after shrink");
+        future.get();
+    }
+    pool.wait_for_completion();
+    pool.shutdown(true);
+    TEST_ASSERT(completed.load(std::memory_order_relaxed) == 64,
+                "shrink must not lose queued tasks");
+    return true;
+}
+
 int main() {
     std::cout << "=== P-006 ThreadPool resize/status regression tests ==="
               << std::endl;
@@ -206,6 +261,7 @@ int main() {
     all_ok &= test_get_status_idle_saturation_steady_state();
     all_ok &= test_resizer_check_and_resize_saturates_on_underflow();
     all_ok &= test_get_status_loop_100x();
+    all_ok &= test_resize_expands_and_shrinks_workers();
 
     if (all_ok) {
         std::cout << "\n=== All P-006 tests PASSED ===" << std::endl;

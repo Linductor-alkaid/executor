@@ -598,7 +598,7 @@ public:
     // 获取线程池状态
     ThreadPoolStatus get_status() const;
     
-    // 动态调整线程数量
+    // 动态调整线程数量（必须位于配置的 min/max 范围内）
     bool resize(size_t new_size);
     
     // 关闭线程池

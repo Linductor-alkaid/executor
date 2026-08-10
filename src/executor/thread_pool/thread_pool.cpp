@@ -524,6 +524,10 @@ ShutdownResult ThreadPool::shutdown(bool wait_for_tasks) {
     // 唤醒所有等待的线程
     condition_.notify_all();
 
+    // A concurrent resize may be joining a subset of workers. Serialize the
+    // final join/clear sequence with it so each std::thread has one owner.
+    std::unique_lock<std::mutex> resize_lock(resize_mutex_);
+
     // 等待所有工作线程退出
     for (auto& worker : workers_) {
         if (worker.joinable()) {
@@ -584,6 +588,89 @@ bool ThreadPool::resize_local_queues(size_t new_num_queues) {
 
     lq_lock.unlock();
     notify_workers_after_queue_change();
+    notify_completion_waiters();
+    return true;
+}
+
+bool ThreadPool::resize(size_t new_size) {
+    std::unique_lock<std::mutex> resize_lock(resize_mutex_);
+
+    size_t current_size = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!initialized_.load(std::memory_order_acquire) ||
+            stop_.load(std::memory_order_acquire) ||
+            new_size < config_.min_threads || new_size > config_.max_threads) {
+            return false;
+        }
+        current_size = workers_.size();
+    }
+
+    if (new_size == current_size) {
+        return false;
+    }
+
+    // Publish the replacement queue set before changing worker membership.
+    // resize_local_queues() returns queued work to scheduler_ first, so a
+    // worker selected for removal cannot strand tasks in its old local queue.
+    if (!resize_local_queues(new_size)) {
+        return false;
+    }
+
+    if (new_size > current_size) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stop_.load(std::memory_order_acquire) ||
+            !initialized_.load(std::memory_order_acquire)) {
+            return false;
+        }
+        workers_.reserve(new_size);
+        worker_ids_.reserve(new_size);
+        for (size_t worker_id = current_size; worker_id < new_size; ++worker_id) {
+            worker_ids_.push_back(worker_id);
+            create_worker_thread(worker_id);
+        }
+        condition_.notify_all();
+        return true;
+    }
+
+    std::vector<size_t> removed_ids;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (workers_.size() != current_size || worker_ids_.size() != current_size) {
+            return false;
+        }
+        removed_ids.assign(worker_ids_.begin() + static_cast<std::ptrdiff_t>(new_size),
+                           worker_ids_.end());
+    }
+
+    {
+        std::lock_guard<std::mutex> exit_lock(exit_threads_mutex_);
+        exit_threads_.insert(exit_threads_.end(), removed_ids.begin(), removed_ids.end());
+    }
+    condition_.notify_all();
+
+    // Do not hold mutex_ while joining: an idle worker needs it to wake and
+    // evaluate should_exit().  We retain resize_mutex_ for the full protocol.
+    for (size_t i = new_size; i < current_size; ++i) {
+        if (workers_[i].joinable()) {
+            workers_[i].join();
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        workers_.resize(new_size);
+        worker_ids_.resize(new_size);
+    }
+    {
+        std::lock_guard<std::mutex> exit_lock(exit_threads_mutex_);
+        for (size_t worker_id : removed_ids) {
+            const auto it = std::find(exit_threads_.begin(), exit_threads_.end(), worker_id);
+            if (it != exit_threads_.end()) {
+                exit_threads_.erase(it);
+            }
+        }
+    }
     notify_completion_waiters();
     return true;
 }
