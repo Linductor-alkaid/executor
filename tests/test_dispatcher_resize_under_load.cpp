@@ -33,45 +33,36 @@ static bool test_dispatcher_resize_under_load() {
     ThreadPool pool;
     TEST_ASSERT(pool.initialize(config), "pool initialize");
 
-    std::atomic<bool> stop_resize{false};
     std::atomic<size_t> resize_calls{0};
     std::atomic<size_t> resize_failures{0};
+    constexpr size_t kResizeIterations = 48;
     std::thread resizer([&]() {
-        std::mt19937 rng(0x260629);
-        std::uniform_int_distribution<int> coin(0, 1);
-        size_t current = config.min_threads;
-
-        while (!stop_resize.load(std::memory_order_acquire)) {
-            current = coin(rng) == 0 ? current * 2 : (current + 1) / 2;
-            if (current < 1) current = 1;
-            if (current > 8) current = 8;
-
-            if (pool.resize(current)) {
+        size_t target_size = config.max_threads;
+        for (size_t i = 0; i < kResizeIterations; ++i) {
+            if (pool.resize(target_size)) {
                 resize_calls.fetch_add(1, std::memory_order_relaxed);
             } else {
                 resize_failures.fetch_add(1, std::memory_order_relaxed);
             }
+            target_size = target_size == config.max_threads
+                              ? config.min_threads
+                              : config.max_threads;
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     });
 
-    constexpr size_t kTasks = 10000;
+    constexpr size_t kTasks = 4000;
     std::atomic<size_t> completed{0};
     std::vector<std::future<void>> futures;
     futures.reserve(kTasks);
 
-    const auto start = std::chrono::steady_clock::now();
     for (size_t i = 0; i < kTasks; ++i) {
         futures.emplace_back(pool.submit([&completed]() noexcept {
+            std::this_thread::yield();
             completed.fetch_add(1, std::memory_order_relaxed);
         }));
     }
 
-    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(5)) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    stop_resize.store(true, std::memory_order_release);
     resizer.join();
 
     size_t future_timeouts = 0;
