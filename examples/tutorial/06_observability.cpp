@@ -6,7 +6,7 @@
 #include <executor/executor.hpp>
 
 int main() {
-    executor::Executor executor;
+    auto& executor = executor::Executor::instance();
     std::atomic<int> callbacks{0};
     executor.set_failure_callback([&](const executor::ExecutorFailureEvent&) { ++callbacks; });
 

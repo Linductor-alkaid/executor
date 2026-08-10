@@ -49,10 +49,9 @@ using namespace executor;
     } while (0)
 
 // ----------------------------------------------------------------------------
-// Test 1: 反复调用 resize_local_queues(N)（size 不变但内部元素重建）
-// 期间 worker 持续 pop/execute 任务。
-// 修复前: 元素析构 + placement-new 重建期间 worker 读悬空 -> UAF / 崩溃。
-// 修复后: shared_lock 串行化 reader 与 writer，无崩溃。
+// Test 1: 交替执行真实 worker 扩缩容，期间 worker 持续 pop/execute 任务。
+// 每次 resize 都替换本地队列；所有 reader 与 writer 必须通过 shared_lock /
+// unique_lock 配对，避免 worker 访问已替换队列时发生 UAF。
 // ----------------------------------------------------------------------------
 static bool test_resize_during_drain() {
     std::cout << "[P-002] resize_during_drain: concurrent submit + resize..."
@@ -60,7 +59,7 @@ static bool test_resize_during_drain() {
     std::cout.flush();
 
     ThreadPoolConfig config;
-    config.min_threads = 4;
+    config.min_threads = 3;
     config.max_threads = 4;
     config.queue_capacity = 1024;
     config.enable_work_stealing = true;
@@ -71,7 +70,8 @@ static bool test_resize_during_drain() {
     std::atomic<bool> stop{false};
     std::atomic<int> completed{0};
 
-    // 主线程: 反复 resize 强制元素重建 (size 不变,placement-new 重建)
+    // 交替调整真实 worker 数，驱动本地队列替换与 worker 生命周期。
+    size_t target_size = config.max_threads;
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     for (int round = 0; round < 10; ++round) {
         std::cout << "  round " << round << " submit" << std::endl;
@@ -84,8 +84,11 @@ static bool test_resize_during_drain() {
         }
         std::cout << "  round " << round << " resize" << std::endl;
         std::cout.flush();
-        bool ok = pool.resize_local_queues(config.min_threads);
-        TEST_ASSERT(ok, "resize_local_queues should succeed for same-size rebuild");
+        bool ok = pool.resize(target_size);
+        TEST_ASSERT(ok, "resize should change the worker count");
+        target_size = target_size == config.max_threads
+                          ? config.min_threads
+                          : config.max_threads;
     }
     std::cout << "  wait_for_completion..." << std::endl;
     std::cout.flush();
@@ -100,9 +103,8 @@ static bool test_resize_during_drain() {
 }
 
 // ----------------------------------------------------------------------------
-// Test 2: 多 worker 持续 steal 期间反复触发 element 重建。
-// 修复前 resize 重建期间 worker 持有旧 element 引用即 UAF;
-// 修复后所有访问点持 shared_lock，无 UAF。
+// Test 2: 多 worker 持续 steal 期间反复执行真实扩缩容。
+// 每次队列替换都必须与 worker 的读取路径同步，避免 UAF。
 // ----------------------------------------------------------------------------
 static bool test_concurrent_steal_and_resize() {
     std::cout << "[P-002] concurrent_steal_and_resize: many workers steal "
@@ -110,7 +112,7 @@ static bool test_concurrent_steal_and_resize() {
               << std::endl;
 
     ThreadPoolConfig config;
-    config.min_threads = 6;
+    config.min_threads = 5;
     config.max_threads = 6;
     config.queue_capacity = 2048;
     config.enable_work_stealing = true;
@@ -130,9 +132,11 @@ static bool test_concurrent_steal_and_resize() {
                 completed.fetch_add(1, std::memory_order_relaxed);
             });
         }
-        // size 不变的 element 重建: 每个 WorkerLocalQueue 析构 + placement-new
-        bool ok = pool.resize_local_queues(config.min_threads);
-        TEST_ASSERT(ok, "resize_local_queues should succeed for same-size rebuild");
+        const size_t target_size = round % 2 == 0
+                                       ? config.max_threads
+                                       : config.min_threads;
+        bool ok = pool.resize(target_size);
+        TEST_ASSERT(ok, "resize should change the worker count");
     }
 
     pool.wait_for_completion();
@@ -158,7 +162,7 @@ static bool test_get_status_during_resize() {
               << std::endl;
 
     ThreadPoolConfig config;
-    config.min_threads = 2;
+    config.min_threads = 1;
     config.max_threads = 2;
     config.queue_capacity = 512;
     config.enable_work_stealing = true;
@@ -176,7 +180,10 @@ static bool test_get_status_during_resize() {
 
     std::thread resizer([&]() {
         for (int i = 0; i < 200 && !stop.load(); ++i) {
-            pool.resize_local_queues(config.min_threads);
+            const size_t target_size = i % 2 == 0
+                                           ? config.max_threads
+                                           : config.min_threads;
+            (void)pool.resize(target_size);
         }
     });
 
