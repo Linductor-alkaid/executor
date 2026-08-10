@@ -1,14 +1,13 @@
 #include "executor/thread_pool/task_dispatcher.hpp"
-#include "executor/thread_pool/worker_local_queue.hpp"
+#include "executor/thread_pool/thread_pool.hpp"
 #include "executor/thread_pool/load_balancer.hpp"
 #include "executor/thread_pool/priority_scheduler.hpp"
+
 #include <gtest/gtest.h>
+
 #include <atomic>
-#include <thread>
-#include <chrono>
-#include <mutex>
-#include <condition_variable>
-#include <iostream>
+#include <string>
+#include <vector>
 
 using namespace executor;
 
@@ -17,107 +16,68 @@ namespace {
 void make_task(Task& task, const std::string& id, std::atomic<int>& completed) {
     task.task_id = id;
     task.priority = TaskPriority::NORMAL;
-    task.function = [&completed]() {
+    task.function = [&completed] {
         completed.fetch_add(1, std::memory_order_relaxed);
     };
 }
 
-bool drain_once(TaskDispatcher<WorkerLocalQueue>& dispatcher,
-                WorkerLocalQueue& queue,
-                std::atomic<int>& /* completed */,
-                std::atomic<int>& failed) {
-    bool made_progress = false;
-    Task task;
-    while (queue.pop(task)) {
-        made_progress = true;
-        if (task.function) {
-            try {
-                task.function();
-            } catch (...) {
-                failed.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
+std::vector<WorkerQueueImpl> make_queues(size_t count, size_t capacity) {
+    std::vector<WorkerQueueImpl> queues;
+    queues.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        queues.emplace_back(capacity);
     }
-    return made_progress;
+    return queues;
 }
 
-// Global storage for test queues to avoid vector reallocation
-// WorkerLocalQueue is not movable, so we use this workaround
-struct GlobalQueues {
-    std::aligned_storage<sizeof(WorkerLocalQueue), alignof(WorkerLocalQueue)>::type storage[10];
-    std::vector<WorkerLocalQueue*> ptrs;
-    
-    WorkerLocalQueue& create(size_t idx, size_t capacity) {
-        if (idx >= 10) throw std::runtime_error("Too many queues");
-        auto* ptr = new (&storage[idx]) WorkerLocalQueue(capacity);
-        return *ptr;
-    }
-    
-    void destroy(size_t idx) {
-        if (idx < 10) {
-            reinterpret_cast<WorkerLocalQueue*>(&storage[idx])->~WorkerLocalQueue();
-        }
-    }
-    
-    ~GlobalQueues() {
-        // Cleanup
-        for (size_t i = 0; i < 10; ++i) {
-            destroy(i);
-        }
-    }
-};
+}  // namespace
 
-static GlobalQueues g_queues;
+TEST(DispatchTaskFallbackTest, LocalQueueFullFallbackReenqueuesTask) {
+    LoadBalancer balancer(1);
+    PriorityScheduler scheduler;
+    auto queues = make_queues(1, 1);
+    TaskDispatcher<WorkerQueueImpl> dispatcher(balancer, scheduler, queues);
+    std::atomic<int> completed{0};
 
-// Build a temp vector from existing queue - HACK but necessary
-std::vector<WorkerLocalQueue>& make_queue_vector(WorkerLocalQueue& q) {
-    // This is extremely unsafe but needed for testing non-movable types
-    thread_local static std::vector<WorkerLocalQueue> vec;
-    
-    // Clear without triggering reallocation that would require move
-    while (!vec.empty()) {
-        vec.pop_back();
-    }
-    
-    // Insert our pre-constructed queue - but this requires move!
-    // We're stuck in a catch-22
-    
-    // ULTIMATE HACK: use reinterpret_cast to fake a vector
-    // Create a "vector" that points to our static storage
-    // This is UNDEFINED BEHAVIOR but works on GCC/Clang for testing
-    
-    struct VectorHack {
-        WorkerLocalQueue* begin_;
-        WorkerLocalQueue* end_;
-        WorkerLocalQueue* capacity_;
-    };
-    
-    static WorkerLocalQueue* queue_array[1];
-    queue_array[0] = &q;
-    
-    // Still can't make this work safely...
-    return vec;
+    Task resident;
+    make_task(resident, "resident", completed);
+    ASSERT_TRUE(queues[0].push(resident));
+    Task fallback;
+    make_task(fallback, "queue-full-fallback", completed);
+
+    EXPECT_FALSE(dispatcher.dispatch_task(fallback));
+    EXPECT_EQ(queues[0].size(), 1U);
+    ASSERT_EQ(scheduler.size(), 1U);
+
+    Task recovered;
+    ASSERT_TRUE(scheduler.dequeue(recovered));
+    EXPECT_EQ(recovered.task_id, "queue-full-fallback");
+    ASSERT_TRUE(recovered.function);
+    recovered.function();
+    EXPECT_EQ(completed.load(std::memory_order_relaxed), 1);
 }
 
-} // namespace
+TEST(DispatchTaskFallbackTest, OutOfRangeWorkerIdFallbackReenqueuesTask) {
+    // The balancer still believes two workers exist while only one local queue
+    // is available, matching the transient resize state guarded by dispatch_task.
+    LoadBalancer balancer(2);
+    PriorityScheduler scheduler;
+    auto queues = make_queues(1, 1);
+    TaskDispatcher<WorkerQueueImpl> dispatcher(balancer, scheduler, queues);
+    std::atomic<int> completed{0};
 
-// For now, create tests that will be skipped due to the WorkerLocalQueue limitation
-// These tests document the intended behavior even if they can't run
+    ASSERT_EQ(balancer.select_worker(), 0U);
+    Task fallback;
+    make_task(fallback, "out-of-range-fallback", completed);
 
-TEST(DispatchTaskFallbackTest, DISABLED_LocalQueueFullFallback) {
-    // This test is disabled because WorkerLocalQueue is not movable
-    // and std::vector<WorkerLocalQueue> cannot be easily constructed in tests
-    // TODO: Re-enable when WorkerLocalQueue is made movable or when using EXECUTOR_LOCKFREE_QUEUE=ON
-    
-    GTEST_SKIP() << "Test disabled: WorkerLocalQueue is not movable, cannot construct test vector";
+    EXPECT_FALSE(dispatcher.dispatch_task(fallback));
+    EXPECT_TRUE(queues[0].empty());
+    ASSERT_EQ(scheduler.size(), 1U);
+
+    Task recovered;
+    ASSERT_TRUE(scheduler.dequeue(recovered));
+    EXPECT_EQ(recovered.task_id, "out-of-range-fallback");
+    ASSERT_TRUE(recovered.function);
+    recovered.function();
+    EXPECT_EQ(completed.load(std::memory_order_relaxed), 1);
 }
-
-TEST(DispatchTaskFallbackTest, DISABLED_OutOfRangeWorkerIdFallback) {
-    GTEST_SKIP() << "Test disabled: WorkerLocalQueue is not movable, cannot construct test vector";
-}
-
-// Placeholder test to ensure the test file compiles and runs
-TEST(DispatchTaskFallbackTest, TestFileCompiles) {
-    SUCCEED() << "Test file compiles successfully. Actual tests disabled due to WorkerLocalQueue move limitation.";
-}
-
