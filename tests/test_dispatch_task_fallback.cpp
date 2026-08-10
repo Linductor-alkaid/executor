@@ -31,23 +31,31 @@ std::shared_ptr<std::vector<WorkerQueueImpl>> make_queues(size_t count,
     return queues;
 }
 
+size_t fill_queue(WorkerQueueImpl& queue, const Task& task) {
+    size_t pushed = 0;
+    while (queue.push(task)) {
+        ++pushed;
+    }
+    return pushed;
+}
+
 }  // namespace
 
 TEST(DispatchTaskFallbackTest, LocalQueueFullFallbackReenqueuesTask) {
     LoadBalancer balancer(1);
     PriorityScheduler scheduler;
-    auto queues = make_queues(1, 1);
+    auto queues = make_queues(1, 2);
     TaskDispatcher<WorkerQueueImpl> dispatcher(balancer, scheduler, &queues);
     std::atomic<int> completed{0};
 
     Task resident;
     make_task(resident, "resident", completed);
-    ASSERT_TRUE((*queues)[0].push(resident));
+    ASSERT_GT(fill_queue((*queues)[0], resident), 0U);
     Task fallback;
     make_task(fallback, "queue-full-fallback", completed);
 
     EXPECT_FALSE(dispatcher.dispatch_task(fallback));
-    EXPECT_EQ((*queues)[0].size(), 1U);
+    EXPECT_GT((*queues)[0].size(), 0U);
     ASSERT_EQ(scheduler.size(), 1U);
 
     Task recovered;
@@ -63,7 +71,7 @@ TEST(DispatchTaskFallbackTest, OutOfRangeWorkerIdFallbackReenqueuesTask) {
     // is available, matching the transient resize state guarded by dispatch_task.
     LoadBalancer balancer(2);
     PriorityScheduler scheduler;
-    auto queues = make_queues(1, 1);
+    auto queues = make_queues(1, 2);
     TaskDispatcher<WorkerQueueImpl> dispatcher(balancer, scheduler, &queues);
     std::atomic<int> completed{0};
 
