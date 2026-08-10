@@ -302,7 +302,11 @@ ExecutorSnapshotTextExport format_executor_snapshot_with_metrics(
     using CountingStream = std::basic_ostringstream<
         char, std::char_traits<char>, CountingAllocator<char>>;
     const auto start = std::chrono::steady_clock::now();
-    CountingStream output(std::ios_base::out, CountingAllocator<char>{&allocation_counter});
+    using CountingString = std::basic_string<
+        char, std::char_traits<char>, CountingAllocator<char>>;
+    // The (openmode, allocator) stream constructor is not implemented by libstdc++ 10.
+    CountingString initial_text{CountingAllocator<char>{&allocation_counter}};
+    CountingStream output(initial_text, std::ios_base::out);
     write_executor_snapshot(output, snapshot);
     const auto counted_text = output.str();
 
