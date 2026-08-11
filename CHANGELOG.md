@@ -4,6 +4,31 @@
 
 ---
 
+## [Unreleased]
+
+### 新增
+
+- **LET 阶段通信契约**：`PhaseGate`、`DoubleBuffer` 与 `LatestMailbox` 新增可选的 phase-bound LET 模式。绑定后，发布仅发生在当前相位，读取仅暴露上一完成相位的数据；相位切换会拒绝活跃读写，避免跨周期读取或写入。
+- **实时内存分配诊断**：新增 `comm::RealtimeAllocationGuard`、`RealtimeAllocationViolationPolicy` 和线程局部统计，可记录受保护实时路径中的分配次数、字节数、组件与阶段；Linux 构建可通过 `EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD` 启用，`RealtimeThreadConfig::enable_allocation_guard` 控制周期回调的 opt-in 诊断。
+- **通信延迟分位数**：`CommStats` 增加固定大小延迟直方图及近似 `p50_latency`、`p99_latency`，同时保留累计、平均和最大延迟统计。
+- **有界任务图句柄保留**：`ExecutorConfig::task_graph_retention_capacity` 和对应运行时设置 API 控制终态 `TaskHandle` 的保留上限。被淘汰的句柄会明确拒绝为过期；仍被活跃依赖链引用的节点不会提前淘汰。
+- **线程池真实扩缩容**：`ThreadPool::resize()` 与 `ThreadPoolResizer` 现创建或移除真实 worker，且仅接受初始化配置的线程数范围；缩容前迁移本地队列任务并 join 被移除 worker，返回时状态稳定。
+
+### 修复与改进
+
+- **线程池扩缩容并发安全**：本地 worker 队列改以原子发布的 `shared_ptr` 快照访问，调度、窃取与 resize 通过读写锁协调，避免队列替换期间的悬空访问和 UAF；shutdown 与 resize 的 join 路径也已串行化。
+- **任务调度边界**：移除 `TaskDispatcher` 的旧引用构造路径；空本地队列快照不会从调度器取走任务或发生越界访问。
+- **实时契约实现边界**：LET 绑定要求固定双缓冲容量和不抛异常的复制语义；每个相位只允许一次发布，缺失上一相位数据或相位转换中读取会返回明确的通信错误。
+- **兼容性**：调整 C++20 实现以兼容 GCC 10（项目仍建议使用 GCC 11 或更高版本）。
+
+### 文档与测试
+
+- 更新中英文 README、API、通信设计文档、教程站点与 sitemap，补充 LET 状态/相位、通信选择、延迟观测和失败可观测性示例说明。
+- 新增通信实时内存、LET `PhaseGate`、邮箱与双缓冲、任务图保留/过期语义的测试；扩展线程池扩缩容、调度 fallback 与并发 UAF 回归测试，并约束扩缩容压力用例的工作负载。
+- 新增面向使用者的 `executor-integration` 渐进式接入指南，以及面向维护者的能力索引与维护参考。
+
+---
+
 ## [0.3.1] - 2026-08-06
 
 0.3.1 是统一 `Executor` Facade、完整生命周期监控与按意图自动路由的功能版本。除实时进程内存锁配置项外，它保留各执行模型真实的完成、接收和生命周期语义，而不将它们统一伪装为 `future`。
