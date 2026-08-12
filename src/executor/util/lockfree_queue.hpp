@@ -422,22 +422,39 @@ private:
         return true;
     }
 
-    bool finish_write_reservation(size_t index, size_t position) {
-        const auto hook_state = std::atomic_load_explicit(&before_publish_hook_, std::memory_order_acquire);
-        if (hook_state && hook_state->hook != nullptr) {
-            hook_state->hook(hook_state->context);
+    bool begin_write(size_t index, size_t position) {
+        // A normal producer has no interruptible work between reserving a
+        // slot and writing its payload.  Mark that path as Writing in the
+        // reservation CAS itself so a fast consumer cannot mistake a
+        // scheduled-out producer for a stalled hook and cancel a valid push.
+        // The hook-enabled path intentionally remains cancellable for the
+        // diagnostic/recovery contract exercised by the stalled-producer
+        // tests.
+        const auto hook_state = std::atomic_load_explicit(
+            &before_publish_hook_, std::memory_order_acquire);
+        const SlotState initial_state = hook_state && hook_state->hook != nullptr
+            ? SlotState::Reserved
+            : SlotState::Writing;
+        size_t expected = state_tag(position, SlotState::Free);
+        if (!states_[index].compare_exchange_strong(expected, state_tag(position, initial_state),
+                                                    std::memory_order_acq_rel,
+                                                    std::memory_order_acquire)) {
+            return false;
         }
-        size_t expected = state_tag(position, SlotState::Reserved);
+        reserved_approx_.fetch_add(1, std::memory_order_relaxed);
+        if (stats_enabled_.load(std::memory_order_relaxed)) {
+            stats_.reservation_count.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        if (initial_state == SlotState::Writing) {
+            return true;
+        }
+
+        hook_state->hook(hook_state->context);
+        expected = state_tag(position, SlotState::Reserved);
         return states_[index].compare_exchange_strong(expected, state_tag(position, SlotState::Writing),
                                                        std::memory_order_acq_rel,
                                                        std::memory_order_acquire);
-    }
-
-    bool begin_write(size_t index, size_t position) {
-        if (!reserve_slot(index, position)) {
-            return false;
-        }
-        return finish_write_reservation(index, position);
     }
 
     bool begin_batch_write(size_t index, size_t position) {
