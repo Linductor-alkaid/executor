@@ -11,10 +11,30 @@
 #include <optional>
 #include <utility>
 
+#if defined(__has_feature)
+#  if __has_feature(thread_sanitizer)
+#    define EXECUTOR_COMM_CHANNEL_HAS_TSAN 1
+#  endif
+#endif
+#if defined(__SANITIZE_THREAD__)
+#  define EXECUTOR_COMM_CHANNEL_HAS_TSAN 1
+#endif
+#ifndef EXECUTOR_COMM_CHANNEL_HAS_TSAN
+#  define EXECUTOR_COMM_CHANNEL_HAS_TSAN 0
+#endif
+
 namespace executor::comm {
 
 template <class T>
 class MpscChannel {
+#if EXECUTOR_COMM_CHANNEL_HAS_TSAN
+    // GCC 11 TSAN does not model pthread_cond_clockwait mutex handoff.
+    // Its system-clock overload uses the intercepted pthread_cond_timedwait.
+    using WaitClock = std::chrono::system_clock;
+#else
+    using WaitClock = std::chrono::steady_clock;
+#endif
+
 public:
     explicit MpscChannel(ChannelOptions options = {})
         : options_(normalize_options(std::move(options))),
@@ -26,7 +46,7 @@ public:
 
     template <class Rep, class Period>
     CommResult send_for(T value, std::chrono::duration<Rep, Period> timeout) {
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto deadline = WaitClock::now() + timeout;
         std::optional<CommEvent> event;
         CommEventCallback callback;
         bool notify_not_empty = false;
@@ -72,7 +92,7 @@ public:
 
     template <class Rep, class Period>
     CommResult receive_for(T& out, std::chrono::duration<Rep, Period> timeout) {
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        const auto deadline = WaitClock::now() + timeout;
         std::optional<CommEvent> event;
         CommEventCallback callback;
         std::unique_lock<std::mutex> lock(mutex_);
@@ -86,14 +106,7 @@ public:
             }
         }
         auto item = queue_.try_pop();
-        if (!item) {
-            // Keep every exit from this method outside the channel mutex.
-            // In particular, a Topic closes subscriptions immediately after
-            // waking receivers, and an explicit unlock prevents that close
-            // path from observing a still-owned mutex under TSAN.
-            lock.unlock();
-            return CommResult::failure(CommErrorCode::Closed, "channel is closed");
-        }
+        if (!item) return CommResult::failure(CommErrorCode::Closed, "channel is closed");
         out = std::move(item->value);
         lock.unlock();
         not_full_cv_.notify_one();
@@ -139,3 +152,5 @@ private:
 };
 
 } // namespace executor::comm
+
+#undef EXECUTOR_COMM_CHANNEL_HAS_TSAN
