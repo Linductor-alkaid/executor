@@ -331,7 +331,7 @@
 - [x] 两个订阅者各自按 FIFO 收到同一批订阅后的消息；新订阅者不接收订阅前历史。
 - [x] 每个订阅者可独立消费；一个慢订阅者满队列时，快订阅者仍收到完整消息流。
 - [x] `RejectNewest`、`DropOldest`、`KeepLatest` 分别只影响对应 subscription，`TopicPublishResult` 与该 subscription 的 `CommStats` 一致。
-- [ ] publisher 与 subscribe/unsubscribe 并发压力测试，使用 TSAN 验证没有 use-after-free、data race 或死锁。
+- [x] publisher 与 subscribe/unsubscribe 并发压力测试，使用 TSAN 验证没有 use-after-free、data race 或死锁。
 - [x] subscription close 和 Topic close 会唤醒 `receive_for()`；析构会注销活动订阅；已入队消息可先 drain，再得到 Closed。
 - [x] move-only subscription 句柄的移动、重复 close、callback 异常隔离和无订阅者 publish 的语义测试。
 - [x] `shared_ptr<const T>` 测试验证 fan-out 使用显式不可变共享所有权，不保留 publisher 局部对象引用。
