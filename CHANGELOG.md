@@ -8,6 +8,7 @@
 
 ### 新增
 
+- **进程内 Topic / Subscription**：新增 `comm::Topic<T>` 与 move-only RAII `TopicSubscription<T>`，将订阅后的事件扇出到每个订阅者的独立有界 FIFO；发布结果报告匹配、成功和拒绝订阅数，逐订阅者保留独立 drop policy、统计、回调和关闭唤醒语义。该原语明确不提供网络传输、重放、可靠确认或硬实时保证。
 - **LET 阶段通信契约**：`PhaseGate`、`DoubleBuffer` 与 `LatestMailbox` 新增可选的 phase-bound LET 模式。绑定后，发布仅发生在当前相位，读取仅暴露上一完成相位的数据；相位切换会拒绝活跃读写，避免跨周期读取或写入。
 - **实时内存分配诊断**：新增 `comm::RealtimeAllocationGuard`、`RealtimeAllocationViolationPolicy` 和线程局部统计，可记录受保护实时路径中的分配次数、字节数、组件与阶段；Linux 构建可通过 `EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD` 启用，`RealtimeThreadConfig::enable_allocation_guard` 控制周期回调的 opt-in 诊断。
 - **通信延迟分位数**：`CommStats` 增加固定大小延迟直方图及近似 `p50_latency`、`p99_latency`，同时保留累计、平均和最大延迟统计。
@@ -24,7 +25,7 @@
 ### 文档与测试
 
 - 更新中英文 README、API、通信设计文档、教程站点与 sitemap，补充 LET 状态/相位、通信选择、延迟观测和失败可观测性示例说明。
-- 新增通信实时内存、LET `PhaseGate`、邮箱与双缓冲、任务图保留/过期语义的测试；扩展线程池扩缩容、调度 fallback 与并发 UAF 回归测试，并约束扩缩容压力用例的工作负载。
+- 新增 Topic fan-out/独立背压/并发生命周期、通信实时内存、LET `PhaseGate`、邮箱与双缓冲、任务图保留/过期语义的测试；扩展线程池扩缩容、调度 fallback 与并发 UAF 回归测试，并约束扩缩容压力用例的工作负载。
 - 新增面向使用者的 `executor-integration` 渐进式接入指南，以及面向维护者的能力索引与维护参考。
 
 ---

@@ -9,7 +9,7 @@ description: 把启动依赖、帧传递、最新配置、实时命令、状态�
 
 ## 这次要构建什么
 
-系统有四个长期角色和两个启动任务：
+系统有五个长期角色和两个启动任务：
 
 ```mermaid
 flowchart TD
@@ -18,7 +18,8 @@ flowchart TD
     C --> D[bootstrap]
     D --> E[发布配置]
     E --> F[startup phase 1]
-    G[sensor thread] -->|SensorFrame| H[planner thread]
+    G[sensor thread] -->|Topic SensorFrame| H[planner thread]
+    G -->|Topic SensorFrame| K[recorder thread]
     H -->|ControlCommand| I[control cycle]
     H -->|SystemState| J[monitor thread]
 ```
@@ -34,7 +35,7 @@ flowchart TD
 
 | 数据 | 生产者 | 消费者 | 所有权策略 |
 | --- | --- | --- | --- |
-| `SensorFrame` | sensor thread | planner thread | 按值进入有界队列，消费后出队 |
+| `SensorFrame` | sensor thread | planner、recorder | Topic 按值扇出到两个独立有界 FIFO |
 | `ControlConfig` | bootstrap/配置 owner | planner/control | mailbox 保留一份最新值，读取时复制 |
 | `ControlCommand` | planner thread | control cycle | 按值入有界实时通道，每周期有限消费 |
 | `SystemState` | planner thread | monitor thread | writer 发布完整对象，reader 获得快照副本 |
@@ -44,19 +45,23 @@ flowchart TD
 
 ## 为什么每条边使用不同组件
 
-### 帧流：`MpscChannel<SensorFrame>`
+### 帧流：`Topic<SensorFrame>`
 
-传感器帧按 FIFO 到达规划线程，示例容量为 `16`。这里使用 channel 而不是共享 `vector + mutex`，因为生产者需要知道队列是否满，消费者需要通过 `close()` 区分“暂时没有数据”和“以后不会再有数据”。
+规划与记录模块都要看到同一条后续帧流，因此示例使用进程内 Topic，而不是让两个 consumer 竞争一个 channel。planner 的订阅容量为 `16`、使用 `RejectNewest`；故意较慢的 recorder 容量为 `2`、使用 `KeepLatest`，其覆盖不会回滚 planner 的成功投递。
 
 ```cpp
-executor::comm::ChannelOptions frame_options;
-frame_options.capacity = 16;
-frame_options.name = "sensor_frames";
+executor::comm::Topic<SensorFrame> sensor_frames("sensor_frames");
+auto planner_frames = sensor_frames.subscribe(
+    {.capacity = 16, .name = "planner_frames"});
+auto recorder_frames = sensor_frames.subscribe(
+    {.capacity = 2,
+     .drop_policy = executor::comm::DropPolicy::KeepLatest,
+     .name = "recorder_frames"});
 
-executor::comm::MpscChannel<SensorFrame> sensor_frames(frame_options);
+const auto result = sensor_frames.publish(frame);
 ```
 
-示例生产者在 `try_send()` 失败时不断 `yield()`，目的是让八帧演示最终全部到达。生产代码不能照搬无限重试：应选择 `send_for()` 的时间预算、上游降频、明确 drop policy，或在停止信号到来时退出重试。
+`TopicPublishResult` 分别报告匹配、成功和拒绝订阅数；至少一名订阅者拒绝时结果为 false。每个 subscription 通过自己的 `stats()` 解释 drop、overwrite、深度和 lag。Topic 不重放订阅前历史，使用 mutex 和逐订阅者复制，也不承诺可靠广播、跨订阅者原子投递或硬实时。大型不可变帧可显式使用 `Topic<std::shared_ptr<const SensorFrame>>`。
 
 ### 配置：`LatestMailbox<ControlConfig>`
 
@@ -115,14 +120,14 @@ auto bootstrap = executor.submit_after(prerequisites, start_pipeline);
 
 本示例依赖以下假设：
 
-- `sensor_frames` 可以有多个生产者，但只有 planner 一个消费者。
+- `sensor_frames` 将每条后续消息分别投递给 planner 和 recorder；两者拥有独立 FIFO 与背压。
 - `control_config` 可以被更新覆盖，消费者只关心最新完整值。
 - `control_commands` 由 planner 生产，由一个周期角色 drain。
 - `system_state` 只有 planner 一个 writer，可以有监控读者。
 - `planner_done` 只表示 planner 不再生产命令；它不表示命令通道已经清空。
-- 所有线程对象和通信组件都活到四个线程 join 完成之后。
+- 所有线程对象和通信组件都活到五个线程 join 完成之后。
 
-改变任何一项都可能需要换组件。例如增加第二个 planner 消费同一帧，不是简单增加一个 `receive_for()` 线程：channel 的一条消息只会被一个消费者取走。两个模块都要看到每帧时，需要 fan-out、复制或发布订阅设计。
+改变任何一项都可能需要换组件。如果只有一个 planner 处理每帧，`MpscChannel` 更直接；多个模块各自处理同一事件流时才使用 Topic。若监控只需要最新状态，仍应使用 `DoubleBuffer`，不应为每条事件付出 fan-out 成本。
 
 ## 构建和运行完整示例
 
@@ -142,8 +147,9 @@ cmake --build build --target comm_robot_pipeline
 
 - bootstrap 输出同时包含地图和标定完成；
 - 控制侧最终处理已接受的命令；
-- 五个组件都能输出统计快照；
-- 正常路径中帧通道和命令通道没有意外 drop；
+- planner/recorder 等六个组件都能输出统计快照；
+- planner 收到全部八帧，命令通道没有意外 drop；
+- 慢 recorder 可以出现自身的 `Overwritten`，但不改变 planner 的 8/8 交付；
 - 所有线程 join 后进程正常结束。
 
 monitor 可能在 planner 发布首个快照前先轮询一次，因此出现 `[comm] system_state: StaleRead` 是这个示例可解释的初始状态；它不表示快照损坏。多线程同时写 `std::cout` 时，局部文本也可能交错。生产日志应使用线程安全 sink，并用组件名、sequence 和业务 ID 结构化关联事件。
@@ -158,7 +164,7 @@ monitor 可能在 planner 发布首个快照前先轮询一次，因此出现 `[
 
 ### 它不是完整的故障恢复实现
 
-为了保持示例短小，代码没有完整处理初始化失败、启动依赖失败、传感器永久背压、控制命令拒绝或线程中异常。生产入口优先使用 `initialize_ex()`，每次 `try_send()` 都必须有业务动作，长期线程函数也应在边界捕获异常并触发统一停止。
+为了保持示例短小，代码没有完整处理初始化失败、启动依赖失败、订阅者持续过载、控制命令拒绝或线程中异常。生产入口优先使用 `initialize_ex()`；每次 `publish()` 都应检查逐订阅交付结果，长期线程函数也应在边界捕获异常并触发统一停止。
 
 ### 它不是停机协议模板
 

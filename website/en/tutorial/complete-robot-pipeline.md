@@ -16,7 +16,8 @@ flowchart TD
     C --> D[bootstrap]
     D --> E[publish configuration]
     E --> F[startup phase 1]
-    G[sensor thread] -->|SensorFrame| H[planner thread]
+    G[sensor thread] -->|Topic SensorFrame| H[planner thread]
+    G -->|Topic SensorFrame| K[recorder thread]
     H -->|ControlCommand| I[control cycle]
     H -->|SystemState| J[monitor thread]
 ```
@@ -27,7 +28,7 @@ Completion dependencies use Executor tasks and `TaskHandle`; continuous frame, c
 
 | Data | Producer | Consumer | Ownership model |
 | --- | --- | --- | --- |
-| `SensorFrame` | Sensor thread | Planner thread | Value enters a bounded queue and is removed by consumption |
+| `SensorFrame` | Sensor thread | Planner and recorder | Topic copies into two independent bounded FIFOs |
 | `ControlConfig` | Bootstrap/config owner | Planner/control | Mailbox retains the newest value; readers copy it |
 | `ControlCommand` | Planner thread | Control cycle | Value enters a bounded real-time channel; each cycle consumes a budget |
 | `SystemState` | Planner thread | Monitor | Writer publishes a complete object; reader receives a snapshot copy |
@@ -37,7 +38,7 @@ The example types are small, so value transfer makes lifetime clear. Large image
 
 ## Choose a component per edge
 
-`MpscChannel<SensorFrame>` preserves FIFO frames and exposes full/closed states. The example's `try_send()` retry with `yield()` exists only to deliver eight teaching frames; production must choose a `send_for()` budget, source throttling, drop policy, or stop signal.
+`Topic<SensorFrame>` fans each subsequent frame out to independent planner and recorder subscriptions. The planner has capacity 16 with `RejectNewest`; the intentionally slow recorder has capacity 2 with `KeepLatest`. Its overwrites do not roll back planner delivery. `TopicPublishResult` reports matched, delivered, and rejected subscribers, while each subscription exposes its own statistics. Topic has no replay and is not reliable, atomic across subscribers, networked, or hard real-time. Use `Topic<std::shared_ptr<const T>>` explicitly for large immutable payloads.
 
 `LatestMailbox<ControlConfig>` makes overwritten old settings intentional. Long-lived consumers keep `last_seen`, apply only newer sequences, and define behavior before any configuration arrives.
 
@@ -68,18 +69,18 @@ cmake --build build --target comm_robot_pipeline
 
 Full source: [`examples/comm_robot_pipeline.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/comm_robot_pipeline.cpp).
 
-Thread output and timing vary. Verify that bootstrap reports both prerequisites, accepted commands are eventually processed, all five components report statistics, normal execution has no unexpected frame/command drops, and joined threads exit normally. An initial `StaleRead` before the first state snapshot is expected; it is not corruption.
+Thread output and timing vary. Verify that bootstrap reports both prerequisites, the planner receives all eight frames, accepted commands are eventually processed, and joined threads exit normally. The slow recorder may report its own `Overwritten` events without changing planner delivery. An initial `StaleRead` before the first state snapshot is expected; it is not corruption.
 
 ## What this example does not prove
 
 The `realtime_thread` is a portable `std::thread + sleep_for(1ms)` simulation, not a real-time performance claim. It does not validate priority, affinity, memory locking, timer slack, or jitter. Replace it with the dedicated real-time Facade for deployment, retain bounded channel consumption, then validate `RealtimeExecutorStatus` on target hardware.
 
-The compact example also omits full startup-failure handling, permanent sensor backpressure, command rejection, and exception boundaries. It naturally ends after eight frames; a long-running service needs an explicit stop signal, channel close owner, and time budgets.
+The compact example also omits full startup-failure handling, sustained subscriber overload, command rejection, and exception boundaries. It naturally ends after eight frames; a long-running service needs an explicit stop signal, Topic close owner, and time budgets.
 
 ## Failure injection and shutdown
 
-Slow the frame consumer with capacity `1`; fail `load_map`; lower control consumption while increasing command production; pause the monitor; and send while draining. Each experiment must produce an intentional timeout/rejection/backoff/statistic instead of a silent hang or access to a destroyed channel.
+Slow one Topic subscriber with capacity `1`; fail `load_map`; lower control consumption while increasing command production; pause the monitor; and publish while unsubscribing. Each experiment must produce an intentional rejection/overwrite/backoff/statistic instead of a silent hang or access to destroyed subscription state.
 
-Recommended order: stop external start/config requests; stop the sensor owner; close `sensor_frames`; let planner drain and stop commands; drain or discard commands; stop real-time work; let monitor read the final snapshot; close gates/channels to wake waiters; bounded-wait ordinary tasks; shutdown Executor; then destroy communication objects and business state.
+Recommended order: stop external start/config requests; stop the sensor owner; close `sensor_frames`; let planner and recorder drain; stop and drain commands; stop real-time work; let monitor read the final snapshot; close gates/channels to wake waiters; bounded-wait ordinary tasks; shutdown Executor; then destroy communication objects and business state.
 
 An architecture review should identify each one-time task, long-running role, real-time need, data-loss/overwrite policy, component owner, failure observation path, overload boundary, and the shutdown lifetime of every captured object. For specialist constraints, continue with [Real-Time and Communication](/en/realtime-and-communication/) only after the required result model is explicit.

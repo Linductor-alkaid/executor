@@ -11,4 +11,5 @@
 #include <executor/comm/mailbox.hpp>
 #include <executor/comm/phase_gate.hpp>
 #include <executor/comm/realtime_memory.hpp>
+#include <executor/comm/topic.hpp>
 #include <executor/comm/types.hpp>

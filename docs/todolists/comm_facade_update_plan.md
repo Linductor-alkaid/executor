@@ -28,6 +28,7 @@
 | P4 | feature | data race avoidance | medium | M | Snapshot / DoubleBuffer：读写线程无锁交换状态快照，替代共享 mutable state |
 | P5 | feature | task graph | medium | L | submit_after / when_all：把已有 TaskDependencyManager 暴露为任务时序 API |
 | P6 | diagnostics | observability | medium | M | 通信时序监控：drop、latency、stale、missed phase、producer/consumer lag |
+| P7 | feature | in-process pub/sub | medium | L | Topic / Subscription：多模块独立消费同一后续事件流，逐订阅者有界背压与诊断 |
 
 ---
 
@@ -298,6 +299,55 @@
 
 ---
 
+## 阶段 7.9：P7 进程内 Topic / Subscription（已实现，等待 TSAN CI 验证）
+
+### 进入条件与范围
+
+现有 `MpscChannel<T>` 一条消息只能由一个 consumer 取走，而 `DoubleBuffer<T>` / `LatestMailbox<T>`
+只保存最新值；它们无法使两个独立模块都按 FIFO 消费每一条后续事件。综合机器人流水线中若新增
+第二个 planner、记录器或告警模块来处理同一帧，就进入本阶段。
+
+范围仅限同一进程的 typed fan-out。它不实现网络传输、broker/topic discovery、持久化、重放、
+确认、重连、QoS 协商或 reactive graph；这些需求由 ROS 2、NATS、MQTT 等系统负责。
+
+### 任务
+
+- [x] 新增 `include/executor/comm/topic.hpp`，并由 `include/executor/comm.hpp` 聚合导出：
+  - `TopicSubscriptionOptions`：逐订阅者 `capacity`、`drop_policy`、`enable_stats`、`name`。
+  - `TopicPublishResult`：匹配、成功、拒绝订阅者数量；至少一处拒绝时 bool 结果为 false。
+  - move-only、RAII 的 `TopicSubscription<T>`：`try_receive()`、`receive_for()`、`close()`、`stats()`、`set_event_callback()`。
+  - `Topic<T>`：`subscribe()`、`publish()`、`subscriber_count()`、`close()`。
+- [x] 每个 subscription 使用独立有界 FIFO 与独立 `DropPolicy`；慢订阅者不得阻塞、回滚或改变其他订阅者的成功投递。
+- [x] 明确消息从订阅成功之后才开始可见，不提供历史重放；Topic close 和 subscription close 必须唤醒等待者，同时允许 drain 已成功投递的消息；析构负责 RAII 注销/关闭，但不得与句柄自身仍在执行的成员调用并发。
+- [x] 定义 publish/unsubscribe 的线性化点，并以稳定订阅快照和受管所有权防止 in-flight publish 访问已析构 subscription。
+- [x] 第一版要求 `T` 可复制；文档说明大型不可变消息使用 `Topic<std::shared_ptr<const T>>`，不隐式共享 mutable object。
+- [x] 复用 `BoundedQueue<T>` 的 drop、统计与 callback 语义；callback 必须在内部锁外触发并隔离异常。
+- [x] 不将该实现标记为 lock-free 或硬实时；若以后需要控制周期中的确定性广播，另立固定订阅数、预分配的专用原语设计。
+- [x] 扩展 `comm_robot_pipeline`：一份帧数据由规划和记录两个订阅者各自消费，并展示一个慢订阅者仅影响自身的背压统计。
+- [x] 更新通信选择指南、API 文档和 maintainer communication capability card，明确 Topic 与 `MpscChannel`、`DoubleBuffer`、`LatestMailbox`、`RealtimeChannel` 的选择边界。
+
+### 测试
+
+- [x] 两个订阅者各自按 FIFO 收到同一批订阅后的消息；新订阅者不接收订阅前历史。
+- [x] 每个订阅者可独立消费；一个慢订阅者满队列时，快订阅者仍收到完整消息流。
+- [x] `RejectNewest`、`DropOldest`、`KeepLatest` 分别只影响对应 subscription，`TopicPublishResult` 与该 subscription 的 `CommStats` 一致。
+- [ ] publisher 与 subscribe/unsubscribe 并发压力测试，使用 TSAN 验证没有 use-after-free、data race 或死锁。
+- [x] subscription close 和 Topic close 会唤醒 `receive_for()`；析构会注销活动订阅；已入队消息可先 drain，再得到 Closed。
+- [x] move-only subscription 句柄的移动、重复 close、callback 异常隔离和无订阅者 publish 的语义测试。
+- [x] `shared_ptr<const T>` 测试验证 fan-out 使用显式不可变共享所有权，不保留 publisher 局部对象引用。
+
+本地普通并发压力探针已通过；TSAN 探针可成功编译，但当前容器在进入程序前因
+`ThreadSanitizer: unexpected memory mapping` 退出。`test_comm_topic` 已加入正式 TSAN CI，待该 job
+成功后勾选上项。
+
+### 验收
+
+- [x] 用户无需手工维护多个 `MpscChannel`，即可让多个独立模块接收同一后续事件流。
+- [x] 单个慢订阅者的背压、drop、lag 和关闭均可单独诊断，且不会破坏其他订阅者的交付。
+- [x] API 边界明确为进程内 best-effort fan-out，不被误解为网络 Pub/Sub、可靠广播或实时原语。
+
+---
+
 ## 推荐实施顺序
 
 1. 阶段 7.0：通用类型、聚合头、文档入口。
@@ -309,6 +359,7 @@
 7. 阶段 7.5：submit_after / when_all，作为较大任务图扩展单独推进。
 8. 阶段 7.7：示例、README/API/MIGRATION 同步。
 9. 阶段 7.8：先定义 LET 与实时内存边界，再实现可验证的时间语义和延迟证据链。
+10. 阶段 7.9：当出现至少两个独立 consumer 必须接收同一事件流的真实场景后，再实现进程内 Topic；保持网络 Pub/Sub 在库边界外。
 
 这个顺序先覆盖最高频、最高风险的跨线程数据传递和实时消费，再扩展任务图 API。
 
@@ -347,6 +398,11 @@
   - [x] latency/lag stats
 - [x] `tests/harness/test_comm_facade_usage.cpp`
   - [x] replace disabled placeholders with compiling usage tests.
+- [x] `test_comm_topic.cpp`
+  - [x] per-subscription FIFO fan-out and no pre-subscription replay
+  - [x] independent backpressure/drop policies and publish result
+  - [x] concurrent publish/subscribe/unsubscribe lifetime safety（TSAN CI 已接入，运行结果待确认）
+  - [x] close/waiter wakeup and callback exception isolation
 
 ---
 
@@ -357,6 +413,8 @@
 - [x] `send_for()` / `receive_for()` 第一版通过 `close()` 唤醒，不引入 stop token。
 - [x] `submit_after()` 使用 `std::future` 返回结果；需要继续依赖链时使用 `TaskSubmission<T>`、`submit_with_handle()`、`submit_after_with_handle()`。
 - [x] 通信诊断保持独立 `CommEvent` / `CommStats`，默认不进入 `FailureKind`。
+- [x] 第一版不提供 `Topic<T>` aggregate stats；逐 subscription 的队列深度、drop 与 latency 是诊断事实源，publish result 只报告本次 fan-out 数量。
+- [x] 跨进程 delivery、消息重放或可靠确认保持外部消息系统适配边界，除非项目范围明确扩展为传输层。
 
 ---
 

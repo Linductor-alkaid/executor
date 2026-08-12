@@ -36,11 +36,12 @@
 3. **背压不静默**：队列满、覆盖、过期、关闭后提交都必须通过返回值和统计可见。
 4. **实时路径边界清晰**：实时线程消费 API 默认不做无限等待；是否无锁、无分配必须由具体组件明确保证，当前 mutex 路径不得宣称硬实时。
 5. **可诊断但低开销**：每个组件提供本地 `stats()`；可选接入 `Executor` 的诊断回调，但不把通信抖动混为任务失败。
-6. **渐进实现**：先支持单消费者、有限容量和明确策略；多消费者广播、复杂 reactive graph 留到后续版本。
+6. **渐进实现**：先支持单消费者、有限容量和明确策略；多消费者广播作为独立的进程内原语补充，复杂 reactive graph 留到后续版本。
 
 ## 非目标
 
 - 不替代完整 actor framework、Rx 框架或分布式消息系统。
+- 不把进程内 `Topic<T>` 扩展为网络 broker：不提供 topic discovery、跨进程传输、持久化、重放、确认、重连或跨订阅者的事务性投递。
 - 不承诺所有组件 lock-free；承诺的是用户层无 data race 和实时消费路径不阻塞。
 - 不强制所有类型都走同一内部实现。平凡可复制小对象可复用无锁队列，复杂对象可用受控锁或 `shared_ptr<const T>` 快照。
 
@@ -52,6 +53,7 @@
 - `DoubleBuffer` 只保证一次发布得到完整值快照，不说明快照属于哪个逻辑相位。
 - 未绑定时，`LatestMailbox` / `RealtimeChannel` 提供最新值或有界消息消费语义，但不提供端到端相位一致性。
 - 未绑定的 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和当前 `RealtimeChannel` 实现使用 mutex；它们不应被描述为硬实时、无锁或零阻塞数据路径。
+- `MpscChannel<T>` 的一次 receive 会移走消息；`DoubleBuffer<T>` 只保存最新完整快照。因此它们都不能表达“多个独立模块各自按 FIFO 收到每一条后续事件”。
 
 因此，用户若自行组合未绑定的 phase gate 和 double buffer，仍需自行约定“哪个相位的数据何时可见”；显式绑定模式则提供本节定义的 LET 保证。硬实时路径应使用经过验证的专用无锁/预分配实现，并将未绑定组件限于控制面、启动同步或非硬实时监控面。
 
@@ -117,6 +119,7 @@ namespace executor::comm {
 - `include/executor/comm/mailbox.hpp`：`LatestMailbox<T>` / `RealtimeChannel<T>`。
 - `include/executor/comm/phase_gate.hpp`：`PhaseGate` / `Sequencer`。
 - `include/executor/comm/double_buffer.hpp`：`Snapshot<T>` / `DoubleBuffer<T>`。
+- `include/executor/comm/topic.hpp`：进程内 `Topic<T>` / `TopicSubscription<T>`。
 - `src/executor/comm/*.cpp`：非模板实现和诊断格式化。
 
 ---
@@ -517,6 +520,117 @@ TaskHandle Executor::when_all(std::vector<TaskHandle> dependencies);
 - 内部可先复用 `TaskDependencyManager`；第一版可限制依赖对象来自同一个 `Executor` 实例。
 - 后续可扩展 `when_any()`、取消传播和失败策略。
 - 已完成 handle 采用有界终态保留：默认保留最近 1024 个，容量为 0 时立即过期；仍被活动任务依赖的终态节点不得提前裁剪。过期 handle 必须返回可诊断的无效依赖错误。
+
+---
+
+## P7：进程内 Topic / Subscription
+
+### 要解决的缺口
+
+现有组件覆盖的是单消费者消息、最新值和多读快照，不能直接完成“每一个订阅模块都按自己的
+速度消费同一条事件流”：
+
+- 两个 consumer 同时调用 `MpscChannel<T>::try_receive()` 时，一条消息只会被其中一个取走。
+- `LatestMailbox<T>` 和 `DoubleBuffer<T>` 可以供多个 reader 读取，但慢 reader 只能看到最新值，
+  无法得到期间的每一条事件。
+- 让 publisher 手工维护多个 channel 会泄漏订阅生命周期、逐订阅者背压和统计责任，且容易让
+  一个慢 consumer 意外阻塞其他 consumer。
+
+因此建议补充一个可选的进程内 `Topic<T>`：发布端将每条消息扇出到发布时仍有效的每个订阅者
+的独立有界 FIFO。它适用于一份采集事件同时交给规划、记录、告警等独立模块，或一份业务事件
+同时交给多个非实时处理器；不是 `MpscChannel<T>`、`LatestMailbox<T>` 或 `DoubleBuffer<T>` 的替代。
+
+以下场景仍不应使用 Topic：只要当前状态的 UI/监控使用 `DoubleBuffer<T>`，只要最新目标或配置
+使用 `LatestMailbox<T>`，单一控制 owner 的命令使用 `RealtimeChannel<T>`。Topic 的逐订阅者复制、
+锁与 fan-out 时间都不适合硬实时周期；网络化发布订阅则由 ROS 2、NATS、MQTT 等传输层处理，
+再接入本地通信原语。
+
+### API 草案
+
+```cpp
+namespace executor::comm {
+
+struct TopicSubscriptionOptions {
+    size_t capacity = 1024;
+    DropPolicy drop_policy = DropPolicy::RejectNewest;
+    bool enable_stats = true;
+    std::string name;
+};
+
+struct TopicPublishResult {
+    size_t matched_subscribers = 0;
+    size_t delivered_subscribers = 0;
+    size_t rejected_subscribers = 0;
+
+    explicit operator bool() const noexcept {
+        return rejected_subscribers == 0;
+    }
+};
+
+template<class T>
+class TopicSubscription {
+public:
+    TopicSubscription(TopicSubscription&&) noexcept;
+    TopicSubscription& operator=(TopicSubscription&&) noexcept;
+    TopicSubscription(const TopicSubscription&) = delete;
+    TopicSubscription& operator=(const TopicSubscription&) = delete;
+    ~TopicSubscription(); // RAII unsubscribe; idempotent.
+
+    bool try_receive(T& out);
+
+    template<class Rep, class Period>
+    CommResult receive_for(T& out, std::chrono::duration<Rep, Period> timeout);
+
+    void close();
+    bool is_closed() const;
+    CommStats stats() const;
+    void set_event_callback(CommEventCallback callback);
+};
+
+template<class T>
+class Topic {
+public:
+    explicit Topic(std::string name = {});
+
+    TopicSubscription<T> subscribe(TopicSubscriptionOptions options = {});
+    TopicPublishResult publish(const T& value);
+    TopicPublishResult publish(T&& value); // T must be copyable when more than one subscriber matches.
+
+    size_t subscriber_count() const;
+    void close(); // closes the topic and all active subscriptions.
+};
+
+} // namespace executor::comm
+```
+
+### 交付、背压与生命周期语义
+
+- 发布只投递到 `publish()` 取得订阅快照时仍有效的 subscription；新订阅者不接收历史消息，
+  已注销订阅者不再接收后续消息。
+- 每个 subscription 都拥有独立的 `BoundedQueue<T>` 和 `DropPolicy`。慢订阅者的队列满只影响
+  自身，不阻塞或回滚其他订阅者的投递。
+- `TopicPublishResult` 必须报告匹配、成功和拒绝数量；结果为 false 表示至少一个订阅者未接收，
+  不是“所有订阅者均未接收”。逐订阅者的 drop、timeout、深度、延迟和 close 后发送由其 `CommStats`
+  与 callback 报告；Topic 可另有轻量 aggregate stats，但不能用它替代逐订阅者诊断。
+- 同一 subscription 内的成功消息保持 FIFO。不同 subscription 的投递和消费相互独立，Topic 不承诺
+  它们观察到消息的同时性，也不提供跨订阅者的 exactly-once、原子全量投递或事务回滚。
+- `Topic<T>` 与仍存活的同一 subscription 可被不同线程使用；实现必须在 publisher 取得订阅快照与
+  RAII 注销并发时保证内部状态存活。跨线程停止等待使用 `TopicSubscription::close()` 或
+  `Topic::close()`，它们唤醒 `receive_for()` 且不丢弃已成功投递的消息。析构执行同一 RAII 注销/关闭，
+  但调用方必须先结束对句柄对象本身的并发成员调用，不能一边销毁 C++ 对象一边继续调用它。
+- 第一版要求 `T` 可复制。为了减少大型不可变消息的 fan-out 成本，调用方可使用
+  `Topic<std::shared_ptr<const T>>`；库不隐式共享可变对象。
+- callback 在内部锁外调用并隔离异常，沿用现有通信组件的诊断规则；避免在高频发布或实时路径默认记录日志。
+
+### 实现与验证边界
+
+第一版可以由 Topic 维护受 mutex 保护的 subscription registry，并令每个 subscription 复用
+`MpscChannel<T>` 或其有界队列语义。发布时先取得稳定订阅引用快照，再在 registry 锁外向各队列
+投递，避免慢订阅者阻塞 subscribe/unsubscribe。实现必须定义注销与在途发布的线性化点，并用
+`shared_ptr` 或等价所有权保证在途投递不会访问已析构的 subscription。
+
+这不是无锁或硬实时实现。未来若控制场景确实需要确定性广播，应另行设计固定订阅数、预分配、
+无诊断回调的专用 realtime fan-out 原语，而不能弱化本 Topic 的契约。
 
 ---
 

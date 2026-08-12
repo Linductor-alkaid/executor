@@ -1,6 +1,6 @@
 ---
 title: 如何选择通信组件
-description: 按数据语义选择最新值、消息流、周期消费、状态快照或阶段顺序组件。
+description: 按数据语义选择最新值、单消费消息流、多订阅事件流、周期消费、状态快照或阶段顺序组件。
 ---
 
 # 如何选择通信组件
@@ -10,7 +10,8 @@ description: 按数据语义选择最新值、消息流、周期消费、状态�
 | 数据语义 | 默认组件 | 需要观察 |
 | --- | --- | --- |
 | 只需要最新配置或目标值 | `LatestMailbox<T>` | sequence、是否读取到新值、覆盖次数和 stale。 |
-| 每条消息都必须按 FIFO 消费 | `MpscChannel<T>` | 容量、drop policy、close 与 timeout。 |
+| 每条消息由一名消费者按 FIFO 处理 | `MpscChannel<T>` | 容量、drop policy、close 与 timeout。 |
+| 多个独立模块各自接收同一后续事件流 | `Topic<T>` | 每订阅者容量、drop policy、关闭、drop 与 lag。 |
 | 周期内只消费有限消息 | `RealtimeChannel<T>` | 不等待 condition variable、单周期预算、drop 与 handler 异常；内部由 mutex 保护。 |
 | 多个读者需要完整一致的状态 | `DoubleBuffer<T>` | sequence、新旧值判断、单写多读边界。 |
 | 初始化、标定、运行必须按阶段推进 | `PhaseGate` | timeout、close、phase 倒退与 missed phase。 |
@@ -21,7 +22,8 @@ description: 按数据语义选择最新值、消息流、周期消费、状态�
 flowchart TD
     A{必须处理每一条数据?}
     A -- 否，只要最新状态 --> B[LatestMailbox]
-    A -- 是，普通线程持续消费 --> C[MpscChannel]
+    A -- 是，一名普通消费者 --> C[MpscChannel]
+    A -- 是，多名独立消费者 --> T[Topic]
     A -- 是，实时周期有限消费 --> D[RealtimeChannel]
     E{共享一份完整状态?}
     E -- 是 --> F[DoubleBuffer]
@@ -32,7 +34,7 @@ flowchart TD
 
 ## 容量与背压
 
-容量不是实现细节，而是系统的失压阀。对 `MpscChannel` 与 `RealtimeChannel`，先明确满队列时是阻塞、拒绝、丢最新还是丢最旧；对 `LatestMailbox`，旧值被覆盖正是设计语义。生产者必须根据返回值、统计或事件 callback 观察这些结果，不能假设消息一定到达。
+容量不是实现细节，而是系统的失压阀。对 `MpscChannel` 与 `RealtimeChannel`，先明确满队列时是阻塞、拒绝、丢最新还是丢最旧；`Topic` 把同一选择放在每个 subscription 上，一个慢订阅者不会阻塞其他订阅者，但 publisher 必须检查 `TopicPublishResult` 并分别观察订阅统计。对 `LatestMailbox`，旧值被覆盖正是设计语义。生产者不能假设消息一定到达。
 
 ## close、超时与陈旧数据
 
@@ -43,6 +45,8 @@ flowchart TD
 通信组件的 `CommStats` 与 `CommEventCallback` 报告 drop、overwrite、stale、latency、lag 和 missed phase。它们默认不计入 `ExecutorFailureStatus`，也不会调用 `Executor::set_failure_callback()`；需要统一告警时，在组件 callback 中桥接到你的监控系统。
 
 未绑定的 `RealtimeChannel` 与 `DoubleBuffer` 使用 mutex 路径：前者表达有界周期消费，后者表达完整的按值快照；两者都不构成无锁或硬实时保证。相位绑定单值时，应对 `DoubleBuffer` 或 `LatestMailbox` 显式调用 `bind_to_phase_gate()`；该 LET 模式是固定双槽 SWSR，不是 FIFO `RealtimeChannel` 的替代品。
+
+`Topic` 同样使用 mutex 和动态订阅 registry，并随订阅数增加复制与 fan-out 时间。它只提供进程内、无重放的 best-effort 事件分发，不用于硬实时周期，也不替代提供持久化、确认和重连的网络消息系统。大型不可变负载可显式选择 `Topic<std::shared_ptr<const T>>`。
 
 ## 下一步阅读
 

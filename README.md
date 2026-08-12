@@ -183,7 +183,7 @@ int main() {
 }
 ```
 
-> For a user-scenario communication example, see [examples/comm_robot_pipeline.cpp](examples/comm_robot_pipeline.cpp): sensor frames, realtime commands, latest config, startup gating, state snapshots, task dependencies, and comm observability in one pipeline. [examples/lifecycle_snapshot.cpp](examples/lifecycle_snapshot.cpp) demonstrates an `Executor` lifecycle snapshot during queue buildup, after a task failure, and after shutdown. Build examples with `-DEXECUTOR_BUILD_EXAMPLES=ON`; run it with `./build/examples/lifecycle_snapshot`. GPU examples `gpu_basic` and `gpu_multi_device` also require GPU support to be enabled.
+> For a user-scenario communication example, see [examples/comm_robot_pipeline.cpp](examples/comm_robot_pipeline.cpp): Topic fan-out to planner/recorder subscriptions, independent subscriber backpressure, realtime commands, latest config, startup gating, state snapshots, task dependencies, and comm observability in one pipeline. [examples/lifecycle_snapshot.cpp](examples/lifecycle_snapshot.cpp) demonstrates an `Executor` lifecycle snapshot during queue buildup, after a task failure, and after shutdown. Build examples with `-DEXECUTOR_BUILD_EXAMPLES=ON`; run it with `./build/examples/lifecycle_snapshot`. GPU examples `gpu_basic` and `gpu_multi_device` also require GPU support to be enabled.
 
 ### Choosing a Submission API
 

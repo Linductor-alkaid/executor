@@ -2,7 +2,7 @@
  * @brief Robot control pipeline using executor::comm facade.
  *
  * Scenario:
- * - A sensor thread publishes frames to a planner through MpscChannel.
+ * - A sensor thread publishes frames to a planner and recorder through Topic.
  * - A configuration thread publishes the latest control config through LatestMailbox.
  * - The planner sends bounded commands to the real-time control loop through RealtimeChannel.
  * - The planner publishes complete system snapshots through DoubleBuffer for monitors.
@@ -68,16 +68,23 @@ void print_stats(const char* name, const executor::comm::CommStats& stats) {
 } // namespace
 
 int main() {
-    executor::comm::ChannelOptions frame_options;
-    frame_options.capacity = 16;
-    frame_options.name = "sensor_frames";
+    executor::comm::TopicSubscriptionOptions planner_options;
+    planner_options.capacity = 16;
+    planner_options.name = "planner_frames";
+
+    executor::comm::TopicSubscriptionOptions recorder_options;
+    recorder_options.capacity = 2;
+    recorder_options.drop_policy = executor::comm::DropPolicy::KeepLatest;
+    recorder_options.name = "recorder_frames";
 
     executor::comm::RealtimeChannelOptions command_options;
     command_options.capacity = 8;
     command_options.max_items_per_cycle = 2;
     command_options.name = "control_commands";
 
-    executor::comm::MpscChannel<SensorFrame> sensor_frames(frame_options);
+    executor::comm::Topic<SensorFrame> sensor_frames("sensor_frames");
+    auto planner_frames = sensor_frames.subscribe(planner_options);
+    auto recorder_frames = sensor_frames.subscribe(recorder_options);
     executor::comm::LatestMailbox<ControlConfig> control_config("control_config");
     executor::comm::RealtimeChannel<ControlCommand> control_commands(command_options);
     executor::comm::PhaseGate startup("startup");
@@ -88,7 +95,8 @@ int main() {
                   << executor::comm::comm_event_kind_to_string(event.kind)
                   << " (" << event.message << ")\n";
     };
-    sensor_frames.set_event_callback(comm_event_logger);
+    planner_frames.set_event_callback(comm_event_logger);
+    recorder_frames.set_event_callback(comm_event_logger);
     control_config.set_event_callback(comm_event_logger);
     control_commands.set_event_callback(comm_event_logger);
     startup.set_event_callback(comm_event_logger);
@@ -124,10 +132,12 @@ int main() {
         }
 
         for (int i = 0; i < 8; ++i) {
-            while (!sensor_frames.try_send(
+            const auto result = sensor_frames.publish(
                 SensorFrame{i, static_cast<uint64_t>(i), 2.0 + i * 0.25,
-                            std::chrono::steady_clock::now()})) {
-                std::this_thread::yield();
+                            std::chrono::steady_clock::now()});
+            if (result.rejected_subscribers != 0) {
+                std::cout << "[sensor] frame=" << i
+                          << ", rejected_subscribers=" << result.rejected_subscribers << "\n";
             }
             std::this_thread::sleep_for(1ms);
         }
@@ -141,7 +151,7 @@ int main() {
         }
 
         SensorFrame frame;
-        while (sensor_frames.receive_for(frame, 100ms)) {
+        while (planner_frames.receive_for(frame, 100ms)) {
             ControlConfig config;
             uint64_t config_sequence = 0;
             if (!control_config.try_load_newer_than(0, config, config_sequence)) {
@@ -155,6 +165,18 @@ int main() {
         }
 
         planner_done.store(true, std::memory_order_release);
+    });
+
+    std::thread recorder_thread([&] {
+        if (!startup.wait_for(1, 1s)) {
+            return;
+        }
+
+        SensorFrame frame;
+        while (recorder_frames.receive_for(frame, 100ms)) {
+            std::cout << "[recorder] frame=" << frame.sequence << "\n";
+            std::this_thread::sleep_for(4ms);
+        }
     });
 
     std::thread realtime_thread([&] {
@@ -198,10 +220,12 @@ int main() {
 
     sensor_thread.join();
     planner_thread.join();
+    recorder_thread.join();
     realtime_thread.join();
     monitor_thread.join();
 
-    print_stats("sensor_frames", sensor_frames.stats());
+    print_stats("planner_frames", planner_frames.stats());
+    print_stats("recorder_frames", recorder_frames.stats());
     print_stats("control_config", control_config.stats());
     print_stats("control_commands", control_commands.stats());
     print_stats("startup", startup.stats());

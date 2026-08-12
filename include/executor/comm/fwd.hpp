@@ -2,6 +2,9 @@
 
 namespace executor::comm {
 
+struct TopicSubscriptionOptions;
+struct TopicPublishResult;
+
 template <class T>
 class MpscChannel;
 
@@ -13,6 +16,12 @@ class LatestMailbox;
 
 template <class T>
 class RealtimeChannel;
+
+template <class T>
+class Topic;
+
+template <class T>
+class TopicSubscription;
 
 class PhaseGate;
 class Sequencer;

@@ -50,6 +50,33 @@ TEST(FacadeCommUsage, SensorProducerPlannerConsumer) {
     EXPECT_EQ(frames.stats().received_count, 8U);
 }
 
+TEST(FacadeCommUsage, SensorFramesFanOutToPlannerAndRecorder) {
+    executor::comm::Topic<SensorFrame> frames("sensor_frames");
+    auto planner = frames.subscribe({.capacity = 8, .name = "planner"});
+    auto recorder = frames.subscribe({.capacity = 2,
+                                      .drop_policy = executor::comm::DropPolicy::KeepLatest,
+                                      .name = "recorder"});
+
+    for (int sequence = 0; sequence < 4; ++sequence) {
+        const auto result = frames.publish(SensorFrame{.sequence = sequence,
+                                                       .value = sequence * 0.5});
+        EXPECT_EQ(result.matched_subscribers, 2U);
+        EXPECT_EQ(result.rejected_subscribers, 0U);
+    }
+
+    SensorFrame frame;
+    for (int sequence = 0; sequence < 4; ++sequence) {
+        ASSERT_TRUE(planner.try_receive(frame));
+        EXPECT_EQ(frame.sequence, sequence);
+    }
+    ASSERT_TRUE(recorder.try_receive(frame));
+    EXPECT_EQ(frame.sequence, 2);
+    ASSERT_TRUE(recorder.try_receive(frame));
+    EXPECT_EQ(frame.sequence, 3);
+    EXPECT_FALSE(recorder.try_receive(frame));
+    EXPECT_EQ(recorder.stats().overwritten_count, 1U);
+}
+
 TEST(FacadeCommUsage, ConfigThreadRealtimeControlThread) {
     struct ControlConfig {
         int gain = 0;

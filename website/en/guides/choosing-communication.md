@@ -1,6 +1,6 @@
 ---
 title: Choose a Communication Component
-description: Choose a latest-value, message-stream, cycle-consumption, state-snapshot, or phase-order component by data semantics.
+description: Choose latest-value, single-consumer stream, fan-out event, cycle, snapshot, or phase semantics.
 ---
 
 # Choose a Communication Component
@@ -10,7 +10,8 @@ Ask how data may be lost or overwritten before asking which queue is faster. The
 | Data semantics | Default component | Observe |
 | --- | --- | --- |
 | Only the latest configuration or target matters | `LatestMailbox<T>` | Sequence, new-value reads, overwrites, stale reads |
-| Every message must be consumed FIFO | `MpscChannel<T>` | Capacity, drop policy, close, timeout |
+| One consumer handles every message FIFO | `MpscChannel<T>` | Capacity, drop policy, close, timeout |
+| Independent consumers each receive the same subsequent event stream | `Topic<T>` | Per-subscription capacity, drop policy, close, drops, lag |
 | A cycle consumes only a bounded number of messages | `RealtimeChannel<T>` | No condition-variable wait, per-cycle budget, drops, handler exceptions; mutex-backed |
 | Several readers need complete consistent state | `DoubleBuffer<T>` | Sequence, old/new values, single-writer/multi-reader boundary |
 | Setup, calibration, and run phases advance in order | `PhaseGate` | Timeout, close, phase regression, missed phase |
@@ -21,7 +22,8 @@ Ask how data may be lost or overwritten before asking which queue is faster. The
 flowchart TD
     A{Must every datum be handled?}
     A -- No, only current state --> B[LatestMailbox]
-    A -- Yes, ordinary consumer --> C[MpscChannel]
+    A -- Yes, one ordinary consumer --> C[MpscChannel]
+    A -- Yes, independent consumers --> T[Topic]
     A -- Yes, bounded real-time cycle --> D[RealtimeChannel]
     E{Share a complete state?}
     E -- Yes --> F[DoubleBuffer]
@@ -32,7 +34,7 @@ flowchart TD
 
 ## Capacity and backpressure
 
-Capacity is a pressure-relief contract, not an implementation detail. For `MpscChannel` and `RealtimeChannel`, decide what a full queue means: block, reject, drop newest, or drop oldest. `LatestMailbox` overwrites old values by design. Producers must observe the return value, statistics, or an event callback rather than assuming delivery.
+Capacity is a pressure-relief contract, not an implementation detail. For `MpscChannel` and `RealtimeChannel`, decide what a full queue means: block, reject, drop newest, or drop oldest. `Topic` applies that choice independently to every subscription: one slow subscriber does not block the others, but the publisher must inspect `TopicPublishResult` and each subscription's statistics. `LatestMailbox` overwrites old values by design. Never assume delivery.
 
 ## Close, timeout, and stale are distinct
 
@@ -43,5 +45,7 @@ Capacity is a pressure-relief contract, not an implementation detail. For `MpscC
 `CommStats` and `CommEventCallback` report drops, overwrites, stale reads, latency, lag, and missed phases. They do not automatically contribute to `ExecutorFailureStatus` or invoke `Executor::set_failure_callback()`. Bridge component events to your monitoring system if alerts must be unified.
 
 Unbound `RealtimeChannel` and `DoubleBuffer` use mutex-backed paths. Their APIs express bounded cycle consumption and complete value snapshots, respectively; neither is a lock-free or hard-real-time guarantee. For a phase-bound single value, explicitly call `bind_to_phase_gate()` on `DoubleBuffer` or `LatestMailbox`; this LET mode is fixed two-slot SWSR, not a FIFO `RealtimeChannel` replacement.
+
+`Topic` also uses mutexes and a dynamic subscription registry, with copying and fan-out time growing with subscriber count. It is an in-process, no-replay, best-effort event primitive, not a hard-real-time path or a network broker with persistence, acknowledgement, and reconnect. Use `Topic<std::shared_ptr<const T>>` explicitly for large immutable payloads.
 
 See the [complete robot pipeline](/en/tutorial/complete-robot-pipeline) for a connected example. For capacity and alerting, read [Capacity and Alerts](/en/realtime-and-communication/capacity-and-alerting); ordinary background-work selection is covered by [Choose a Submission API](/en/guides/choosing-submit-api).

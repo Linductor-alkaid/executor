@@ -20,7 +20,7 @@
 #include <executor/comm.hpp>
 ```
 
-当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型、`MpscChannel` / `SpscChannel`、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer` 和 `DoubleBuffer`。任务依赖 facade 通过 `Executor` 的 `TaskHandle`、`submit_after()` 和 `when_all()` 暴露。
+当前阶段提供 `executor::comm` 命名空间、通用结果/错误码/统计/事件类型、`MpscChannel` / `SpscChannel`、`Topic` / `TopicSubscription`、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer` 和 `DoubleBuffer`。任务依赖 facade 通过 `Executor` 的 `TaskHandle`、`submit_after()` 和 `when_all()` 暴露。
 
 ---
 
@@ -1197,11 +1197,13 @@ if (!result) {
 - **CommResult**：`ok`、`error_code`、`message`，支持 `operator bool()`、`success()`、`failure()`。
 - **ChannelOptions**：`capacity`、`drop_policy`、`enable_stats`、`name`，用于配置 typed channel。
 - **RealtimeChannelOptions**：`capacity`、`max_items_per_cycle`、`drop_policy`、`enable_stats`、`name`，用于配置实时周期内有限 drain 的消息通道。
+- **TopicSubscriptionOptions**：每个订阅者独立的 `capacity`、`drop_policy`、`enable_stats` 和 `name`。
+- **TopicPublishResult**：`matched_subscribers`、`delivered_subscribers`、`rejected_subscribers`；至少一个匹配订阅者拒绝时 bool 结果为 `false`。
 - **DropPolicy**：`RejectNewest`（默认策略）、`DropOldest`、`KeepLatest`。
 - **CommStats**：发送/接收/drop/覆盖/stale/关闭后发送/超时、handler 异常、missed phase、当前深度、峰值、容量、producer/consumer lag、最大/平均 latency，以及固定对数桶估算的 P50/P99 latency 等本地累计统计。
 - **CommEventKind / CommEvent / CommEventCallback**：低频诊断事件类型、事件负载和回调签名。各组件通过 `set_event_callback(...)` 注册 callback；callback 抛出的异常会被隔离，不改变通信 API 的返回值或组件状态。
 
-Typed Channel、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot` 和 `DoubleBuffer` 已开放。
+Typed Channel、`Topic` / `TopicSubscription`、`LatestMailbox`、`RealtimeChannel`、`PhaseGate`、`Sequencer`、`Snapshot` 和 `DoubleBuffer` 已开放。
 
 通信事件默认只属于 `executor::comm` 组件本地诊断，不计入 `ExecutorFailureStatus`，也不会触发 `Executor::set_failure_callback(...)`。阶段 7.6 暂不增加 Executor 级聚合入口；调用方如需统一上报，可在各组件 callback 中桥接到自己的监控系统。
 
@@ -1236,7 +1238,8 @@ C++ `new` 分配次数和字节数，供测试定位；`RealtimeAllocationViolat
 
 | 需求 | 推荐组件 |
 |------|----------|
-| producer/consumer 传递每条数据 | `MpscChannel<T>` / `SpscChannel<T>` |
+| 一名 consumer 按 FIFO 处理每条数据 | `MpscChannel<T>` / `SpscChannel<T>` |
+| 多名独立 consumer 各自处理同一后续事件流 | `Topic<T>` / `TopicSubscription<T>` |
 | 配置更新只关心最新值 | `LatestMailbox<T>` |
 | 实时周期内处理有限条命令 | `RealtimeChannel<T>` |
 | 多读者读取完整状态快照 | `DoubleBuffer<T>` / `Snapshot<T>` |
@@ -1278,6 +1281,49 @@ auto stats = frames.stats();
 - `SpscChannel<T>`：当前是 `MpscChannel<T>` 别名，后续可替换为 SPSC 优化实现。
 
 默认 `RejectNewest` 满队列时拒绝新消息并增加 `dropped_count`；`DropOldest` 满队列时丢弃最旧消息再接收新消息；`KeepLatest` 保留最新值，适合后续 mailbox 风格场景。
+
+### 7.5.1 Topic / Subscription
+
+`Topic<T>` 在同一进程内把一条事件扇出到发布快照中的每个活动订阅者。每个
+`TopicSubscription<T>` 有独立的容量、drop policy、队列统计和 callback；慢订阅者满队列只改变
+自己的投递结果，不阻塞或回滚其他订阅者。订阅只接收创建成功后的消息，不提供历史重放。
+
+```cpp
+executor::comm::Topic<SensorFrame> frames("sensor_frames");
+auto planner = frames.subscribe({.capacity = 256, .name = "planner"});
+auto recorder = frames.subscribe({.capacity = 32,
+                                  .drop_policy = executor::comm::DropPolicy::DropOldest,
+                                  .name = "recorder"});
+
+const auto published = frames.publish(read_frame());
+if (!published) {
+    // 至少一个匹配订阅者拒绝了本次消息；检查各 subscription 的 stats。
+}
+
+SensorFrame frame;
+if (planner.receive_for(frame, std::chrono::milliseconds(10))) {
+    plan(frame);
+}
+```
+
+主要 API 与语义：
+
+- `subscribe(options)`：返回 move-only、RAII 的订阅句柄；Topic 已关闭时返回已关闭句柄。
+- `publish(const T&)` / `publish(T&&)`：返回匹配、成功和拒绝订阅者数量；无订阅者发布是成功的空操作。
+- `try_receive()` / `receive_for()`：只消费当前订阅的独立 FIFO；关闭后先 drain 已入队消息，再返回 `Closed`。
+- `TopicSubscription::close()`：从 registry 注销并唤醒等待者；重复关闭安全。析构执行同一 RAII
+  注销/关闭，但句柄销毁必须与该句柄仍在执行的成员调用同步，不能依赖销毁 C++ 对象来并发唤醒其成员函数。
+- `Topic::close()`：阻止后续订阅和发布，关闭并唤醒所有活动订阅者。
+- `stats()` / `set_event_callback()`：按订阅者观察 drop、overwrite、timeout、深度、lag 和 latency；callback 异常被隔离。
+
+发布取得订阅 registry 快照是匹配集合的线性化点，退订从 registry 移除是退订线性化点。两者并发时，
+已进入发布快照的订阅仍计入 `matched_subscribers`，随后可能成功入队，也可能因退订关闭而计入
+`rejected_subscribers`；稳定的受管状态保证在途发布不会访问已析构对象。
+
+第一版要求 `T` 可复制，因为多个订阅者需要独立拥有消息。大型不可变负载建议使用
+`Topic<std::shared_ptr<const T>>`，库不会隐式共享 mutable object。该实现使用 mutex、动态 registry 和
+逐订阅者 fan-out，不是网络 broker、可靠广播、lock-free 或硬实时原语；跨进程、持久化、重放、确认、
+重连和 QoS 协商应由 ROS 2、NATS、MQTT 等外部系统承担。
 
 ### 7.6 Realtime Mailbox / RealtimeChannel
 
