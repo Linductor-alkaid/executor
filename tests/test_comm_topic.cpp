@@ -155,6 +155,28 @@ TEST(CommTopicTest, CloseWakesWaiterAndBufferedMessagesDrainBeforeClosed) {
     EXPECT_EQ(after_close.matched_subscribers, 0U);
 }
 
+TEST(CommTopicTest, CloseSynchronizesWithBlockedReceiver) {
+    for (int iteration = 0; iteration < 100; ++iteration) {
+        Topic<int> topic;
+        auto subscription = topic.subscribe(options(1));
+        std::atomic<bool> receiver_ready{false};
+        std::atomic<bool> receiver_closed{false};
+
+        std::thread receiver([&] {
+            int value = 0;
+            receiver_ready.store(true, std::memory_order_release);
+            const auto result = subscription.receive_for(value, 2s);
+            receiver_closed.store(!result && result.error_code == CommErrorCode::Closed,
+                                  std::memory_order_release);
+        });
+
+        while (!receiver_ready.load(std::memory_order_acquire)) std::this_thread::yield();
+        topic.close();
+        receiver.join();
+        EXPECT_TRUE(receiver_closed.load(std::memory_order_acquire));
+    }
+}
+
 TEST(CommTopicTest, SubscriptionCloseIsIdempotentAndDrainsBufferedMessages) {
     Topic<int> topic;
     auto subscription = topic.subscribe(options(2));

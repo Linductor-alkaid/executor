@@ -86,7 +86,14 @@ public:
             }
         }
         auto item = queue_.try_pop();
-        if (!item) return CommResult::failure(CommErrorCode::Closed, "channel is closed");
+        if (!item) {
+            // Keep every exit from this method outside the channel mutex.
+            // In particular, a Topic closes subscriptions immediately after
+            // waking receivers, and an explicit unlock prevents that close
+            // path from observing a still-owned mutex under TSAN.
+            lock.unlock();
+            return CommResult::failure(CommErrorCode::Closed, "channel is closed");
+        }
         out = std::move(item->value);
         lock.unlock();
         not_full_cv_.notify_one();
