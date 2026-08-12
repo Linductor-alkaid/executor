@@ -128,7 +128,7 @@ class TaskHandle {
 public:
     TaskHandle() = default;
 
-    explicit TaskHandle(std::string id)
+    explicit TaskHandle(std::string id) noexcept
         : id_(std::move(id)) {}
 
     const std::string& id() const noexcept {

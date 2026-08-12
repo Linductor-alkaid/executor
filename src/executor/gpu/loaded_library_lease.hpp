@@ -23,10 +23,10 @@ public:
 private:
     struct Library {
 #ifdef _WIN32
-        explicit Library(HMODULE handle) : handle(handle) {}
+        explicit Library(HMODULE native_handle) : handle(native_handle) {}
         HMODULE handle;
 #else
-        explicit Library(void* handle) : handle(handle) {}
+        explicit Library(void* native_handle) : handle(native_handle) {}
         void* handle;
 #endif
 
