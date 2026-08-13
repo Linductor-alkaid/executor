@@ -8,6 +8,8 @@
 
 > 中文版：[README_zh.md](README_zh.md)
 
+📖 **Online user guide: [linductor-alkaid.github.io/executor](https://linductor-alkaid.github.io/executor/)**
+
 **Executor is an in-process concurrency infrastructure library for C++20 applications.**
 
 Its unified facade manages ordinary asynchronous tasks, low-latency queues, periodic realtime threads, long-lived blocking I/O, and optional GPU work. It also provides bounded communication, task orchestration, backpressure, and lifecycle diagnostics.
@@ -69,6 +71,8 @@ First decide whether the caller needs to observe task completion, queue admissio
 | Data shared between long-running threads | `executor::comm` | FIFO, latest-value, snapshot, phase, or subscription semantics |
 
 `Auto` does not silently select lock-free or realtime backends for performance. See [Choosing a submission API](website/en/guides/choosing-submit-api.md) for detailed guidance.
+
+> **Batch performance**: `submit_batch()` and `submit_batch_no_future()` can reduce repeated submission overhead, but Executor does not promise a fixed speedup. The benchmark date is 2026-07-09; results and environment metadata are recorded in [batch_submit_baseline_2026-07-09.json](docs/performance/batch_submit_baseline_2026-07-09.json). Build with `cmake --build build --target benchmark_batch_scales benchmark_batch_submit_real benchmark_batch_submit_concurrent -j2`, then run `./build/tests/benchmark_batch_scales`, `./build/tests/benchmark_batch_submit_real`, and `./build/tests/benchmark_batch_submit_concurrent` to reproduce the measurements.
 
 ## Cross-Thread Communication
 

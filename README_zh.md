@@ -8,6 +8,8 @@
 
 > English: [README.md](README.md)
 
+📖 **在线使用手册：[linductor-alkaid.github.io/executor](https://linductor-alkaid.github.io/executor/)**
+
 **Executor 是一个面向 C++20 应用的进程内并发执行基础设施库。**
 
 它通过统一 Facade 管理普通异步任务、低延迟队列、周期实时线程、长期 Blocking I/O 和可选 GPU 工作，并提供有界通信、任务编排、背压与生命周期诊断。
@@ -69,6 +71,8 @@ int main() {
 | 长期运行线程之间传递数据 | `executor::comm` | FIFO、最新值、快照、阶段或订阅语义 |
 
 `Auto` 不会为了追求性能而静默选择无锁或实时后端。详细选型见[如何选择提交接口](website/zh/guides/choosing-submit-api.md)。
+
+> **批量性能说明**：`submit_batch()` 与 `submit_batch_no_future()` 可以减少重复提交开销，但项目不承诺固定加速比。基准数据日期为 2026-07-09，结果与环境记录见 [batch_submit_baseline_2026-07-09.json](docs/performance/batch_submit_baseline_2026-07-09.json)。可通过 `cmake --build build --target benchmark_batch_scales benchmark_batch_submit_real benchmark_batch_submit_concurrent -j2` 构建，并依次运行 `./build/tests/benchmark_batch_scales`、`./build/tests/benchmark_batch_submit_real` 和 `./build/tests/benchmark_batch_submit_concurrent` 复现。
 
 ## 跨线程通信
 
