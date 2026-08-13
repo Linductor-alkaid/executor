@@ -14,8 +14,9 @@ description: 通过机器人数据流水线与服务端数据导入逐步学习 
 3. [批量处理传感器帧](/zh/tutorial/batch)：根据是否需要 future 选择批量提交路径。
 4. [加载、感知与规划依赖](/zh/tutorial/dependencies)：让规划在前置工作完成后执行。
 5. [有界等待与状态快照](/zh/tutorial/waiting-and-status)：在切换阶段或关闭前可靠收尾。
-6. [完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)：把启动依赖、帧流、配置、控制命令、状态快照、诊断和退出组合起来。
-7. [服务端数据导入案例](/zh/tutorial/service-data-import)：验证依赖、批量、逐项失败和有界关闭同样适用于服务端请求。
+6. [用 Topic 扇出事件流](/zh/tutorial/topic-subscriptions)：为独立 consumer 提供各自有界队列、背压策略和关闭所有权。
+7. [完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)：把启动依赖、帧流、配置、控制命令、状态快照、诊断和退出组合起来。
+8. [服务端数据导入案例](/zh/tutorial/service-data-import)：验证依赖、批量、逐项失败和有界关闭同样适用于服务端请求。
 
 前五章分别引入一种普通任务问题；完整案例进一步连接 `examples/comm_robot_pipeline.cpp`，并明确哪些部分只是可移植教学模拟、哪些必须在生产中替换为实时 Facade、停止协议与过载策略。
 

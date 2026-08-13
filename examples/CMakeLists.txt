@@ -33,6 +33,13 @@ if(TARGET lifecycle_snapshot AND BUILD_TESTING)
 endif()
 
 add_subdirectory(tutorial)
+if(TARGET topic_subscriptions AND BUILD_TESTING)
+    add_test(NAME topic_subscriptions_example COMMAND topic_subscriptions)
+    set_tests_properties(topic_subscriptions_example PROPERTIES
+        LABELS "example;communication;smoke"
+        TIMEOUT 15
+    )
+endif()
 
 if(TARGET cycle_manager_example)
     add_dependencies(tutorial_examples cycle_manager_example)

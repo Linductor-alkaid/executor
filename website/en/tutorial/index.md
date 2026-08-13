@@ -14,8 +14,9 @@ Start with [your first task](/en/quick-start/first-task) and [submitting functio
 3. [Batch sensor frames](/en/tutorial/batch): choose a batch path based on whether each task needs a future.
 4. [Load, sense, then plan](/en/tutorial/dependencies): run planning only after prerequisite work completes.
 5. [Bounded waiting and status](/en/tutorial/waiting-and-status): finish safely before a phase change or shutdown.
-6. [Complete robot pipeline](/en/tutorial/complete-robot-pipeline): connect startup dependencies, frame streams, configuration, commands, snapshots, diagnostics, and shutdown.
-7. [Service data import](/en/tutorial/service-data-import): apply the same dependency, batch, partial-failure, and bounded-drain model to a server request.
+6. [Fan out events with Topic](/en/tutorial/topic-subscriptions): give independent consumers separate bounded queues, backpressure policies, and shutdown ownership.
+7. [Complete robot pipeline](/en/tutorial/complete-robot-pipeline): connect startup dependencies, frame streams, configuration, commands, snapshots, diagnostics, and shutdown.
+8. [Service data import](/en/tutorial/service-data-import): apply the same dependency, batch, partial-failure, and bounded-drain model to a server request.
 
 Every page identifies scale and concurrency assumptions, ownership of asynchronous objects, failure injection, in-flight work during exit, and when changing requirements require a different abstraction. Treat those sections as an architecture-review checklist.
 

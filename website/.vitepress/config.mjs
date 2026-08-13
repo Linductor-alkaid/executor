@@ -81,6 +81,7 @@ export default defineConfig({
                 { text: 'Batch Sensor Frames', link: '/en/tutorial/batch' },
                 { text: 'Load, Sense, Then Plan', link: '/en/tutorial/dependencies' },
                 { text: 'Bounded Waiting and Status', link: '/en/tutorial/waiting-and-status' },
+                { text: 'Fan Out Events with Topic', link: '/en/tutorial/topic-subscriptions' },
                 { text: 'Complete Robot Pipeline', link: '/en/tutorial/complete-robot-pipeline' },
                 { text: 'Service Data Import', link: '/en/tutorial/service-data-import' }
               ]
@@ -257,6 +258,7 @@ export default defineConfig({
             { text: '批量处理传感器帧', link: '/zh/tutorial/batch' },
             { text: '加载、感知与规划依赖', link: '/zh/tutorial/dependencies' },
             { text: '有界等待与状态快照', link: '/zh/tutorial/waiting-and-status' },
+            { text: '用 Topic 扇出事件流', link: '/zh/tutorial/topic-subscriptions' },
             { text: '完整机器人数据流水线', link: '/zh/tutorial/complete-robot-pipeline' },
             { text: '服务端数据导入案例', link: '/zh/tutorial/service-data-import' }
           ]
