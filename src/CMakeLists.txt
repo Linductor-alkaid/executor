@@ -114,6 +114,10 @@ if(UNIX AND NOT APPLE)
     # Linux: 链接 pthread（用于thread_utils中的pthread函数）
     find_package(Threads REQUIRED)
     target_link_libraries(executor PUBLIC Threads::Threads)
+    # Clang may lower std::atomic<T>::is_lock_free() to the libatomic runtime.
+    # executor is commonly static, so expose this as a transitive dependency
+    # for examples and downstream consumers as well.
+    target_link_libraries(executor PUBLIC atomic)
     # 链接rt库（用于某些Linux系统上的实时调度函数）
     target_link_libraries(executor PRIVATE rt)
 elseif(WIN32)
