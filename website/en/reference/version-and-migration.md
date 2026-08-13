@@ -7,7 +7,7 @@ description: Entry points for the development snapshot, releases, and API migrat
 
 ## Current scope
 
-The latest release record is `v0.3.1`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
+The latest release record is `v0.4.0`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
 
 | What to check | Source of truth |
 | --- | --- |
@@ -43,6 +43,21 @@ New code begins with `submit_auto(lambda)`, then enters a specialist path only w
 | Register and start an I/O worker separately | `start_worker(BlockingWorkerSpec)` | `WorkerHandle` retains wakeup, stop token, startup timeout, and exit reason. |
 
 Automatic routing does not infer callable real-time safety, thread safety, GPU-memory ownership, or I/O interruptibility. `get_executor_capabilities()` is only an advisory snapshot; each actual submission must still handle stop races and backpressure.
+
+## 0.4.0: fixed synchronization boundaries and communication observability
+
+0.4.0 moves communication synchronization to construction-time fixed storage and atomic state while retaining the main existing call patterns. New code can choose `Topic<T>`, phase-bound LET communication, latency percentiles, and real-time allocation diagnostics by data semantics; none of them proves that an application's whole path is real-time safe.
+
+| Need | 0.4.0 entry | Boundary you still own |
+| --- | --- | --- |
+| Fan out events independently to ordinary consumers | `comm::Topic<T>` and `TopicSubscription<T>` | Topic uses a mutex and dynamic allocation; it is not a real-time or lock-free data plane. |
+| Exchange consistent data only at phase boundaries | Bind `PhaseGate`, `DoubleBuffer`, and `LatestMailbox` to LET phases | One publish is allowed per phase; reads and writes during a transition, or without prior-phase data, are rejected. |
+| Assess communication latency trends | Approximate `p50_latency` and `p99_latency` in `CommStats` | Percentiles use a fixed histogram and do not replace end-to-end latency measurement. |
+| Detect allocations on a guarded real-time path | `RealtimeAllocationGuard` and `RealtimeThreadConfig::enable_allocation_guard` | Recording requires an enabled Linux build and guarded path; payload work, clocks, page faults, and scheduling still need whole-path measurement. |
+| Bound completed task-graph handle retention | `task_graph_retention_capacity` | Active dependencies are not evicted early; an evicted handle explicitly rejects as expired. |
+| Adjust thread-pool worker count online | `ThreadPool::resize()` / `ThreadPoolResizer` | Resizing stays inside the initialized range; validate throughput and convergence latency under target load. |
+
+The synchronization core of `MpscChannel`, `RealtimeChannel`, unbound `DoubleBuffer`, `PhaseGate`, and `Sequencer` can be checked with `is_synchronization_lock_free()`. That result covers only component synchronization atomics and fixed storage, not operations on `T`, callbacks, clocks, page faults, caller allocation, or OS scheduling. Prefer non-waiting APIs, disable high-frequency callbacks, and validate the complete path on target hardware when migrating a real-time path.
 
 ## Upgrade checklist
 

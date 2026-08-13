@@ -5,7 +5,7 @@ description: 公开 API 的模块入口与稳定性边界。
 
 # API 参考
 
-本站以 `v0.3.1` 为稳定版本基线，包含统一自动路由、等待、通信、任务图和诊断能力；后续 `master` 的未发布能力不构成稳定承诺。完整签名、默认值、错误码和兼容语义只在仓库的 [`docs/API.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md) 维护，避免网站复制后形成第二事实源。
+本站以 `v0.4.0` 为稳定版本基线，包含统一自动路由、等待、通信、任务图和诊断能力；后续 `master` 的未发布能力不构成稳定承诺。完整签名、默认值、错误码和兼容语义只在仓库的 [`docs/API.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md) 维护，避免网站复制后形成第二事实源。
 
 ## 先按模块定位
 

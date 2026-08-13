@@ -7,7 +7,7 @@ description: 当前开发快照、发布版本和 API 迁移的入口。
 
 ## 当前口径
 
-项目 CMake 与最新发布记录的版本均为 `v0.3.1`。本站以该稳定版为基线，同时跟随 `master` 的后续开发；未在稳定 tag 中发布的能力不构成版本承诺。首发不维护历史版本站点；发布时应以 tag 重新核对页面。
+项目 CMake 与最新发布记录的版本均为 `v0.4.0`。本站以该稳定版为基线，同时跟随 `master` 的后续开发；未在稳定 tag 中发布的能力不构成版本承诺。首发不维护历史版本站点；发布时应以 tag 重新核对页面。
 
 | 需要确认什么 | 入口 |
 | --- | --- |
@@ -48,6 +48,21 @@ description: 当前开发快照、发布版本和 API 迁移的入口。
 | 分别注册、启动 I/O worker | `start_worker(BlockingWorkerSpec)` | `WorkerHandle` 保留 wakeup、stop token、启动超时和退出原因。 |
 
 自动路由不会推断 callable 的实时安全、线程安全、GPU 内存所有权或 I/O 可中断性。`get_executor_capabilities()` 只提供建议性状态快照；所有实际投递仍须处理停止竞争和背压。
+
+## 0.4.0：固定同步边界与通信可观测性
+
+0.4.0 将通信同步核心改为构造期固定存储和原子状态，同时保留既有主要调用方式。新代码可按数据语义选择 `Topic<T>`、LET phase-bound 通信、延迟分位数和实时分配诊断；这些能力不会替调用方证明整个业务链路的实时性。
+
+| 需求 | 0.4.0 入口 | 仍需自行保证的边界 |
+| --- | --- | --- |
+| 向多个普通消费者独立扇出事件 | `comm::Topic<T>` 与 `TopicSubscription<T>` | Topic 使用 mutex 与动态分配，不是实时或无锁数据面。 |
+| 只在阶段边界交换一致数据 | 为 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 绑定 LET phase | 每相位只允许一次发布；转换中的读写和缺少上一相位数据会被拒绝。 |
+| 评估通信时延趋势 | `CommStats` 的近似 `p50_latency`、`p99_latency` | 分位数是固定直方图近似值，不能代替端到端时延测量。 |
+| 发现受保护实时路径中的分配 | `RealtimeAllocationGuard` 与 `RealtimeThreadConfig::enable_allocation_guard` | 只在启用的 Linux 构建和受保护路径记录；payload、时钟、缺页与调度仍须整体测量。 |
+| 限制已完成任务图句柄占用 | `task_graph_retention_capacity` | 被保留的活跃依赖不会提前淘汰；淘汰句柄会明确拒绝为过期。 |
+| 在线调整线程池 worker 数 | `ThreadPool::resize()` / `ThreadPoolResizer` | 仅可在初始化配置的范围内调整；应在目标负载下验证吞吐和收敛时延。 |
+
+`MpscChannel`、`RealtimeChannel`、未绑定 `DoubleBuffer`、`PhaseGate` 和 `Sequencer` 的同步核心可通过 `is_synchronization_lock_free()` 检查。该结论只覆盖组件同步原子和固定存储，不覆盖 `T` 的操作、callback、时钟、缺页、调用方分配或 OS 调度。迁移实时路径时优先使用非等待 API，关闭高频 callback，并在目标硬件上验证完整链路。
 
 ## 升级检查
 
