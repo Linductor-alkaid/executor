@@ -3,12 +3,24 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <concepts>
 #include <string>
 #include <type_traits>
 
 namespace {
 
 using namespace executor::comm;
+
+template <class Primitive>
+void expect_lock_free_contract(const Primitive& primitive) {
+    static_assert(requires(const Primitive& candidate) {
+        { candidate.is_synchronization_lock_free() } -> std::convertible_to<bool>;
+        { candidate.is_lock_free() } -> std::convertible_to<bool>;
+    });
+    EXPECT_TRUE(primitive.is_synchronization_lock_free());
+    EXPECT_TRUE(primitive.is_lock_free());
+    EXPECT_EQ(primitive.is_synchronization_lock_free(), primitive.is_lock_free());
+}
 
 TEST(CommTypesTest, CommResultDefaultsToSuccess) {
     CommResult result;
@@ -130,6 +142,34 @@ TEST(CommTypesTest, EventDefaultsAreUsableAndCallbackIsInvocable) {
 TEST(CommTypesTest, AggregatedHeaderExposesNamespaceTypes) {
     static_assert(std::is_same_v<decltype(CommStats{}.sent_count), uint64_t>);
     static_assert(std::is_same_v<CommEventCallback, std::function<void(const CommEvent&)>>);
+}
+
+TEST(CommTypesTest, RealtimePrimitivesReportLockFreeSynchronization) {
+    ChannelOptions channel_options;
+    channel_options.capacity = 8;
+    MpscChannel<int> channel(channel_options);
+
+    RealtimeChannelOptions realtime_options;
+    realtime_options.capacity = 8;
+    RealtimeChannel<int> realtime_channel(realtime_options);
+
+    LatestMailbox<int> mailbox;
+    DoubleBuffer<int> snapshots(0);
+    PhaseGate gate;
+    Sequencer sequencer;
+    LatestMailbox<int> let_mailbox;
+    DoubleBuffer<int> let_snapshots(0);
+    ASSERT_TRUE(let_mailbox.bind_to_phase_gate(gate));
+    ASSERT_TRUE(let_snapshots.bind_to_phase_gate(gate));
+
+    expect_lock_free_contract(channel);
+    expect_lock_free_contract(realtime_channel);
+    expect_lock_free_contract(mailbox);
+    expect_lock_free_contract(snapshots);
+    expect_lock_free_contract(gate);
+    expect_lock_free_contract(sequencer);
+    expect_lock_free_contract(let_mailbox);
+    expect_lock_free_contract(let_snapshots);
 }
 
 } // namespace

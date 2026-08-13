@@ -60,7 +60,11 @@
   `Executor::set_failure_callback()` 让 facade 用户订阅任务异常、提交拒绝、实时丢任务、任务超时、GPU 失败和等待超时；未设置回调时，失败仍保留在 `get_failure_status()` / `get_recent_failures()` 中。`wait_for_completion_ex()` 返回带 `CompletionStatus` 快照的 `WaitResult`，超时调用方仍能看到 active、queued、pending 任务数。
 
 - **通信 Facade 可观察性**
-  `executor::comm` 组件提供本地 `CommStats`，可观察 drop、overwrite、stale read、missed phase、timeout、深度、lag 和 latency。可选 `set_event_callback()` 用于低频诊断；callback 抛异常会被隔离，通信事件默认不计入 `ExecutorFailureStatus` 的任务失败。
+  `executor::comm` 组件提供本地 `CommStats`，可观察 drop、overwrite、stale read、missed phase、timeout、深度、lag 和 latency。可选 `set_event_callback()` 在内部同步之外执行并隔离 callback 异常，但 callback 的配置与调用属于诊断/控制面工作，不是实时安全操作。通信事件默认不计入 `ExecutorFailureStatus` 的任务失败。
+
+- **通信同步核心无锁化**
+  `MpscChannel<T>` 与 `RealtimeChannel<T>` 使用构造期预分配的有界 MPSC 存储，并限定一个逻辑消费者。`LatestMailbox<T>` 与未绑定的 SWMR `DoubleBuffer<T>` 使用四个固定的 reader-pin 快照槽，使非平凡 `T` 的复制不依赖存在 data race 的 seqlock。快照 `try_publish()` 是非等待、系统级 lock-free 操作，但竞争中的 CAS 可重试，不承诺单次调用有界或 wait-free；`try_load()` 最多尝试四个槽。`PhaseGate` 与 `Sequencer` 使用非阻塞原子核心；若平台所需同步原子并非 lock-free，组件会在构造时拒绝。`is_synchronization_lock_free()` 只描述这些内部同步原子，不覆盖 `T` 的操作、时钟、字符串/结果构造、callback、预分配存储之外的分配或 OS 调度。超时等待与保证成功的兼容 API 通过 spin/yield 重试，只适合普通控制线程。`Topic<T>` 连同 publish fan-out 仍使用 mutex 与动态分配，不是实时原语。
+  快照 sequence 是有限的 56 位域：耗尽时 `try_publish()` 返回 `false`，重试型兼容操作则以 `std::overflow_error` 报告永久耗尽，不会无限 spin。phase 与 ticket 状态仅支持小于 `2^63` 的值；phase/ticket wait 对更大的输入立即返回 `InvalidArgument`，相位绑定 LET 发布还要求 phase 小于 `2^63 - 1`。
 
 - **相位绑定值的可选 LET 契约**
   `PhaseGate` 可通过 `bind_to_phase_gate()` 显式绑定 `DoubleBuffer<T>` 或 `LatestMailbox<T>`。写侧用 `publish_for_current_phase()` 提交相位 N 的值后，读侧只能在相位门进入 N+1 时通过 `load_for_current_phase()` 读取。绑定模式使用固定双槽 SWSR 存储：每相位最多一个值、没有 FIFO 语义、重复提交会被拒绝。它不是独立的 `LetChannel<T>` 类型。未绑定 `DoubleBuffer` 仍是最新完整快照，未绑定 `LatestMailbox` 仍是 latest-wins，`RealtimeChannel` 不自动具有 LET 语义。

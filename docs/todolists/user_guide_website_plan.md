@@ -361,7 +361,7 @@
 ### 6.4 PhaseGate 与 Sequencer
 
 - [x] 用初始化、标定、运行阶段介绍 `PhaseGate`。
-- [x] 用有序发布场景介绍 `Sequencer`。
+- [x] 用可跳 ticket 的单调 publication watermark 场景介绍 `Sequencer`。
 - [x] 解释 timeout、close、phase 倒退和 missed phase。
 
 ### 6.5 通信可观察性

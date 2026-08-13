@@ -68,7 +68,7 @@ Executor 已经覆盖普通线程池任务、优先级、延迟与周期任务�
 
 ### 4.3 实时与并发系统开发者
 
-关注周期确定性、线程间数据传递、背压、最新值语义、完整快照和严格阶段顺序。需要掌握实时执行器与 `executor::comm`，但仍优先从 Facade 使用项目。
+关注周期确定性、线程间数据传递、背压、最新值语义、完整快照、阶段推进和 publication watermark。需要掌握实时执行器与 `executor::comm`，但仍优先从 Facade 使用项目。
 
 ### 4.4 框架集成者
 
@@ -129,7 +129,7 @@ int main() {
 9. 配置线程只需要把最新配置交给实时线程：`LatestMailbox<T>`。
 10. 每条传感器消息都需要处理：`MpscChannel<T>` 或 `RealtimeChannel<T>`。
 11. 监控线程读取完整状态：`DoubleBuffer<T>`。
-12. 初始化、标定、运行具有严格顺序：`PhaseGate` 与 `Sequencer`。
+12. 初始化、标定、运行按阶段推进，或需要检测 ticket 被 publication watermark 越过：`PhaseGate` 与 `Sequencer`。
 13. 可并行计算转移到 GPU：GPU 注册、提交、降级和诊断。
 
 每章保持统一结构：

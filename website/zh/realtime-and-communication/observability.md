@@ -22,7 +22,7 @@ if (stats.dropped_count != 0 || stats.timeout_count != 0) {
 }
 ```
 
-`CommStats` 是本地累计快照，可包含发送、接收、drop、覆盖、stale read、关闭后发送、超时、handler 异常、missed phase、当前/峰值深度、producer/consumer lag 和延迟。它包含固定对数桶延迟直方图与近似的 `p50_latency` / `p99_latency`；`CommEventCallback` 适合少量诊断事件。callback 自身抛出的异常会被隔离，不会改变通信操作的返回值或组件状态。
+`CommStats` 是本地累计快照，可包含发送、接收、drop、覆盖、stale read、关闭后发送、超时、handler 异常、missed phase、当前/峰值深度、producer/consumer lag 和延迟。它包含固定对数桶延迟直方图与近似的 `p50_latency` / `p99_latency`；`CommEventCallback` 适合少量诊断事件。callback 自身抛出的异常会被隔离，不会改变通信操作的返回值或组件状态。安装/替换 callback 可能分配，调用 callback 会在内部同步之外执行任意应用代码；两者都是控制面操作，不属于实时保证。
 
 组件 latency 是由组件定义的数据年龄、等待时长或发布到消费时长，不能当作端到端流水线延迟。业务消息应携带源时间戳，并在最终消费者计算完整时长；`comm_robot_pipeline` 演示了传感器到控制的测量。报告任何延迟结论时，都应同时给出组件、测量边界和样本数。
 
@@ -40,7 +40,7 @@ if (stats.dropped_count != 0 || stats.timeout_count != 0) {
 
 ## 与 Executor 失败状态的边界
 
-`CommStats` 和 `CommEventCallback` 默认不汇总到 `ExecutorFailureStatus`，也不会调用 `Executor::set_failure_callback()`。若服务需要统一告警，在组件 callback 中把低频事件桥接到自己的监控系统；不要在高频数据路径中默认写日志，以免诊断本身破坏实时预算。
+`CommStats` 和 `CommEventCallback` 默认不汇总到 `ExecutorFailureStatus`，也不会调用 `Executor::set_failure_callback()`。若服务需要统一告警，在组件 callback 中把低频事件桥接到自己的监控系统。不要因为 `is_synchronization_lock_free()` 为 true 就在高频路径安装 callback：该查询只覆盖内部原子，不覆盖事件/字符串构造、callback 分配或用户代码。实时路径要求有界时，应由普通监控线程轮询计数。
 
 ## 下一步阅读
 

@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <thread>
 #include <vector>
 
@@ -102,6 +103,20 @@ TEST(CommPhaseGateTest, ExactWaitReportsMissedPhase) {
     EXPECT_EQ(gate.stats().missed_phase_count, 1U);
 }
 
+TEST(CommPhaseGateTest, WaitRejectsReservedHighBitImmediately) {
+    constexpr uint64_t kReservedHighBit = uint64_t{1} << 63U;
+    PhaseGate gate;
+
+    const auto at_least = gate.wait_for(kReservedHighBit, 0ns);
+    const auto exact = gate.wait_for_exact(kReservedHighBit, 0ns);
+
+    EXPECT_FALSE(at_least);
+    EXPECT_EQ(at_least.error_code, CommErrorCode::InvalidArgument);
+    EXPECT_FALSE(exact);
+    EXPECT_EQ(exact.error_code, CommErrorCode::InvalidArgument);
+    EXPECT_EQ(gate.stats().timeout_count, 0U);
+}
+
 TEST(CommPhaseGateTest, WaitTimeoutIsObservable) {
     PhaseGate gate;
 
@@ -136,12 +151,37 @@ TEST(CommPhaseGateTest, ConcurrentWaitersAllWake) {
     EXPECT_EQ(gate.stats().received_count, static_cast<uint64_t>(kWaiterCount));
 }
 
+TEST(CommPhaseGateTest, DirectWriterLeaseBlocksAdvanceWithoutBinding) {
+    PhaseGate gate;
+    auto lease = gate.try_begin_let_write();
+    ASSERT_TRUE(lease.has_value());
+
+    EXPECT_EQ(gate.advance().error_code, CommErrorCode::NotReady);
+    lease->release();
+    EXPECT_TRUE(gate.advance());
+}
+
 TEST(CommPhaseGateTest, WriterLeaseBlocksAdvanceUntilReleased) {
     PhaseGate gate;
     executor::comm::DoubleBuffer<int> buffer(0);
     ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
     auto lease = gate.try_begin_let_write();
     ASSERT_TRUE(lease.has_value());
+    EXPECT_EQ(gate.advance().error_code, CommErrorCode::NotReady);
+    lease->release();
+    EXPECT_TRUE(gate.advance());
+}
+
+TEST(CommPhaseGateTest, LeaseOutlivesBindingAndStillBlocksAdvance) {
+    PhaseGate gate;
+    std::optional<PhaseGate::LetWriteLease> lease;
+    {
+        executor::comm::DoubleBuffer<int> buffer(0);
+        ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+        lease = gate.try_begin_let_read();
+        ASSERT_TRUE(lease.has_value());
+    }
+
     EXPECT_EQ(gate.advance().error_code, CommErrorCode::NotReady);
     lease->release();
     EXPECT_TRUE(gate.advance());
@@ -167,6 +207,21 @@ TEST(CommPhaseGateTest, AdvanceAndAdvanceToShareLetTransitionPath) {
     EXPECT_TRUE(gate.advance_to(4));
     EXPECT_EQ(gate.current_phase(), 4U);
     EXPECT_EQ(gate.advance_to(4).error_code, CommErrorCode::MissedPhase);
+}
+
+TEST(CommPhaseGateTest, LetBindingRejectsSnapshotSentinelPhase) {
+    constexpr uint64_t kLetSentinel = (uint64_t{1} << 63U) - 1U;
+    PhaseGate gate;
+    executor::comm::LatestMailbox<int> mailbox;
+    executor::comm::DoubleBuffer<int> buffer(0);
+    ASSERT_TRUE(mailbox.bind_to_phase_gate(gate));
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+
+    const auto result = gate.advance_to(kLetSentinel);
+
+    EXPECT_FALSE(result);
+    EXPECT_EQ(result.error_code, CommErrorCode::MissedPhase);
+    EXPECT_EQ(gate.current_phase(), 0U);
 }
 
 TEST(CommPhaseGateTest, ConcurrentLetAdvancesAllowOnlyOneSuccess) {
@@ -292,6 +347,19 @@ TEST(CommSequencerTest, CloseWakesWaiter) {
     EXPECT_TRUE(sequencer.close());
     waiter.join();
     EXPECT_TRUE(waiter_done.load(std::memory_order_acquire));
+}
+
+TEST(CommSequencerTest, RejectsReservedHighBitAndStopsTicketingAfterClose) {
+    constexpr uint64_t kReservedHighBit = uint64_t{1} << 63U;
+    Sequencer sequencer;
+
+    const auto invalid = sequencer.wait_until_published(kReservedHighBit, 0ns);
+    EXPECT_FALSE(invalid);
+    EXPECT_EQ(invalid.error_code, CommErrorCode::InvalidArgument);
+    EXPECT_EQ(sequencer.stats().timeout_count, 0U);
+
+    ASSERT_TRUE(sequencer.close());
+    EXPECT_EQ(sequencer.next_ticket(), 0U);
 }
 
 TEST(CommSequencerTest, RejectsInvalidAndDuplicateTickets) {

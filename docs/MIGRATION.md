@@ -4,6 +4,31 @@
 
 ---
 
+## Unreleased：通信同步核心无锁化
+
+本节适用于当前 `master` 开发快照。
+现有通信类型与主要调用方式保持兼容，但内部同步和实时使用边界发生了以下变化：
+
+- `MpscChannel<T>` / `RealtimeChannel<T>` 改为构造期预分配的有界 MPSC 节点池，数据路径不再使用
+  mutex；仍要求一个逻辑消费者。
+- `LatestMailbox<T>` / 未绑定的 `DoubleBuffer<T>` 改为四个固定 reader-pin 快照槽，复制非平凡
+  `T` 时不依赖存在 data race 的 seqlock。`try_load()` 最多检查四个槽；`try_publish()` 是系统级
+  lock-free，但竞争 CAS 可重试，不能声明为单次调用有界或 wait-free。
+- `PhaseGate` / `Sequencer` 使用原子状态核心。带 timeout 的 wait API 与保证成功的兼容 API 仍会
+  spin/yield，只适合普通控制线程。
+- 新增 `is_synchronization_lock_free()`；兼容的 `is_lock_free()` 返回相同结果。所需原子不是
+  lock-free 时，组件在构造时拒绝运行，而不是静默退化到库内部锁。
+- channel 的 `close()` 只关闭新的 producer 准入；关闭前已经准入的 producer 仍可完成发布。
+  需要判断所有已接受消息均已排空时使用 `is_drained()`，不要只把某次 `empty()` 当作终态。
+- `Topic<T>` 是明确例外：subscription registry 和 `publish()` fan-out 快照仍使用 mutex 与动态
+  分配，整体不是实时或 lock-free 路径。
+
+上述“同步无锁”和“内部固定存储”不覆盖 `T` 的复制/移动/析构、时钟、诊断 callback、缺页、
+调用方分配或 OS 调度。迁移实时路径时应使用非等待 API、关闭高频 callback，并在目标硬件上验证
+完整调用链的最坏耗时与页面驻留情况。
+
+---
+
 ## 从 0.3.0 升级到 0.3.1：统一 Facade 与自动路由
 
 0.3.1 除实时进程内存锁配置项外是向后兼容扩展。`submit()`、`submit_gpu()`、四参数 legacy `submit_auto(TaskCharacteristics, name, kernel, config)`、实时和 Blocking I/O 的既有入口及返回类型均保持不变。

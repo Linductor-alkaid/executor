@@ -16,7 +16,7 @@ int command = 0;
 if (commands.try_receive(command)) apply(command);
 ```
 
-Use `LatestMailbox<T>` when only the newest value matters, `MpscChannel<T>` when every item is FIFO, `RealtimeChannel<T>` when a cycle consumes a bounded number of messages, `DoubleBuffer<T>` for complete snapshots, and `PhaseGate`/`Sequencer` for phase or ticket ordering.
+Use `LatestMailbox<T>` when only the newest value matters, `MpscChannel<T>` when every item is FIFO, `RealtimeChannel<T>` when a cycle consumes a bounded number of messages, `DoubleBuffer<T>` for complete snapshots, `PhaseGate` for monotonic phases, and `Sequencer` for a monotonic publication watermark that may skip tickets.
 
 ## Phase And Sequence Usage
 
@@ -34,7 +34,8 @@ Bind `DoubleBuffer<T>` or `LatestMailbox<T>` to a `PhaseGate` only when a value 
 - A full channel has a policy: reject, drop oldest, or keep latest. Observe a send result, `CommStats`, or an event callback rather than assuming delivery.
 - `LatestMailbox` overwrites old values by design; it is not FIFO. A `DoubleBuffer` is a state snapshot, not a message queue.
 - Communication events and statistics do not automatically enter `ExecutorFailureStatus`; bridge their callbacks into service monitoring when needed.
-- Current mutex-backed communication paths are not hard-realtime guarantees.
+- Preallocated channels and reader-pinned snapshots provide lock-free internal synchronization, not a whole-path hard-realtime guarantee. Snapshot `try_publish()` is system-wide lock-free but not per-call bounded/wait-free; `try_load()` has four slot attempts.
+- `Topic<T>`, including publish fan-out, uses a mutex and dynamic allocation and is explicitly non-realtime.
 - `RealtimeAllocationGuard` is an opt-in allocation diagnostic, not an allocator or a realtime scheduling guarantee.
 
 ## Related Guide

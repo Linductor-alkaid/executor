@@ -97,12 +97,17 @@ TEST(CommObservabilityTest, LatencyAndLagStatsAreObservable) {
     EXPECT_GT(channel_stats.avg_latency.count(), 0);
 
     executor::comm::LatestMailbox<int> mailbox("mailbox");
+    mailbox.publish(1);
+    EXPECT_TRUE(mailbox.try_load(value));
+    EXPECT_EQ(mailbox.stats().consumer_lag, 0U);
+    mailbox.publish(2);
     mailbox.publish(3);
+    mailbox.publish(4);
     std::this_thread::sleep_for(1ms);
     EXPECT_TRUE(mailbox.try_load(value));
     auto mailbox_stats = mailbox.stats();
-    EXPECT_EQ(mailbox_stats.producer_lag, 1U);
-    EXPECT_EQ(mailbox_stats.consumer_lag, 1U);
+    EXPECT_EQ(mailbox_stats.producer_lag, 4U);
+    EXPECT_EQ(mailbox_stats.consumer_lag, 2U);
     EXPECT_GT(mailbox_stats.max_latency.count(), 0);
 
     executor::comm::RealtimeChannel<int> realtime(realtime_options(4));
@@ -114,13 +119,18 @@ TEST(CommObservabilityTest, LatencyAndLagStatsAreObservable) {
     EXPECT_GT(realtime_stats.max_latency.count(), 0);
 
     executor::comm::DoubleBuffer<int> buffer(0, "state");
+    auto snapshot = buffer.load();
+    EXPECT_EQ(snapshot.value, 0);
+    EXPECT_EQ(buffer.stats().consumer_lag, 0U);
+    buffer.publish(5);
+    buffer.publish(6);
     buffer.publish(7);
     std::this_thread::sleep_for(1ms);
-    auto snapshot = buffer.load();
+    snapshot = buffer.load();
     EXPECT_EQ(snapshot.value, 7);
     auto buffer_stats = buffer.stats();
-    EXPECT_EQ(buffer_stats.producer_lag, 1U);
-    EXPECT_EQ(buffer_stats.consumer_lag, 1U);
+    EXPECT_EQ(buffer_stats.producer_lag, 3U);
+    EXPECT_EQ(buffer_stats.consumer_lag, 2U);
     EXPECT_GT(buffer_stats.max_latency.count(), 0);
 }
 

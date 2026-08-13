@@ -34,7 +34,7 @@
 1. **默认写不出 data race**：API 不暴露可并发写读的裸引用；跨线程数据通过值、不可变快照或受控写入窗口传递。
 2. **时序显式化**：线程间“先初始化后工作”“先采集后规划”“第 N 相位后再执行”通过 `PhaseGate` / `Sequencer` 表达。
 3. **背压不静默**：队列满、覆盖、过期、关闭后提交都必须通过返回值和统计可见。
-4. **实时路径边界清晰**：实时线程消费 API 默认不做无限等待；是否无锁、无分配必须由具体组件明确保证，当前 mutex 路径不得宣称硬实时。
+4. **实时路径边界清晰**：实时线程优先使用非等待接口；分别声明 data-race-free、系统级同步无锁、固定次数尝试、内部存储无分配和端到端硬实时边界。
 5. **可诊断但低开销**：每个组件提供本地 `stats()`；可选接入 `Executor` 的诊断回调，但不把通信抖动混为任务失败。
 6. **渐进实现**：先支持单消费者、有限容量和明确策略；多消费者广播作为独立的进程内原语补充，复杂 reactive graph 留到后续版本。
 
@@ -42,20 +42,32 @@
 
 - 不替代完整 actor framework、Rx 框架或分布式消息系统。
 - 不把进程内 `Topic<T>` 扩展为网络 broker：不提供 topic discovery、跨进程传输、持久化、重放、确认、重连或跨订阅者的事务性投递。
-- 不承诺所有组件 lock-free；承诺的是用户层无 data race 和实时消费路径不阻塞。
-- 不强制所有类型都走同一内部实现。平凡可复制小对象可复用无锁队列，复杂对象可用受控锁或 `shared_ptr<const T>` 快照。
+- 不承诺所有组件 lock-free：动态订阅的 `Topic<T>` 明确保留 mutex、动态 registry 和 fan-out 分配。
+- 不把“内部同步原子 lock-free”等同于 payload、callback、分配、OS 调度或整条业务链路硬实时。
+- 不强制所有类型都走同一内部实现。消息流使用预分配节点，非平凡快照类型使用 reader pin 固定槽。
 
 ## 当前语义边界
 
 阶段 7 的组件是通信原语集合，不是统一的时间模型：
 
-- 未绑定时，`PhaseGate` / `Sequencer` 只表示阶段或 ticket 顺序，不把阶段与数据快照绑定。
+- 未绑定时，`PhaseGate` 表示阶段，`Sequencer` 表示可跳 ticket 的单调 publication watermark；两者都不把状态与数据快照绑定。
 - `DoubleBuffer` 只保证一次发布得到完整值快照，不说明快照属于哪个逻辑相位。
 - 未绑定时，`LatestMailbox` / `RealtimeChannel` 提供最新值或有界消息消费语义，但不提供端到端相位一致性。
-- 未绑定的 `PhaseGate`、`DoubleBuffer`、`LatestMailbox` 和当前 `RealtimeChannel` 实现使用 mutex；它们不应被描述为硬实时、无锁或零阻塞数据路径。
+- `MpscChannel` / `RealtimeChannel` 使用构造期预分配的 MPSC 节点和单逻辑消费者；`LatestMailbox` /
+  普通 `DoubleBuffer` 使用四个固定 reader-pin 快照槽；`PhaseGate` / `Sequencer` 使用原子状态核心。
+- 上述组件构造时要求内部同步原子在目标平台 lock-free。`is_synchronization_lock_free()` 只描述这层
+  同步，不覆盖 `T`、时钟、字符串、callback、外部分配或 OS 调度，也不把有竞争的 CAS 宣称为 wait-free。
+- 四槽快照的 `try_load()` 最多检查四个槽；`try_publish()` 是非等待、系统级 lock-free 入口，但
+  publication CAS 可重试，不承诺单次调用有界或 wait-free。channel `try_*` 同样是非等待 lock-free
+  入口而非 wait-free 保证。保证成功或等待 timeout 的兼容 API 会 spin/yield，不属于硬实时路径。
+- 快照 sequence 是有限 56 位域：耗尽时 `try_publish()` 返回 `false`，重试型兼容发布/更新接口抛
+  `std::overflow_error`，不会无限 spin。
+- phase/ticket 状态必须 `< 2^63`；非法 wait 在进入计时/轮询前返回 `InvalidArgument`。LET 槽保留
+  `2^63 - 1` 为空态，因此 phase-bound publication 还要求 phase `< 2^63 - 1`。
+- callback 的配置可能分配，callback 的执行是任意用户代码，两者都属于非实时诊断/控制面。
 - `MpscChannel<T>` 的一次 receive 会移走消息；`DoubleBuffer<T>` 只保存最新完整快照。因此它们都不能表达“多个独立模块各自按 FIFO 收到每一条后续事件”。
 
-因此，用户若自行组合未绑定的 phase gate 和 double buffer，仍需自行约定“哪个相位的数据何时可见”；显式绑定模式则提供本节定义的 LET 保证。硬实时路径应使用经过验证的专用无锁/预分配实现，并将未绑定组件限于控制面、启动同步或非硬实时监控面。
+因此，用户若自行组合未绑定的 phase gate 和 double buffer，仍需自行约定“哪个相位的数据何时可见”；显式绑定模式则提供本节定义的 LET 保证。选择原语后仍需用目标平台测试验证 payload、callback、缺页、调度和整条周期预算；同步无锁本身不是硬实时证明。
 
 ## 阶段 7.8：为既有原语增加 LET 契约
 
@@ -72,8 +84,9 @@
 
 第一版应明确为单写单读；多写者先在非实时控制面仲裁，再由唯一写侧向绑定的
 `DoubleBuffer` 或 `LatestMailbox` 提交。相位绑定模式使用构造期固定容量存储和原子相位发布，成功的周期
-路径不得获取 mutex、等待 condition variable 或进行堆分配；失败的 `CommResult` 诊断不属于
-成功周期路径。类型需要满足预分配、无异常复制/移动的约束。配套验收覆盖同相位不可见、
+路径不得获取 mutex、等待 condition variable 或为内部槽分配内存；失败的 `CommResult` 诊断不属于
+成功周期路径。`T` 自身的复制/移动及其可能分配不在此保证内；类型需要满足无异常复制约束。
+配套验收覆盖同相位不可见、
 重复提交、跳相位、半写快照和 RT 路径分配检测。
 
 通信观测提供固定开销的对数延迟直方图与近似 P50/P99。组件内 latency 表示本地等待或发布到
@@ -247,6 +260,7 @@ public:
     size_t capacity() const;
     CommStats stats() const;
     void set_event_callback(CommEventCallback callback);
+    bool is_synchronization_lock_free() const;
 };
 
 template<class T>
@@ -262,13 +276,17 @@ using SpscChannel = MpscChannel<T>; // 初期可复用实现，后续替换为 S
 - `DropPolicy::DropOldest` 适合日志、遥测；必须增加 `dropped_count`。
 - FIFO channel 不使用 `KeepLatest` 作为默认。只需要最新状态时应使用 `LatestMailbox<T>`。
 - `close()` 后生产者不能再提交；消费者可继续 drain 已有数据，直到空。
-- `receive_for()` 可阻塞普通线程；实时线程应使用 `try_receive()` 或 `RealtimeChannel::drain_for_cycle()`。
+- `send_for()` / `receive_for()` 在原子核心上 spin/yield 到成功、关闭或 timeout；实时线程应使用
+  `try_send()` / `try_receive()` 或带明确预算的 `RealtimeChannel::drain_for_cycle()`。
+- 组件只支持一个逻辑消费者；多名独立消费者需要 `Topic`，但 Topic 不是实时路径。
 
-### 实现建议
+### 当前实现
 
-- 对 `std::is_trivially_copyable_v<T>` 且容量固定的场景，可复用 `util::LockFreeQueue<T>`。
-- 对非平凡类型，第一版可使用内部互斥锁保护环形缓冲区，但不把锁暴露给用户。
-- 后续可引入 node pool 或 move-only ring buffer，减少非平凡类型的分配和锁竞争。
+- 构造时一次性分配固定 node pool；producer 取得私有节点并完成 `T` 构造后才原子发布。
+- 单逻辑 consumer 以原子 exchange 分离完整批次并反转为 FIFO；未完成的 producer 不会在队首形成洞。
+- `try_send()` / `try_receive()` 的内部队列同步不获取 mutex，构造后不分配节点；payload 操作和
+  已配置 callback 不在该保证内。
+- 所需指针和整数原子非 lock-free 时构造抛异常，避免静默退化到库锁。
 
 ---
 
@@ -327,10 +345,16 @@ public:
 ### 语义
 
 - phase 单调递增，不允许倒退。
-- `wait_for(p)` 在当前 phase 已超过 `p` 时成功返回；调用方要求精确消费某个 phase 时可使用 Sequencer。
-- 如果调用方声明必须看到 phase N，但当前已经是 N+K，返回 `MissedPhase` 并增加统计。
-- `close()` 唤醒所有 waiter，返回 `Closed`。
-- 内部可使用 `mutex + condition_variable`，但 predicate 和 notify 由组件封装。
+- `wait_for(p)` 在当前 phase 已达到或超过 `p` 时成功；`wait_for_exact(p)` 在 phase 已越过 `p` 时返回 `MissedPhase`。
+- `Sequencer` 的 `publish(ticket)` 推进单调 publication watermark，可直接跳到更大 ticket；它不要求中间 ticket 逐个发布。
+- `is_published(ticket)` 只表示 watermark 已达到或越过该 ticket，不证明该 ticket 曾被单独 publish。
+- `wait_until_published(ticket)` 是精确等待：watermark 恰好等于 ticket 时成功，已经越过时返回 `MissedPhase`。
+- `close()` 原子发布关闭状态，spin/yield waiter 随后观察 `Closed`。
+- phase/published ticket 与 closed 位打包在原子状态字中，推进、关闭与查询不获取 mutex。
+- wait API 读取 `steady_clock` 并 spin/yield，只是控制面 timeout 适配器；原子核心不等于 wait-free。
+- phase/ticket 合法值必须 `< 2^63`。`PhaseGate::wait_for*()` 对 `phase >= 2^63`、
+  `Sequencer::wait_until_published()` 对 `ticket == 0` 或 `ticket >= 2^63` 立即返回 `InvalidArgument`。
+  `next_ticket()` 在关闭或空间耗尽时返回 `0`。
 
 ---
 
@@ -354,6 +378,9 @@ public:
     void publish(const T& value);
     void publish(T&& value);
 
+    bool try_publish(const T& value, uint64_t* new_sequence = nullptr);
+    bool try_publish(T&& value, uint64_t* new_sequence = nullptr);
+
     // 返回 false 表示从未发布过值。
     bool try_load(T& out) const;
 
@@ -365,6 +392,7 @@ public:
     uint64_t sequence() const;
     CommStats stats() const;
     void set_event_callback(CommEventCallback callback);
+    bool is_synchronization_lock_free() const;
 };
 
 } // namespace executor::comm
@@ -391,13 +419,14 @@ public:
     bool try_send(const T& value);
     bool try_send(T&& value);
 
-    // 实时线程调用：不阻塞，不分配，不超过 max_items。
+    // 实时线程调用：同步核心不阻塞、不分配队列节点，且不超过 max_items。
     template<class Fn>
     size_t drain_for_cycle(Fn&& handler, size_t max_items = 0);
 
     void close();
     CommStats stats() const;
     void set_event_callback(CommEventCallback callback);
+    bool is_synchronization_lock_free() const;
 };
 
 } // namespace executor::comm
@@ -409,6 +438,11 @@ public:
 - `max_items == 0` 表示使用配置中的 `max_items_per_cycle`。
 - handler 抛异常时不在实时路径做复杂恢复；建议返回已处理数量，并记录轻量错误计数。是否把异常桥接到 `Executor` failure event 由集成层决定。
 - 队列满策略必须显式，默认拒绝新消息并返回 `false`。
+- `RealtimeChannel` 复用预分配 MPSC node pool；`LatestMailbox` 使用四槽 reader pin 快照。
+- mailbox 的 `try_load()` 最多检查四个槽；`try_publish()` 非等待且系统级 lock-free，但 CAS 可重试，
+  不承诺单次调用有界/wait-free。兼容 `publish()` 在槽繁忙时 spin/yield，在 56 位 sequence 永久耗尽时
+  抛 `std::overflow_error`。
+- `T` 操作、时钟、handler、异常和 callback 仍由调用方负责；启用 callback 后不能宣称实时路径无分配。
 
 ---
 
@@ -439,6 +473,10 @@ public:
 
     uint64_t publish(T value);
 
+    bool try_publish(const T& value, uint64_t* new_sequence = nullptr);
+    bool try_publish(T&& value, uint64_t* new_sequence = nullptr);
+
+    bool try_load(Snapshot<T>& out) const;
     Snapshot<T> load() const;
     bool load_newer_than(uint64_t last_seen_sequence, Snapshot<T>& out) const;
 
@@ -449,6 +487,7 @@ public:
 
     uint64_t sequence() const;
     CommStats stats() const;
+    bool is_synchronization_lock_free() const;
 };
 
 } // namespace executor::comm
@@ -464,10 +503,15 @@ real-time path.
 ### 语义
 
 - 读者只看到完整发布后的快照。
-- `update(fn)` 在非当前读缓冲区上修改，完成后一次性发布。
+- 普通模式使用四个 reader-pin 槽；reader 复制期间 writer 不能改写该槽，非平凡 `T` 无 data race。
+- `try_load()` 最多检查四个槽；`try_publish()` 是非等待、系统级 lock-free 操作，但竞争 CAS 可重试，
+  不承诺 per-call bounded/wait-free。所有槽繁忙或 sequence 永久耗尽时可返回 `false`。
+- `publish()` / `load()` / `update()` 保留兼容语义，暂时竞争时可能 spin/yield，不是实时 API；有限的
+  56 位 sequence 耗尽时，发布/更新路径抛 `std::overflow_error` 而不是永久重试。
+- `update(fn)` 从当前完整快照复制、修改并一次性发布；公开契约为 SWMR，并发 writer 的逻辑更新可能互相覆盖。
 - `load_newer_than()` 帮助读者避免重复消费旧状态。
-- 初期目标是单写多读；多写场景建议先用 `MpscChannel` 汇聚到一个状态 owner。
-- 对大型不可复制对象，后续可增加 `SnapshotPtr<T>`，内部使用 `std::shared_ptr<const T>`。
+- 多写场景建议先用 `MpscChannel` 汇聚到一个状态 owner。
+- `T` 的复制/移动、时钟与 callback 不属于同步无锁进度保证；大型状态应评估复制预算或显式使用不可变 handle。
 
 ### LET 绑定模式
 
@@ -477,6 +521,9 @@ real-time path.
 固定双槽和无异常复制，重复提交或相位未就绪返回 `CommResult`。绑定 mailbox 是“每相位一条
 单值快照”，而不是未绑定 mailbox 的 latest-wins 覆盖语义。`RealtimeChannel` 不自动继承
 LET，因为 FIFO 消费预算与单值相位快照是不同语义。
+
+普通 phase/ticket 状态域是 `[0, 2^63)`。绑定 LET 的双槽状态另保留 `2^63 - 1` 为空态，所以
+`publish_for_current_phase()` 只接受 phase `< 2^63 - 1`；达到保留值时返回 `InvalidArgument`。
 
 ---
 
@@ -616,7 +663,7 @@ public:
   它们观察到消息的同时性，也不提供跨订阅者的 exactly-once、原子全量投递或事务回滚。
 - `Topic<T>` 与仍存活的同一 subscription 可被不同线程使用；实现必须在 publisher 取得订阅快照与
   RAII 注销并发时保证内部状态存活。跨线程停止等待使用 `TopicSubscription::close()` 或
-  `Topic::close()`，它们唤醒 `receive_for()` 且不丢弃已成功投递的消息。析构执行同一 RAII 注销/关闭，
+  `Topic::close()`，它们原子关闭内部通道，使 `receive_for()` 轮询后观察 `Closed`，且不丢弃已成功投递的消息。析构执行同一 RAII 注销/关闭，
   但调用方必须先结束对句柄对象本身的并发成员调用，不能一边销毁 C++ 对象一边继续调用它。
 - 第一版要求 `T` 可复制。为了减少大型不可变消息的 fan-out 成本，调用方可使用
   `Topic<std::shared_ptr<const T>>`；库不隐式共享可变对象。
@@ -624,12 +671,13 @@ public:
 
 ### 实现与验证边界
 
-第一版可以由 Topic 维护受 mutex 保护的 subscription registry，并令每个 subscription 复用
-`MpscChannel<T>` 或其有界队列语义。发布时先取得稳定订阅引用快照，再在 registry 锁外向各队列
+当前 Topic 由 mutex 保护 subscription registry，并令每个 subscription 复用
+`MpscChannel<T>`。发布时先锁 registry 并动态分配稳定订阅引用快照，再在 registry 锁外向各队列
 投递，避免慢订阅者阻塞 subscribe/unsubscribe。实现必须定义注销与在途发布的线性化点，并用
 `shared_ptr` 或等价所有权保证在途投递不会访问已析构的 subscription。
 
-这不是无锁或硬实时实现。未来若控制场景确实需要确定性广播，应另行设计固定订阅数、预分配、
+因此不只是 subscribe/unsubscribe，`publish()` fan-out 本身也不是无锁、无分配或硬实时实现。
+未来若控制场景确实需要确定性广播，应另行设计固定订阅数、预分配、
 无诊断回调的专用 realtime fan-out 原语，而不能弱化本 Topic 的契约。
 
 ---
@@ -747,7 +795,9 @@ render(snapshot.value);
 
 ## 风险与待决问题
 
-- `MpscChannel<T>` 对非平凡类型的第一版实现是否接受内部锁，需要用 benchmark 和 TSAN 压力测试确认。
-- `DoubleBuffer<T>` 的 `load()` 是否要求 `T` 可复制；大型状态可能需要第二套 `SnapshotPtr<T>` API。
+- 预分配 MPSC 节点在目标生产者数量、drop policy 和 payload 下的延迟尾部仍需 benchmark 与 TSAN 压力测试。
+- `DoubleBuffer<T>` / `LatestMailbox<T>` 会复制 `T`；大型状态需要明确的不可变 handle 或后续 `SnapshotPtr<T>` API。
+- 当前四槽快照只有 `try_load()` 具有固定四次槽检查；`try_publish()` 是系统级 lock-free，但不是
+  单次有界/wait-free。仍需以目标平台最大争用时间验收周期预算。
 - `submit_after()` 的失败传播策略会影响用户预期，需在 API 文档中明确默认值并提供可选策略。
 - 通信事件是否进入 `ExecutorFailureEvent` 需要谨慎。建议先保留独立 `CommEvent`，避免把正常背压误报为任务失败。

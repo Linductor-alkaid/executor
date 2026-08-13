@@ -353,7 +353,7 @@
 1. 阶段 7.0：通用类型、聚合头、文档入口。
 2. 阶段 7.1：Typed Channel，先解决最常见 producer/consumer。
 3. 阶段 7.2：LatestMailbox / RealtimeChannel，补齐实时配置和周期 drain。
-4. 阶段 7.3：PhaseGate / Sequencer，解决严格步骤顺序。
+4. 阶段 7.3：PhaseGate / Sequencer，分别解决单调阶段推进与可跳 ticket 的 publication watermark。
 5. 阶段 7.4：DoubleBuffer，替代共享 mutable state。
 6. 阶段 7.6：通信时序监控贯穿补齐，也可随每个组件同步落地。
 7. 阶段 7.5：submit_after / when_all，作为较大任务图扩展单独推进。
@@ -420,7 +420,7 @@
 
 ## 阶段 7.8：逻辑时间与实时证据链（进行中）
 
-未绑定的阶段 7 通信组件仍是独立原语：`PhaseGate` / `Sequencer` 不绑定数据版本，`DoubleBuffer` 不绑定逻辑相位，且现有 `LatestMailbox` 和 `RealtimeChannel` 含 mutex 路径。因此不能把这些未绑定组合描述为 LET、硬实时或无锁通信。相位绑定的 `DoubleBuffer` 是 7.8 已实现的例外，其余实时证据链工作仍在推进。
+未绑定的阶段 7 通信组件仍是独立原语：`PhaseGate` / `Sequencer` 不绑定数据版本，`DoubleBuffer` 不绑定逻辑相位。当前 `LatestMailbox` / `DoubleBuffer` 使用 reader-pin 固定槽，`RealtimeChannel` 使用预分配 MPSC 核心；这些同步核心 lock-free，但不把 payload、callback、时钟或 OS 调度提升为硬实时保证。相位绑定提供 LET 可见性，动态 `Topic` 则继续作为 mutex + 动态分配的非实时例外。
 
 ### P0：既有 `PhaseGate` × 快照/最新值原语的 LET 契约
 

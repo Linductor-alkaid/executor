@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <new>
 #include <gtest/gtest.h>
 
 #include <string>
@@ -74,11 +75,208 @@ TEST(CommRealtimeMemoryTest, AbortPolicyTerminatesOnAllocationWhenEnabled) {
             executor::comm::RealtimeAllocationGuard guard(
                 "control_loop", "cycle",
                 executor::comm::RealtimeAllocationViolationPolicy::Abort);
-            volatile auto* allocation = new int(1);
-            delete allocation;
+            void* allocation = ::operator new(sizeof(int));
+            ::operator delete(allocation);
         },
         "");
 #endif
+}
+
+TEST(CommRealtimeMemoryTest, CommunicationTryPathsAllocateNothingWhenEnabled) {
+    if (!executor::comm::RealtimeAllocationGuard::is_enabled()) {
+        GTEST_SKIP() << "allocation guard is disabled in this build";
+    }
+
+    executor::comm::ChannelOptions channel_options;
+    channel_options.capacity = 8;
+    executor::comm::MpscChannel<int> channel(channel_options);
+
+    executor::comm::RealtimeChannelOptions realtime_options;
+    realtime_options.capacity = 8;
+    realtime_options.max_items_per_cycle = 2;
+    executor::comm::RealtimeChannel<int> realtime(realtime_options);
+
+    executor::comm::LatestMailbox<int> mailbox;
+    executor::comm::DoubleBuffer<int> snapshots(0);
+    executor::comm::PhaseGate gate;
+    executor::comm::DoubleBuffer<int> let_snapshots(0);
+    ASSERT_TRUE(let_snapshots.bind_to_phase_gate(gate));
+
+    executor::comm::RealtimeAllocationGuard::reset_current_thread_stats();
+    bool channel_sent = false;
+    bool channel_received = false;
+    bool realtime_sent = false;
+    size_t realtime_drained = 0;
+    bool mailbox_published = false;
+    bool mailbox_loaded = false;
+    bool snapshot_published = false;
+    bool let_published = false;
+    bool let_advanced = false;
+    bool let_loaded = false;
+    int value = 0;
+    executor::comm::Snapshot<int> snapshot;
+    executor::comm::Snapshot<int> let_snapshot;
+    {
+        executor::comm::RealtimeAllocationGuard guard("comm", "try_paths");
+        channel_sent = channel.try_send(1);
+        channel_received = channel.try_receive(value);
+
+        realtime_sent = realtime.try_send(2);
+        realtime_drained = realtime.drain_for_cycle([&](int item) { value = item; });
+
+        mailbox_published = mailbox.try_publish(3);
+        mailbox_loaded = mailbox.try_load(value);
+
+        snapshot_published = snapshots.try_publish(4);
+        snapshot = snapshots.load();
+
+        let_published = static_cast<bool>(let_snapshots.publish_for_current_phase(5));
+        let_advanced = static_cast<bool>(gate.advance());
+        let_loaded = static_cast<bool>(let_snapshots.load_for_current_phase(let_snapshot));
+    }
+
+    const auto stats =
+        executor::comm::RealtimeAllocationGuard::current_thread_stats();
+    EXPECT_TRUE(channel_sent);
+    EXPECT_TRUE(channel_received);
+    EXPECT_TRUE(realtime_sent);
+    EXPECT_EQ(realtime_drained, 1U);
+    EXPECT_TRUE(mailbox_published);
+    EXPECT_TRUE(mailbox_loaded);
+    EXPECT_TRUE(snapshot_published);
+    EXPECT_EQ(snapshot.value, 4);
+    EXPECT_TRUE(let_published);
+    EXPECT_TRUE(let_advanced);
+    EXPECT_TRUE(let_loaded);
+    EXPECT_EQ(let_snapshot.value, 5);
+    EXPECT_EQ(stats.component, "comm");
+    EXPECT_EQ(stats.phase, "try_paths");
+    EXPECT_EQ(stats.allocation_count, 0U);
+    EXPECT_EQ(stats.allocated_bytes, 0U);
+}
+
+TEST(CommRealtimeMemoryTest, FailureTryPathsWithoutCallbacksAllocateNothingWhenEnabled) {
+    if (!executor::comm::RealtimeAllocationGuard::is_enabled()) {
+        GTEST_SKIP() << "allocation guard is disabled in this build";
+    }
+
+    executor::comm::ChannelOptions channel_options;
+    channel_options.capacity = 1;
+    executor::comm::MpscChannel<int> full_channel(channel_options);
+    executor::comm::MpscChannel<int> empty_channel(channel_options);
+    executor::comm::MpscChannel<int> closed_channel(channel_options);
+    ASSERT_TRUE(full_channel.try_send(1));
+    closed_channel.close();
+
+    executor::comm::RealtimeChannelOptions realtime_options;
+    realtime_options.capacity = 1;
+    realtime_options.max_items_per_cycle = 1;
+    executor::comm::RealtimeChannel<int> full_realtime(realtime_options);
+    executor::comm::RealtimeChannel<int> empty_realtime(realtime_options);
+    executor::comm::RealtimeChannel<int> closed_realtime(realtime_options);
+    ASSERT_TRUE(full_realtime.try_send(1));
+    closed_realtime.close();
+
+    executor::comm::LatestMailbox<int> empty_mailbox;
+    executor::comm::LatestMailbox<int> stale_mailbox;
+    ASSERT_TRUE(stale_mailbox.try_publish(1));
+
+    executor::comm::DoubleBuffer<int> stale_snapshots(1);
+    const uint64_t snapshot_sequence = stale_snapshots.sequence();
+
+    executor::comm::PhaseGate let_gate;
+    executor::comm::LatestMailbox<int> let_mailbox;
+    executor::comm::DoubleBuffer<int> let_snapshots(0);
+    ASSERT_TRUE(let_mailbox.bind_to_phase_gate(let_gate));
+    ASSERT_TRUE(let_snapshots.bind_to_phase_gate(let_gate));
+    ASSERT_TRUE(let_mailbox.publish_for_current_phase(1));
+    ASSERT_TRUE(let_snapshots.publish_for_current_phase(1));
+    auto active_lease = let_gate.try_begin_let_read();
+    ASSERT_TRUE(active_lease.has_value());
+
+    executor::comm::PhaseGate missed_let_gate;
+    executor::comm::DoubleBuffer<int> missed_let_snapshots(0);
+    ASSERT_TRUE(missed_let_snapshots.bind_to_phase_gate(missed_let_gate));
+    ASSERT_TRUE(missed_let_gate.advance());
+
+    executor::comm::PhaseGate closed_let_gate;
+    executor::comm::DoubleBuffer<int> closed_let_snapshots(0);
+    ASSERT_TRUE(closed_let_snapshots.bind_to_phase_gate(closed_let_gate));
+    ASSERT_TRUE(closed_let_gate.close());
+
+    executor::comm::RealtimeAllocationGuard::reset_current_thread_stats();
+    int value = 0;
+    uint64_t mailbox_sequence = stale_mailbox.sequence();
+    executor::comm::Snapshot<int> snapshot;
+    bool channel_full = false;
+    bool channel_empty = false;
+    bool channel_closed = false;
+    bool realtime_full = false;
+    size_t realtime_empty = 0;
+    bool realtime_closed = false;
+    bool mailbox_empty = false;
+    bool mailbox_stale = false;
+    bool snapshot_stale = false;
+    bool let_mailbox_duplicate = false;
+    bool let_mailbox_not_visible = false;
+    bool let_snapshot_duplicate = false;
+    bool let_snapshot_not_visible = false;
+    bool let_advance_blocked = false;
+    executor::comm::CommErrorCode let_advance_missed =
+        executor::comm::CommErrorCode::Ok;
+    executor::comm::CommErrorCode let_advance_closed =
+        executor::comm::CommErrorCode::Ok;
+    {
+        executor::comm::RealtimeAllocationGuard guard("comm", "failure_try_paths");
+        channel_full = full_channel.try_send(2);
+        channel_empty = empty_channel.try_receive(value);
+        channel_closed = closed_channel.try_send(2);
+
+        realtime_full = full_realtime.try_send(2);
+        realtime_empty = empty_realtime.drain_for_cycle([](int) {});
+        realtime_closed = closed_realtime.try_send(2);
+
+        mailbox_empty = empty_mailbox.try_load(value);
+        mailbox_stale = stale_mailbox.try_load_newer_than(
+            mailbox_sequence, value, mailbox_sequence);
+        snapshot_stale = stale_snapshots.load_newer_than(
+            snapshot_sequence, snapshot);
+
+        let_mailbox_duplicate = static_cast<bool>(
+            let_mailbox.publish_for_current_phase(2));
+        let_mailbox_not_visible = static_cast<bool>(
+            let_mailbox.load_for_current_phase(value));
+        let_snapshot_duplicate = static_cast<bool>(
+            let_snapshots.publish_for_current_phase(2));
+        let_snapshot_not_visible = static_cast<bool>(
+            let_snapshots.load_for_current_phase(snapshot));
+        let_advance_blocked = static_cast<bool>(let_gate.advance());
+        let_advance_missed = missed_let_gate.advance_to(1).error_code;
+        let_advance_closed = closed_let_gate.advance().error_code;
+    }
+
+    const auto stats =
+        executor::comm::RealtimeAllocationGuard::current_thread_stats();
+    EXPECT_FALSE(channel_full);
+    EXPECT_FALSE(channel_empty);
+    EXPECT_FALSE(channel_closed);
+    EXPECT_FALSE(realtime_full);
+    EXPECT_EQ(realtime_empty, 0U);
+    EXPECT_FALSE(realtime_closed);
+    EXPECT_FALSE(mailbox_empty);
+    EXPECT_FALSE(mailbox_stale);
+    EXPECT_FALSE(snapshot_stale);
+    EXPECT_FALSE(let_mailbox_duplicate);
+    EXPECT_FALSE(let_mailbox_not_visible);
+    EXPECT_FALSE(let_snapshot_duplicate);
+    EXPECT_FALSE(let_snapshot_not_visible);
+    EXPECT_FALSE(let_advance_blocked);
+    EXPECT_EQ(let_advance_missed, executor::comm::CommErrorCode::MissedPhase);
+    EXPECT_EQ(let_advance_closed, executor::comm::CommErrorCode::Closed);
+    EXPECT_EQ(stats.component, "comm");
+    EXPECT_EQ(stats.phase, "failure_try_paths");
+    EXPECT_EQ(stats.allocation_count, 0U);
+    EXPECT_EQ(stats.allocated_bytes, 0U);
 }
 
 TEST(CommRealtimeMemoryTest, RealtimeThreadCanExplicitlyAttachGuardToCallback) {

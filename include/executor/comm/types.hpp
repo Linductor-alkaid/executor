@@ -67,13 +67,24 @@ struct CommResult {
         return ok;
     }
 
-    static CommResult success(std::string msg = {}) {
+    static CommResult success() noexcept {
+        return {};
+    }
+
+    static CommResult success(std::string msg) {
         CommResult result;
         result.message = std::move(msg);
         return result;
     }
 
-    static CommResult failure(CommErrorCode code, std::string msg = {}) {
+    static CommResult failure(CommErrorCode code) noexcept {
+        CommResult result;
+        result.ok = false;
+        result.error_code = code;
+        return result;
+    }
+
+    static CommResult failure(CommErrorCode code, std::string msg) {
         CommResult result;
         result.ok = false;
         result.error_code = code;

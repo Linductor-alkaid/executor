@@ -22,7 +22,7 @@ if (stats.dropped_count != 0 || stats.timeout_count != 0) {
 }
 ```
 
-`CommStats` is a local cumulative snapshot, including sends, receives, drops, overwrites, stale reads, sends after close, timeouts, handler exceptions, missed phases, current/peak depth, producer/consumer lag, and latency. It includes fixed logarithmic latency buckets and approximate `p50_latency` / `p99_latency`; `CommEventCallback` is appropriate for low-rate diagnostics. Callback exceptions are isolated and do not change the communication operation's result or component state.
+`CommStats` is a local cumulative snapshot, including sends, receives, drops, overwrites, stale reads, sends after close, timeouts, handler exceptions, missed phases, current/peak depth, producer/consumer lag, and latency. It includes fixed logarithmic latency buckets and approximate `p50_latency` / `p99_latency`; `CommEventCallback` is appropriate for low-rate diagnostics. Callback exceptions are isolated and do not change the communication operation's result or component state. Installing/replacing a callback may allocate, and invoking it runs arbitrary application code after internal synchronization; both are control-plane operations, not part of a real-time guarantee.
 
 Component latency is an age, wait duration, or publish-to-consume duration defined by that component. It is not end-to-end pipeline latency. Carry a source timestamp in the business message and compute the duration at the final consumer, as `comm_robot_pipeline` does for sensor-to-control latency. Report the component, measurement boundary, and sample count with any latency claim.
 
@@ -40,6 +40,6 @@ Thresholds come from the business period and data importance. Mailbox overwrite 
 
 ## Boundary with Executor failures
 
-`CommStats` and `CommEventCallback` do not aggregate into `ExecutorFailureStatus` and do not call `Executor::set_failure_callback()` by default. Bridge low-frequency component events to your monitoring system for unified alerts. Do not default to logging on high-frequency data paths: diagnosis itself can violate a real-time budget.
+`CommStats` and `CommEventCallback` do not aggregate into `ExecutorFailureStatus` and do not call `Executor::set_failure_callback()` by default. Bridge low-frequency component events to your monitoring system for unified alerts. Do not install callbacks on high-frequency paths merely because `is_synchronization_lock_free()` is true: that query covers internal atomics, not event/string construction, callback allocation or user code. Poll counters from an ordinary monitoring thread when the real-time path must remain bounded.
 
 Continue with [capacity and alerts](/en/realtime-and-communication/capacity-and-alerting), or use the [complete robot pipeline](/en/tutorial/complete-robot-pipeline) for fault-injection checks.

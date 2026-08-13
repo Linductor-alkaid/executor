@@ -186,6 +186,26 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "unit;concurrency;lockfree"
             TIMEOUT 60
         )
+    elseif(TEST_NAME MATCHES "^test_comm_(channel|double_buffer|mailbox|phase_gate)$")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit;concurrency;lockfree"
+            TIMEOUT 60
+        )
+    elseif(TEST_NAME STREQUAL "test_comm_topic")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit;concurrency"
+            TIMEOUT 60
+        )
+    elseif(TEST_NAME STREQUAL "test_comm_realtime_memory")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit;realtime;lockfree"
+            TIMEOUT 60
+        )
+    elseif(TEST_NAME STREQUAL "test_comm_types")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit;lockfree"
+            TIMEOUT 30
+        )
     elseif(TEST_NAME STREQUAL "test_self_stop_handoff")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "unit;concurrency"
@@ -262,7 +282,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         )
     endif()
 
-    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(comm_topic|thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|thread_pool_monitor_concurrent_set|dispatcher_resize_under_load|concurrent_stop_submit|load_balancer_concurrent_resize|opencl_lifecycle|self_stop_handoff)$")
+    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(comm_(channel|double_buffer|mailbox|phase_gate|topic)|thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|thread_pool_monitor_concurrent_set|dispatcher_resize_under_load|concurrent_stop_submit|load_balancer_concurrent_resize|opencl_lifecycle|self_stop_handoff)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             TIMEOUT 180
         )

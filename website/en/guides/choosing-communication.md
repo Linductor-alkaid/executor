@@ -12,11 +12,11 @@ Ask how data may be lost or overwritten before asking which queue is faster. The
 | Only the latest configuration or target matters | `LatestMailbox<T>` | Sequence, new-value reads, overwrites, stale reads |
 | One consumer handles every message FIFO | `MpscChannel<T>` | Capacity, drop policy, close, timeout |
 | Independent consumers each receive the same subsequent event stream | `Topic<T>` | Per-subscription capacity, drop policy, close, drops, lag |
-| A cycle consumes only a bounded number of messages | `RealtimeChannel<T>` | No condition-variable wait, per-cycle budget, drops, handler exceptions; mutex-backed |
-| Several readers need complete consistent state | `DoubleBuffer<T>` | Sequence, old/new values, single-writer/multi-reader boundary |
+| A cycle consumes only a bounded number of messages | `RealtimeChannel<T>` | Preallocated MPSC storage, one logical consumer, per-cycle budget, drops, handler exceptions |
+| Several readers need complete consistent state | `DoubleBuffer<T>` | Four reader-pinned slots, four-attempt `try_load()`, lock-free `try_publish()`, sequence, SWMR boundary |
 | Setup, calibration, and run phases advance in order | `PhaseGate` | Timeout, close, phase regression, missed phase |
 | A complete value from phase N must become visible at N+1 | Bind `DoubleBuffer<T>` or `LatestMailbox<T>` to `PhaseGate` | `CommResult`, one publish per phase, missing prior value |
-| Publication must have strict ticket order | `Sequencer` | Wait timeout, close, missing sequence |
+| A monotonic publication watermark may skip tickets | `Sequencer` | Watermark reached, exact-wait timeout, close, skipped ticket |
 
 ```mermaid
 flowchart TD
@@ -29,12 +29,12 @@ flowchart TD
     E -- Yes --> F[DoubleBuffer]
     G{Coordinate phase or sequence?}
     G -- Phase --> H[PhaseGate]
-    G -- Ordered publication --> I[Sequencer]
+    G -- Publication watermark --> I[Sequencer]
 ```
 
 ## Capacity and backpressure
 
-Capacity is a pressure-relief contract, not an implementation detail. For `MpscChannel` and `RealtimeChannel`, decide what a full queue means: block, reject, drop newest, or drop oldest. `Topic` applies that choice independently to every subscription: one slow subscriber does not block the others, but the publisher must inspect `TopicPublishResult` and each subscription's statistics. `LatestMailbox` overwrites old values by design. Never assume delivery.
+Capacity is a pressure-relief contract, not an implementation detail. For `MpscChannel` and `RealtimeChannel`, decide whether a full queue should be retried until a timeout, reject the newest value, drop the oldest value, or keep only the latest value. `Topic` applies the drop choice independently to every subscription: one slow subscriber does not block the others, but the publisher must inspect `TopicPublishResult` and each subscription's statistics. `LatestMailbox` overwrites old values by design. Never assume delivery.
 
 ## Close, timeout, and stale are distinct
 
@@ -44,8 +44,16 @@ Capacity is a pressure-relief contract, not an implementation detail. For `MpscC
 
 `CommStats` and `CommEventCallback` report drops, overwrites, stale reads, latency, lag, and missed phases. They do not automatically contribute to `ExecutorFailureStatus` or invoke `Executor::set_failure_callback()`. Bridge component events to your monitoring system if alerts must be unified.
 
-Unbound `RealtimeChannel` and `DoubleBuffer` use mutex-backed paths. Their APIs express bounded cycle consumption and complete value snapshots, respectively; neither is a lock-free or hard-real-time guarantee. For a phase-bound single value, explicitly call `bind_to_phase_gate()` on `DoubleBuffer` or `LatestMailbox`; this LET mode is fixed two-slot SWSR, not a FIFO `RealtimeChannel` replacement.
+`MpscChannel` and `RealtimeChannel` preallocate their bounded MPSC nodes at construction and allow one logical consumer. `LatestMailbox` and unbound `DoubleBuffer` use four fixed reader-pinned slots, so a writer never mutates a slot while a reader copies a non-trivial `T`. `PhaseGate` and `Sequencer` use nonblocking atomic state cores. These primitives reject construction when the required synchronization atomics are not lock-free.
 
-`Topic` also uses mutexes and a dynamic subscription registry, with copying and fan-out time growing with subscriber count. It is an in-process, no-replay, best-effort event primitive, not a hard-real-time path or a network broker with persistence, acknowledgement, and reconnect. Use `Topic<std::shared_ptr<const T>>` explicitly for large immutable payloads.
+Keep the guarantees separate. Data-race-free describes valid concurrent access; `is_synchronization_lock_free()` describes only internal synchronization atomics; preallocated internal storage says nothing about allocation inside `T`; and none of these alone proves hard real-time. Snapshot `try_load()` checks at most four slots. Snapshot `try_publish()` is non-waiting and system-wide lock-free, but its CAS may retry under contention, so it is neither per-call bounded nor wait-free. Payload operations, clocks, strings/results, callbacks, page faults, and OS scheduling remain outside the guarantee. Guaranteed/timeout compatibility APIs such as `publish()`, `load()`, `send_for()`, `receive_for()`, and phase waits may spin/yield, so real-time code must select the appropriate non-waiting API and validate a measured cycle budget. Callback configuration and invocation are control-plane diagnostics.
+
+Snapshot sequences are finite (`2^56 - 1` is the last value): exhaustion makes `try_publish()` return `false`, while retrying publish/update compatibility APIs throw `std::overflow_error`. Phase and ticket state must be below `2^63`; invalid waits return `InvalidArgument` before polling. Phase-bound LET publication has the tighter limit `phase < 2^63 - 1` because its two-slot state reserves the maximum value as an empty sentinel.
+
+`Sequencer` is a watermark, not a strict ticket queue. `publish(ticket)` may skip intermediate tickets; `is_published(ticket)` means the watermark reached or passed it. Exact `wait_until_published()` succeeds only at equality and returns `MissedPhase` after the watermark passes the requested ticket.
+
+For a phase-bound single value, explicitly call `bind_to_phase_gate()` on `DoubleBuffer` or `LatestMailbox`; this LET mode is fixed two-slot SWSR, not a FIFO `RealtimeChannel` replacement.
+
+`Topic` still uses a mutex and dynamic allocation for its subscription registry and the snapshot created by every publish fan-out; copying and fan-out time also grow with subscriber count. The whole Topic path, including `publish()`, is an in-process, no-replay, best-effort event primitive, not a hard-real-time path or a network broker with persistence, acknowledgement, and reconnect. Use `Topic<std::shared_ptr<const T>>` explicitly for large immutable payloads.
 
 See the [complete robot pipeline](/en/tutorial/complete-robot-pipeline) for a connected example. For capacity and alerting, read [Capacity and Alerts](/en/realtime-and-communication/capacity-and-alerting); ordinary background-work selection is covered by [Choose a Submission API](/en/guides/choosing-submit-api).

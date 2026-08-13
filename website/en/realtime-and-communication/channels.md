@@ -28,7 +28,7 @@ if (frames.receive_for(frame, std::chrono::milliseconds(10))) {
 frames.close();
 ```
 
-`try_send()` and `try_receive()` do not wait. `send_for()` and `receive_for()` use `CommResult` to distinguish `Timeout`, `Closed`, and other outcomes. `close()` stops new production and wakes waiters, but already queued data can still drain.
+The channel preallocates its bounded node pool during construction. Producers construct complete values in privately claimed nodes before atomic publication; one logical consumer detaches complete batches and preserves FIFO publication order. `try_send()` and `try_receive()` are non-waiting entry points that acquire no mutex and allocate no queue storage; contended atomic retries are lock-free, not wait-free. `send_for()` and `receive_for()` spin/yield over that core and use `CommResult` to distinguish `Timeout`, `Closed`, and other outcomes, so they belong on ordinary control threads. `close()` stops new production, and already queued data can still drain.
 
 ## A channel transfers values, not task functions
 
@@ -61,7 +61,9 @@ commands.drain_for_cycle([](const ControlCommand& command) {
 
 `max_items == 0` uses configured `max_items_per_cycle`; only a configuration value of `0` means unlimited. Preserve a production bound so backlog cannot consume the entire control period. A handler exception stops this drain, increments `handler_exception_count`, emits `HandlerException`, and continues propagating the exception.
 
-`drain_for_cycle()` does not wait on a condition variable, but the current `RealtimeChannel` implementation protects its queue with a mutex. It is a bounded cycle-consumption helper, not a lock-free or hard-real-time guarantee; use a validated specialized lock-free transport where that guarantee is required.
+`RealtimeChannel` uses the same construction-time preallocated MPSC core and one-logical-consumer contract. `try_send()`, `drain_for_cycle()`, close, and state queries acquire no mutex or queue-storage allocation. Construction throws rather than silently falling back when the required pointer/integer atomics are not lock-free. `is_synchronization_lock_free()` reports only that internal synchronization property.
+
+This still does not make the whole call hard real-time. Copying/moving/destructing `T`, `steady_clock`, the handler, exception propagation, diagnostic event strings/callbacks, page faults, and OS scheduling are outside the guarantee. Configure callbacks only on the diagnostic/control plane; invoke the cycle with bounded, non-throwing payload operations and handler code, then validate the complete path on the target platform. Lock-free also does not mean every contended operation is wait-free.
 
 The handler receives `const T&` valid only for that call. Copy or transfer it to an owned object before retaining it asynchronously. Keep the handler bounded and nonblocking because it runs inside the real-time cycle.
 

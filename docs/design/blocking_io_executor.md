@@ -45,7 +45,10 @@ worker，使 `wait_for_completion()`、负载均衡、任务超时和队列指�
 - 不保证端到端硬实时性，也不因“尽快收包”默认提升到 `SCHED_FIFO`。
 - 不把所有通信对象自动注册到 Executor 的 failure 面；通信背压、陈旧数据和协议错误有独立语义。
 - 不承诺仅靠 `std::stop_token` 可以取消第三方库的阻塞调用。
-- 不改变 `LatestMailbox<T>`、`RealtimeChannel<T>` 当前的锁实现。硬实时消费者须根据对象、复制成本和锁竞争单独评估，不能从类型名推导无锁保证。
+- 不改变通信原语的同步契约。`RealtimeChannel<T>` 使用预分配 MPSC 核心，`LatestMailbox<T>` 使用
+  四槽 reader pin 快照，但内部同步 lock-free 不覆盖 payload、callback、时钟、缺页或 OS 调度；
+  硬实时消费者仍须验证完整路径。动态 `Topic<T>` 连同 publish fan-out 明确保留 mutex 与动态分配，
+  只能用于非实时事件分发。
 
 ## 项目边界
 

@@ -20,10 +20,10 @@ Read the header for the chosen primitive and `src/executor/comm/realtime_memory.
 - Bounded channels report full/drop outcomes; callers cannot assume delivery from a publish attempt alone.
 - `Topic<T>` fans post-subscription events out to independent bounded subscription queues. `TopicPublishResult` reports matched, delivered, and rejected subscriber counts; no subscribers is a successful empty delivery.
 - A subscription's slow/full/closed state affects only that subscription. Publish snapshot and registry removal are the publish/unsubscribe linearization points; an in-flight snapshot may deliver or reject after concurrent unsubscribe without accessing destroyed state.
-- Topic/subscription close wakes waiters and permits queued messages to drain. Topic does not provide replay, acknowledgements, cross-subscriber atomicity, networking, or hard-realtime guarantees.
+- Topic/subscription close makes polling wait adapters observe `Closed` and permits queued messages to drain. Topic does not provide replay, acknowledgements, cross-subscriber atomicity, networking, or hard-realtime guarantees; its registry and every publish fan-out snapshot retain mutex/dynamic-allocation behavior.
 - `LatestMailbox` intentionally overwrites old values; it is not FIFO.
 - `DoubleBuffer` is a snapshot mechanism, and phase-bound variants express logical-time visibility rather than general queueing.
-- Current mutex-backed primitives do not make a hard-realtime guarantee.
+- Preallocated channels and reader-pinned snapshots have lock-free internal synchronization, but payload operations, callbacks, clocks, allocation and scheduling remain outside that guarantee. Snapshot `try_publish()` is system-wide lock-free, not per-call bounded/wait-free; `try_load()` checks at most four slots.
 
 ## Change Safeguards
 

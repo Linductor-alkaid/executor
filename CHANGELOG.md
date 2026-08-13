@@ -17,6 +17,10 @@
 
 ### 修复与改进
 
+- **通信同步核心无锁化**：`MpscChannel` / `RealtimeChannel` 改为构造期预分配的有界 MPSC 节点池，
+  `LatestMailbox` / 未绑定 `DoubleBuffer` 改为固定 reader-pin 快照槽，`PhaseGate` / `Sequencer`
+  改为原子状态核心；新增同步原子 lock-free 查询与构造期平台校验。该保证不覆盖 payload、callback、
+  时钟、缺页或 OS 调度，`Topic` fan-out 仍属于 mutex 与动态分配支持的非实时控制面。
 - **线程池扩缩容并发安全**：本地 worker 队列改以原子发布的 `shared_ptr` 快照访问，调度、窃取与 resize 通过读写锁协调，避免队列替换期间的悬空访问和 UAF；shutdown 与 resize 的 join 路径也已串行化。
 - **任务调度边界**：移除 `TaskDispatcher` 的旧引用构造路径；空本地队列快照不会从调度器取走任务或发生越界访问。
 - **实时契约实现边界**：LET 绑定要求固定双缓冲容量和不抛异常的复制语义；每个相位只允许一次发布，缺失上一相位数据或相位转换中读取会返回明确的通信错误。

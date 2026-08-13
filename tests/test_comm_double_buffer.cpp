@@ -2,8 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <vector>
@@ -24,6 +26,42 @@ struct State {
     std::string label;
 };
 
+struct LetState {
+    uint64_t version = 0;
+    uint64_t checksum = 0;
+    std::array<uint64_t, 16> lanes{};
+};
+
+struct NonDefaultState {
+    explicit NonDefaultState(int value) noexcept : value(value) {}
+    NonDefaultState() = delete;
+    NonDefaultState(const NonDefaultState&) noexcept = default;
+    NonDefaultState& operator=(const NonDefaultState&) noexcept = default;
+
+    int value;
+};
+
+LetState make_let_state(uint64_t version) noexcept {
+    LetState state;
+    state.version = version;
+    state.checksum = version * 17U;
+    for (size_t index = 0; index < state.lanes.size(); ++index) {
+        state.lanes[index] = version ^ (0x9e3779b97f4a7c15ULL + index);
+    }
+    return state;
+}
+
+bool is_consistent(const LetState& state) noexcept {
+    if (state.checksum != state.version * 17U) return false;
+    for (size_t index = 0; index < state.lanes.size(); ++index) {
+        if (state.lanes[index] !=
+            (state.version ^ (0x9e3779b97f4a7c15ULL + index))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 State make_state(int version) {
     return State{
         .version = version,
@@ -35,6 +73,16 @@ State make_state(int version) {
 void expect_consistent(const State& state) {
     EXPECT_EQ(state.checksum, state.version * 17);
     EXPECT_EQ(state.label, "state-" + std::to_string(state.version));
+}
+
+TEST(CommDoubleBufferTest, SupportsNonDefaultConstructibleValues) {
+    DoubleBuffer<NonDefaultState> buffer(NonDefaultState{1});
+    EXPECT_EQ(buffer.load().value.value, 1);
+
+    EXPECT_EQ(buffer.publish(NonDefaultState{2}), 1U);
+    Snapshot<NonDefaultState> snapshot{NonDefaultState{0}};
+    ASSERT_TRUE(buffer.try_load(snapshot));
+    EXPECT_EQ(snapshot.value.value, 2);
 }
 
 TEST(CommDoubleBufferTest, LoadReturnsInitialSnapshot) {
@@ -217,6 +265,61 @@ TEST(CommDoubleBufferTest, PhaseBoundModeDiagnosesMissingPriorPhase) {
     const auto result = buffer.load_for_current_phase(snapshot);
     EXPECT_FALSE(result);
     EXPECT_EQ(result.error_code, CommErrorCode::NotReady);
+}
+
+TEST(CommDoubleBufferTest, ConcurrentLetWritersPublishOneCompleteSnapshotPerPhase) {
+    constexpr size_t kWriterCount = 8;
+    constexpr uint64_t kPhaseCount = 64;
+
+    PhaseGate gate("multi_writer_let");
+    DoubleBuffer<LetState> buffer(make_let_state(0));
+    ASSERT_TRUE(buffer.bind_to_phase_gate(gate));
+    ASSERT_TRUE(buffer.is_synchronization_lock_free());
+
+    for (uint64_t phase = 0; phase < kPhaseCount; ++phase) {
+        std::atomic<size_t> ready{0};
+        std::atomic<bool> start{false};
+        std::array<CommErrorCode, kWriterCount> results{};
+        std::vector<std::thread> writers;
+        writers.reserve(kWriterCount);
+
+        for (size_t writer = 0; writer < kWriterCount; ++writer) {
+            writers.emplace_back([&, writer] {
+                const LetState candidate =
+                    make_let_state((phase + 1U) * 1000U + writer);
+                ready.fetch_add(1, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                const auto result = buffer.publish_for_current_phase(candidate);
+                results[writer] = result.error_code;
+            });
+        }
+
+        while (ready.load(std::memory_order_acquire) != kWriterCount) {
+            std::this_thread::yield();
+        }
+        start.store(true, std::memory_order_release);
+        for (auto& writer : writers) writer.join();
+
+        size_t successes = 0;
+        for (const CommErrorCode result : results) {
+            if (result == CommErrorCode::Ok) {
+                ++successes;
+            } else {
+                EXPECT_TRUE(result == CommErrorCode::NotReady ||
+                            result == CommErrorCode::MissedPhase);
+            }
+        }
+        ASSERT_EQ(successes, 1U) << "phase=" << phase;
+
+        ASSERT_TRUE(gate.advance());
+        Snapshot<LetState> snapshot;
+        ASSERT_TRUE(buffer.load_for_current_phase(snapshot));
+        EXPECT_EQ(snapshot.sequence, phase);
+        EXPECT_TRUE(is_consistent(snapshot.value));
+        EXPECT_EQ(snapshot.value.version / 1000U, phase + 1U);
+    }
 }
 
 } // namespace
