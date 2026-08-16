@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   cross-compile:
@@ -20,7 +21,7 @@ jobs:
         ndk: [r26c, r28b]
 
     env:
-      NDK_DIR: ${{ runner.temp }}/android-ndk-${{ matrix.ndk }}
+      NDK_DIR: ${{ github.workspace }}/.android-ndk/${{ matrix.ndk }}
       BUILD_DIR: build-android
 
     steps:
@@ -88,9 +89,9 @@ jobs:
         with:
           name: executor-android-${{ matrix.ndk }}
           path: |
-            ${{ env.BUILD_DIR }}/arm64-v8a/static/install
-            ${{ env.BUILD_DIR }}/arm64-v8a/shared/install
-            ${{ env.BUILD_DIR }}/x86_64/static/install
-            ${{ env.BUILD_DIR }}/x86_64/shared/install
+            build-android/arm64-v8a/static/install
+            build-android/arm64-v8a/shared/install
+            build-android/x86_64/static/install
+            build-android/x86_64/shared/install
           if-no-files-found: error
           retention-days: 7

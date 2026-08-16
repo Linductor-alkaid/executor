@@ -83,3 +83,4 @@ third_party/opencv/
 !assets/
 
 .plainctl/
+/.android-ndk/
