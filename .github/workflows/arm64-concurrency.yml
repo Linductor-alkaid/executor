@@ -48,3 +48,43 @@ jobs:
         run: |
           ctest --output-on-failure -R \
             '^(android_smoke|test_stop_token_compat|test_executor_manager_android_defaults|test_android_lockfree_queue_core|test_multithread_mpsc|test_lockfree_worker_queue_concurrent_steal)$'
+
+      - name: Rerun lockfree tests pinned to one core
+        working-directory: build
+        run: |
+          taskset -c 0 ctest --output-on-failure -R \
+            '^(test_android_lockfree_queue_core|test_multithread_mpsc|test_lockfree_worker_queue_concurrent_steal)$'
+
+  asan-ubsan:
+    name: ARM64 Linux ASan/UBSan lockfree tests
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure sanitizers
+        run: |
+          cmake -S . -B build-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
+            -DEXECUTOR_BUILD_TESTS=ON \
+            -DEXECUTOR_BUILD_EXAMPLES=OFF \
+            -DEXECUTOR_ENABLE_GPU=OFF \
+            -DEXECUTOR_ENABLE_CUDA=OFF \
+            -DEXECUTOR_ENABLE_OPENCL=OFF
+
+      - name: Build sanitizer lockfree tests
+        run: |
+          cmake --build build-asan --target \
+            test_android_lockfree_queue_core \
+            test_multithread_mpsc \
+            test_lockfree_worker_queue_concurrent_steal
+
+      - name: Run sanitizer lockfree tests
+        working-directory: build-asan
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          ctest --output-on-failure -R \
+            '^(test_android_lockfree_queue_core|test_multithread_mpsc|test_lockfree_worker_queue_concurrent_steal)$'
