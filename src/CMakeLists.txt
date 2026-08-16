@@ -111,15 +111,20 @@ endif()
 
 # 平台特定的链接库
 if(UNIX AND NOT APPLE)
-    # Linux: 链接 pthread（用于thread_utils中的pthread函数）
+    # Linux/Android: pthread 用于 thread_utils 中的线程调度函数
     find_package(Threads REQUIRED)
     target_link_libraries(executor PUBLIC Threads::Threads)
-    # Clang may lower std::atomic<T>::is_lock_free() to the libatomic runtime.
-    # executor is commonly static, so expose this as a transitive dependency
-    # for examples and downstream consumers as well.
-    target_link_libraries(executor PUBLIC atomic)
-    # 链接rt库（用于某些Linux系统上的实时调度函数）
-    target_link_libraries(executor PRIVATE rt)
+    if(ANDROID)
+        # bionic 已把 pthread / rt / sched 函数合并进 libc；Android 没有 librt，
+        # arm64 等 ABI 也不需要把 libatomic 作为公共依赖导出。
+    else()
+        # Clang may lower std::atomic<T>::is_lock_free() to the libatomic runtime.
+        # executor is commonly static, so expose this as a transitive dependency
+        # for examples and downstream consumers as well.
+        target_link_libraries(executor PUBLIC atomic)
+        # 链接rt库（用于某些Linux系统上的实时调度函数）
+        target_link_libraries(executor PRIVATE rt)
+    endif()
 elseif(WIN32)
     # Windows Multimedia API（timeBeginPeriod / timeEndPeriod）
     target_link_libraries(executor PRIVATE winmm)

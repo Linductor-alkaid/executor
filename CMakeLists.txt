@@ -14,8 +14,19 @@ option(EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD
        "Enable Linux diagnostic allocation tracking for explicitly guarded realtime paths" OFF)
 
 # GPU 支持选项
-option(EXECUTOR_ENABLE_GPU "Enable GPU support" ON)
-option(EXECUTOR_ENABLE_CUDA "Enable CUDA support" ON)
+# Android 一期默认关闭 GPU；用户显式传入 -DEXECUTOR_ENABLE_GPU=ON 时仍可覆盖。
+if(ANDROID AND NOT DEFINED EXECUTOR_ENABLE_GPU)
+    set(_executor_enable_gpu_default OFF)
+else()
+    set(_executor_enable_gpu_default ON)
+endif()
+if(ANDROID AND NOT DEFINED EXECUTOR_ENABLE_CUDA)
+    set(_executor_enable_cuda_default OFF)
+else()
+    set(_executor_enable_cuda_default ON)
+endif()
+option(EXECUTOR_ENABLE_GPU "Enable GPU support" ${_executor_enable_gpu_default})
+option(EXECUTOR_ENABLE_CUDA "Enable CUDA support" ${_executor_enable_cuda_default})
 option(EXECUTOR_ENABLE_OPENCL "Enable OpenCL support" OFF)
 
 # 无锁工作线程队列（需配套支持 TaskDispatcher 模板化的双模式构建）
