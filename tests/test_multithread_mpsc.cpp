@@ -224,6 +224,7 @@ static int test_push_batch_cas_retry_consistency() {
     util::LockFreeQueue<Payload> q(kCapacity, 1, true);
 
     std::atomic<bool> start_flag{false};
+    std::atomic<int> producers_finished{0};       // 完成全部 batch 的 producer 数
     std::atomic<int> producer_failure_count{0};   // 仅统计 !ok (完全失败)
     std::atomic<int> producer_partial_count{0};   // 统计 ok && pushed < kItemsPerBatch
     std::vector<std::atomic<int>> per_producer_pushed(kProducers);
@@ -260,6 +261,7 @@ static int test_push_batch_cas_retry_consistency() {
                     }
                 }
             }
+            producers_finished.fetch_add(1, std::memory_order_release);
         });
     }
 
@@ -274,18 +276,16 @@ static int test_push_batch_cas_retry_consistency() {
         while (!start_flag.load(std::memory_order_acquire)) {
             std::this_thread::yield();
         }
-        int idle_polls = 0;
         while (true) {
-            size_t popped = q.pop_batch(pop_buf.data(), kPopBufSize);
+            const size_t popped = q.pop_batch(pop_buf.data(), kPopBufSize);
             for (size_t i = 0; i < popped; ++i) seen.insert(pop_buf[i]);
             total_popped += static_cast<int64_t>(popped);
-            if (popped == 0) {
-                ++idle_polls;
-            } else {
-                idle_polls = 0;
+            // 所有 producer 的 push_batch 均已返回后才允许以一次空 pop 判定
+            // 队列耗尽；此前空 pop 只表示当前消费速度快于生产速度。
+            if (popped == 0 &&
+                producers_finished.load(std::memory_order_acquire) == kProducers) {
+                break;
             }
-            // 退出条件: 连续多次 pop 不到(producer 已全部 join 后才会触发)
-            if (idle_polls >= 1000) break;  // 一次 pop_batch + yield 循环
             std::this_thread::yield();
         }
     });

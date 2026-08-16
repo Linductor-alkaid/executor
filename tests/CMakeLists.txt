@@ -1,15 +1,40 @@
 # tests/CMakeLists.txt
 # 配置测试框架和测试可执行文件
 
+# 收集测试源文件
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "*.cpp")
+
+# 不依赖 GTest 的 standalone 测试：桌面 CI 和 Android smoke 都可直接构建运行。
+foreach(STANDALONE_TEST_SOURCE
+        android_smoke.cpp
+        test_stop_token_compat.cpp
+        test_executor_manager_android_defaults.cpp
+        test_android_lockfree_queue_core.cpp
+        test_multithread_mpsc.cpp
+        test_lockfree_worker_queue_concurrent_steal.cpp)
+    list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/${STANDALONE_TEST_SOURCE}$")
+    get_filename_component(STANDALONE_TEST_NAME ${STANDALONE_TEST_SOURCE} NAME_WE)
+    add_executable(${STANDALONE_TEST_NAME} ${STANDALONE_TEST_SOURCE})
+    target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE executor)
+    target_include_directories(${STANDALONE_TEST_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+    )
+    if(MSVC)
+        target_compile_options(${STANDALONE_TEST_NAME} PRIVATE /utf-8)
+    endif()
+    add_test(NAME ${STANDALONE_TEST_NAME} COMMAND ${STANDALONE_TEST_NAME})
+    set_tests_properties(${STANDALONE_TEST_NAME} PROPERTIES
+        LABELS "unit;standalone"
+        TIMEOUT 120
+    )
+endforeach()
+
 # 查找 Google Test
 find_package(GTest)
 if(NOT GTest_FOUND)
-    message(STATUS "GTest not found. Skipping tests.")
+    message(STATUS "GTest not found. Skipping GTest tests.")
     return()
 endif()
-
-# 收集测试源文件
-file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "*.cpp")
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_dispatch_task_fallback\\.cpp$")
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_object_pool_double_release_detect\\.cpp$")
 

@@ -1,0 +1,50 @@
+name: ARM64 concurrency
+
+on:
+  # 仅手动触发：公共 ARM64 runner 队列不稳定，不作为 push 门禁。
+  workflow_dispatch:
+    inputs:
+      soak_seconds:
+        description: 'MPSC soak duration in seconds (0 disables soak)'
+        required: false
+        default: '30'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  standalone-tests:
+    name: ARM64 Linux standalone concurrency tests
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DEXECUTOR_BUILD_TESTS=ON \
+            -DEXECUTOR_BUILD_EXAMPLES=OFF \
+            -DEXECUTOR_ENABLE_GPU=OFF \
+            -DEXECUTOR_ENABLE_CUDA=OFF \
+            -DEXECUTOR_ENABLE_OPENCL=OFF
+
+      - name: Build standalone tests
+        run: |
+          cmake --build build --target \
+            android_smoke \
+            test_stop_token_compat \
+            test_executor_manager_android_defaults \
+            test_android_lockfree_queue_core \
+            test_multithread_mpsc \
+            test_lockfree_worker_queue_concurrent_steal
+
+      - name: Run standalone tests
+        working-directory: build
+        env:
+          EXECUTOR_ANDROID_SOAK_SECONDS: ${{ github.event.inputs.soak_seconds || '30' }}
+        run: |
+          ctest --output-on-failure -R \
+            '^(android_smoke|test_stop_token_compat|test_executor_manager_android_defaults|test_android_lockfree_queue_core|test_multithread_mpsc|test_lockfree_worker_queue_concurrent_steal)$'
