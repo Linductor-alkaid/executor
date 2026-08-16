@@ -45,6 +45,16 @@ Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉
   调用者通过新增的条件变量等待排空完成，保持"第二个调用者等第一个排空结束后
   才返回"的旧语义。新增回归测试 `tests/test_shutdown_drain_reentrancy.cpp`
   （旧实现在该测试下确定性死锁）。
+- **修复 P-260816-002（H1）**：`Executor` 定时器线程启停竞态。旧实现先原子置位
+  `timer_running_` 再创建线程并给 `timer_thread_` 赋值，并发 `shutdown` 会在成员尚未
+  赋值时读取它（数据竞争 UB）并跳过 join；随后赋值出的 joinable 线程成员在析构时触发
+  `std::terminate`，竞态窗口内提交的延迟任务 future 永久悬挂。现在：`timer_thread_` /
+  `timer_state_` / 测试工厂由 `timer_thread_mutex_` 保护，赋值完成后才置位运行标志；
+  每代线程持有独立的停止标志，停止只对本代置位（join 期间并发重启不会复活旧线程，
+  join 必定返回）；join 在锁外执行。`submit_delayed` 在入队临界区内检查停止位，
+  消除"入队后无人处理"的悬挂 future；`set_timer_thread_factory_for_test` 同步化。
+  新增回归测试 `tests/test_timer_thread_lifecycle_race.cpp`（旧实现下延迟任务
+  future 永久悬挂 / `std::terminate`，测试确定性命中）。
 
 ### 验证
 
@@ -58,6 +68,10 @@ Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉
   关停/生命周期相关测试（`test_shutdown_drain_reentrancy`、`test_concurrent_stop_submit`、
   `test_thread_pool_self_shutdown` 等）在 ThreadSanitizer 下无警告；该回归测试已加入
   CI TSan 任务清单。
+- P-260816-002 修复验证：树内 Debug 构建 106/106 ctest 通过（除 benchmark 标签外）；
+  定时器相关测试（`test_timer_thread_lifecycle_race`、`test_periodic_failure_observability`、
+  `test_realtime_timer_period_race`、`test_timer_period_guard`、`test_executor_facade`）在
+  ThreadSanitizer 下无警告；该回归测试同样加入 CI TSan 任务清单。
 
 ---
 
