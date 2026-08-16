@@ -1,9 +1,9 @@
 ---
 layout: home
 hero:
-  name: Executor 使用手册
-  text: 为 C++20 程序提供可靠的任务执行与线程管理
-  tagline: 十分钟完成构建、自动提交第一个任务、获取结果并观察异常。
+  name: Executor
+  text: 面向 C++20 应用的进程内并发执行基础设施
+  tagline: 统一 Facade 管理普通异步任务、低延迟队列、周期实时线程、长期 Blocking I/O 和可选 GPU 工作；从 submit_auto() 开始。
   actions:
     - theme: brand
       text: 十分钟开始使用
@@ -15,7 +15,7 @@ features:
   - title: 先完成一个任务
     details: 从 submit_auto() 和 future.get() 开始，不要求先理解线程池、GPU 或实时调度器。
   - title: 约束明确后再下钻
-    details: 需要有界接收、长期 I/O、实时周期或 GPU 双路径时，再进入相应的专家专题。
+    details: 只有遇到明确的周期、容量、I/O 或数据传递约束时，才进入有界投递、长期 worker、实时、通信或 GPU 等专用路径。
   - title: 示例可验证
     details: 页面核心代码对应仓库中的教程示例，并由根 CMake 工程持续编译和 smoke test。
 ---
@@ -30,6 +30,10 @@ executor.shutdown();
 ```
 
 `get()` 同时获取结果和重新抛出任务中的异常。完整代码与预期输出见[第一个任务](/zh/quick-start/first-task)。
+
+## 能力边界
+
+Executor 不是协程运行时、分布式消息系统或硬实时操作系统；它不能安全地强制终止任意正在运行的 C++ 函数，`submit_periodic()` 只是普通线程池上的软周期任务。完整边界（含 0.4.0 同步无锁保证）见 [Executor 是什么](/zh/getting-started/what-is-executor)。
 
 ## 从这里继续
 

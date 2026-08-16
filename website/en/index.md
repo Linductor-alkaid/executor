@@ -1,9 +1,9 @@
 ---
 layout: home
 hero:
-  name: Executor Guide
-  text: Reliable task execution and thread management for C++20
-  tagline: Build, submit work, retrieve results, and observe failures in ten minutes.
+  name: Executor
+  text: In-process concurrency infrastructure for C++20 applications
+  tagline: One facade for ordinary async tasks, low-latency queues, periodic realtime threads, blocking I/O, and optional GPU work. Start from submit_auto().
   actions:
     - theme: brand
       text: Start in ten minutes
@@ -15,7 +15,7 @@ features:
   - title: Finish one task first
     details: Start with submit_auto(lambda) and future.get(); you do not need to understand thread pools, GPUs, or real-time scheduling first.
   - title: Choose APIs by scenario
-    details: Introduce priority, delayed, periodic, batch, and dependency APIs only when the workload requires them.
+    details: Introduce priority, delay, periodic, batch, dependency, bounded dispatch, worker, or GPU APIs only when timing, capacity, I/O, or data-transfer constraints require them.
   - title: Examples stay verified
     details: Core snippets point to tutorial sources compiled and smoke-tested by the root CMake project.
 ---
@@ -30,6 +30,10 @@ executor.shutdown();
 ```
 
 `get()` both retrieves the result and rethrows an exception from the task. See [your first task](/en/quick-start/first-task) for complete code and expected output.
+
+## Scope and boundaries
+
+Executor is not a coroutine runtime, a distributed messaging system, or a hard realtime OS. It cannot safely force arbitrary running C++ functions to terminate, and `submit_periodic()` is soft periodic work on the ordinary pool, not a dedicated realtime thread. See [what is Executor?](/en/getting-started/what-is-executor) for the complete boundary statement, including the 0.4.0 synchronization guarantees.
 
 ## Continue from here
 

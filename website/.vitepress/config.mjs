@@ -3,7 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   lang: 'zh-CN',
   title: 'Executor 使用手册',
-  description: '面向实时系统与机器人应用的高性能 C++20 任务执行器：线程池、优先级调度、实时任务与无锁通信。',
+  description: '面向 C++20 应用的进程内并发执行基础设施：统一 Facade 管理普通异步任务、低延迟队列、周期实时线程、长期 Blocking I/O 与可选 GPU 工作。',
   locales: {
     root: {
       label: '简体中文',
@@ -13,7 +13,7 @@ export default defineConfig({
       label: 'English',
       lang: 'en-US',
       title: 'Executor Guide',
-      description: 'A high-performance C++20 task executor for real-time systems and robotics, with thread pools, priority scheduling, realtime tasks, and lock-free communication.',
+      description: 'In-process concurrency infrastructure for C++20 applications: one facade for ordinary async tasks, low-latency queues, periodic realtime threads, long-lived blocking I/O, and optional GPU work.',
       themeConfig: {
         logo: '/executor.svg',
         siteTitle: 'Executor Guide',
@@ -24,7 +24,7 @@ export default defineConfig({
           {
             text: 'Reference',
             items: [
-              { text: 'Versions and Migration · v0.3.1', link: '/en/reference/version-and-migration' },
+              { text: 'Versions and Migration · v0.4.0', link: '/en/reference/version-and-migration' },
               { text: 'Complete API Reference', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' }
             ]
           },
@@ -197,7 +197,7 @@ export default defineConfig({
       {
         text: '参考',
         items: [
-          { text: '版本与迁移 · v0.3.1', link: '/zh/reference/version-and-migration' },
+          { text: '版本与迁移 · v0.4.0', link: '/zh/reference/version-and-migration' },
           { text: '完整 API 参考', link: '/zh/reference/api' }
         ]
       },
