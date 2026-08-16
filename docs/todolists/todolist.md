@@ -30,7 +30,7 @@
 
 - [x] 实现 `src/executor/util/lockfree_queue.hpp`（无锁队列）
 - [x] 实现 `src/executor/util/exception_handler.cpp`
-- [x] 实现 `src/executor/util/thread_utils.cpp`（线程优先级、CPU 亲和性，支持 Linux/Windows）
+- [x] 实现 `src/executor/util/thread_utils.cpp`（线程优先级、CPU 亲和性，支持 Linux/Windows/Android（Android 为 CPU-only））
 - [x] 编写 util 模块单元测试
 
 ---

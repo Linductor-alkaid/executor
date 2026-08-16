@@ -449,7 +449,7 @@ valgrind --leak-check=full ./build/tests/stress_test --duration=3600
 
 - Windows 高精度定时器需 Windows 10 1803+
 - 需添加版本检测和降级方案
-- 保持 Linux/Windows 行为一致性
+- 保持 Linux/Windows 行为一致性；Android 路径保持 CPU-only 与 best-effort 语义
 
 ### API 兼容性
 

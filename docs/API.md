@@ -1115,7 +1115,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `min_threads` | `size_t` | `0` | 0 = 自适应 sentinel；按 `hw_concurrency` 计算（min 2）；Android 按不超过 4 核的调度预算计算 |
 | `max_threads` | `size_t` | `0` | 0 = 自适应 sentinel；默认 hw；Android 默认上限 4；探测失败退到 (2, 4) |
 | `queue_capacity` | `size_t` | `1000` | 任务队列容量 |
-| `thread_priority` | `int` | `0` | 线程优先级（Linux SCHED_FIFO 1–99，Windows `SetThreadPriority`） |
+| `thread_priority` | `int` | `0` | 线程优先级（Linux SCHED_FIFO 1–99，Windows `SetThreadPriority`；Android best-effort，默认不自动提升） |
 | `cpu_affinity` | `std::vector<int>` | 空 | 空 = 自适应 sentinel；桌面 Linux 自动填 [0..hw-1]；Android 取 `sched_getaffinity` 允许 cpuset，失败则保持 OS 自由调度；显式设值保留 |
 | `task_timeout_ms` | `int64_t` | `0` | > 0: 软超时 (执行前 check elapsed >= timeout 则 skip + 记录 timeout_count; 暴露的 future 抛 `TimedOutException`; 不计入 fail_count; 0 = 不超时; 注意: 执行中不强制中断, C++ 无安全 kill 机制) |
 | `enable_work_stealing` | `bool` | `true` | 无锁工作窃取；`max_threads == 1` 时自动关；-10.7% 性能退化关闭 |
@@ -1130,7 +1130,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `thread_name` | `std::string` | 线程名称（Linux 下通过 `pthread_setname_np` 设置，便于 top/perf 识别） |
+| `thread_name` | `std::string` | 线程名称（Linux 通过 `pthread_setname_np` 设置；Android bionic 同样可用，便于诊断工具识别） |
 | `cycle_period_ns` | `int64_t` | 周期（纳秒），如 2 000 000 表示 2 ms |
 | `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99）；== 0 时按 `cycle_period_ns` 自适应建议（≤1 ms → 80，≤10 ms → 50，>10 ms → 0）；Android 默认保持普通调度，显式设值仍 best-effort 尝试 |
 | `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；Android 的允许集合受 cgroup/SELinux 限制；显式设值保留 |

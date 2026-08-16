@@ -25,8 +25,9 @@ Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉
   `tests/android_smoke.cpp` 等无 GTest standalone 测试。
 - **Android CI**：新增 NDK r26c / r28b 交叉编译 workflow；新增手动触发的
   `arm64-concurrency` workflow，覆盖 4 核、单核 pinned、ASan/UBSan 和可配置 MPSC soak。
-- **Android 打包文档**：新增 `docs/PACKAGE_ANDROID.md`，覆盖 NDK CMake、AGP、
-  `c++_shared` 打包、JNI shutdown 生命周期与 Prefab/AAR 模板。
+- **Android 打包与平台文档**：新增 `docs/PACKAGE_ANDROID.md`，覆盖 NDK CMake、AGP、
+  `c++_shared` 打包、JNI shutdown 生命周期与 Prefab/AAR 模板；中英文网站首页、构建页
+  与平台部署核对页同步补充 Android CPU-only 能力边界。
 
 ### 修复与改进
 
