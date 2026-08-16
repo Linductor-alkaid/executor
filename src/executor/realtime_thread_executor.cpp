@@ -101,6 +101,7 @@ bool RealtimeThreadExecutor::start() {
         auto self_handle = pthread_self();
 #endif
         if (config_.thread_priority == 0 && config_.cycle_period_ns > 0) {
+#ifndef __ANDROID__
             int auto_priority = 0;
             if (config_.cycle_period_ns <= 1'000'000) {        // <= 1ms
                 auto_priority = 80;  // 硬实时, 短周期
@@ -112,6 +113,11 @@ bool RealtimeThreadExecutor::start() {
                     util::set_thread_priority(self_handle, auto_priority),
                     std::memory_order_release);
             }
+#else
+            // Android 普通 App 通常没有 CAP_SYS_NICE，自动申请 SCHED_FIFO 只会
+            // 得到 EPERM。保持默认普通调度；确有权限的用户可显式设置
+            // RealtimeThreadConfig::thread_priority，仍按 best-effort 尝试。
+#endif
         } else if (config_.thread_priority != 0) {
             // 用户显式设了, 尊重覆盖
             priority_applied_.store(

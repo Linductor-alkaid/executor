@@ -2,6 +2,7 @@
 #include "thread_pool_executor.hpp"
 #include "realtime_thread_executor.hpp"
 #include "blocking_io_executor.hpp"
+#include "util/thread_utils.hpp"
 #include "executor/monitor/statistics_collector.hpp"
 #include "executor/interfaces.hpp"
 #include "executor/config.hpp"
@@ -75,13 +76,22 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
     // 0 = 自适应 sentinel: 按 hw_concurrency 计算实际值
     if (config.min_threads == 0 || config.max_threads == 0) {
         unsigned hw = std::thread::hardware_concurrency();
+#if defined(__ANDROID__)
+        // Android App 实际可用的 cpuset 通常小于系统在线核数，默认线程池最多 4 个
+        // worker，避免 8 核设备默认拉起 8 条常驻线程造成移动端能耗与调度压力。
+        constexpr unsigned kAndroidDefaultMaxThreads = 4;
+        const unsigned scheduling_hw =
+            (hw == 0) ? 0u : std::min(hw, kAndroidDefaultMaxThreads);
+#else
+        const unsigned scheduling_hw = hw;
+#endif
         if (hw == 0) {
             // 探测失败，退到安全默认
             pool_config.min_threads = (config.min_threads == 0) ? 2 : config.min_threads;
             pool_config.max_threads = (config.max_threads == 0) ? 4 : config.max_threads;
         } else {
-            pool_config.min_threads = (config.min_threads == 0) ? std::max(2u, hw / 4) : static_cast<unsigned>(config.min_threads);
-            pool_config.max_threads = (config.max_threads == 0) ? hw : static_cast<unsigned>(config.max_threads);
+            pool_config.min_threads = (config.min_threads == 0) ? std::max(2u, scheduling_hw / 4) : static_cast<unsigned>(config.min_threads);
+            pool_config.max_threads = (config.max_threads == 0) ? scheduling_hw : static_cast<unsigned>(config.max_threads);
         }
         // 确保 min <= max
         if (pool_config.min_threads > pool_config.max_threads) {
@@ -97,6 +107,11 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
 
     // auto-allocate affinity to all detected cores when user didn't specify
     if (pool_config.cpu_affinity.empty() && pool_config.max_threads > 0) {
+#if defined(__ANDROID__)
+        // 不使用 0..hw-1 伪列表：Android App 只允许绑定到 cgroup cpuset 内的核。
+        // 当前线程 affinity 返回允许掩码；为空或调用失败时保持 OS 自由调度。
+        pool_config.cpu_affinity = util::get_current_thread_affinity();
+#else
         unsigned hw = std::thread::hardware_concurrency();
         if (hw > 0) {
             pool_config.cpu_affinity.resize(hw);
@@ -105,6 +120,7 @@ bool ExecutorManager::initialize_async_executor(const ExecutorConfig& config) {
             }
         }
         // hw == 0: probe failed, leave empty → OS free-schedules
+#endif
     }
 
     // 创建 ThreadPoolExecutor

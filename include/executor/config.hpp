@@ -20,8 +20,8 @@ struct ThreadPoolConfig {
     size_t min_threads = 0;              // 0 = 自适应 sentinel, ExecutorManager::initialize 时按 hw_concurrency 计算 (min 2)
     size_t max_threads = 0;              // 0 = 自适应 sentinel, ExecutorManager::initialize 时按 hw_concurrency 计算 (默认 hw)
     size_t queue_capacity = 1000;        // 任务队列容量
-    int thread_priority = 0;             // 线程优先级（-20到19，Linux；Windows使用SetThreadPriority）
-    std::vector<int> cpu_affinity;       // CPU亲和性（绑定到特定核心）, 空 = auto-allocate [0..hw-1]
+    int thread_priority = 0;             // 线程优先级（-20到19，Linux；Windows使用SetThreadPriority；Android best-effort）
+    std::vector<int> cpu_affinity;       // CPU亲和性（绑定到特定核心）, 空 = auto-allocate [0..hw-1]；Android 使用 cgroup 允许 cpuset
     int64_t task_timeout_ms = 0;         // 任务超时时间（毫秒），0表示不超时
     bool enable_work_stealing = true;    // 默认开, 无锁工作窃取 -10.7% 退化; max_threads==1 时自动关
 };
@@ -32,11 +32,11 @@ struct ThreadPoolConfig {
 struct RealtimeThreadConfig {
     std::string thread_name;                              // 线程名称
     int64_t cycle_period_ns = 0;                          // 周期（纳秒），如2000000表示2ms
-    int thread_priority = 0;                              // 线程优先级（SCHED_FIFO: 1-99，Linux）
-    std::vector<int> cpu_affinity;                        // CPU亲和性 (空 = 自适应 sentinel: RealtimeThreadExecutor::start 时按 hw_concurrency 自动选核, 失败静默不绑; 显式设值尊重覆盖)
+    int thread_priority = 0;                              // 线程优先级（SCHED_FIFO: 1-99，Linux；Android 默认不自动提升，显式设值仍 best-effort）
+    std::vector<int> cpu_affinity;                        // CPU亲和性 (空 = 自适应 sentinel: 在允许 cpuset 内 round-robin; 显式设值尊重覆盖; Android 可能受 cgroup/SELinux 限制)
     std::function<void()> cycle_callback;                 // 周期回调函数
     ICycleManager* cycle_manager = nullptr;               // 可选的周期管理器接口（用于更精确的周期控制）
-    bool enable_process_memory_lock = false;              // 默认关闭；Linux mlockall 是进程级操作，会锁定当前及后续映射
+    bool enable_process_memory_lock = false;              // 默认关闭；Linux mlockall 是进程级操作；Android 普通 App 通常无权限，失败仅记录状态
     uint64_t timer_slack_ns = 1;                          // 默认 1ns, 几乎消除 50us 内核 timer slack; 显式设 0 表示保留内核默认
     // P-260618-002: 单周期任务预算. process_tasks() 每周期最多处理这么多个任务,
     // 防止生产速率短暂超过消费速率时单周期一口气耗尽整条队列, 打破"周期确定性"契约
