@@ -1,0 +1,96 @@
+name: Android CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cross-compile:
+    name: NDK ${{ matrix.ndk }} cross-compile
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ndk: [r26c, r28b]
+
+    env:
+      NDK_DIR: ${{ runner.temp }}/android-ndk-${{ matrix.ndk }}
+      BUILD_DIR: build-android
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache NDK
+        id: ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NDK_DIR }}
+          key: android-ndk-${{ matrix.ndk }}-2025-08
+
+      - name: Download and unpack NDK
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ndk-zip" "$RUNNER_TEMP/ndk-extract"
+          case "${{ matrix.ndk }}" in
+            r26c)
+              NDK_ZIP_URL="https://dl.google.com/android/repository/android-ndk-r26c-linux.zip"
+              ;;
+            r28b)
+              NDK_ZIP_URL="https://dl.google.com/android/repository/android-ndk-r28b-linux.zip"
+              ;;
+            *)
+              echo "Unknown NDK version: ${{ matrix.ndk }}"
+              exit 1
+              ;;
+          esac
+          curl -L --fail --retry 3 --connect-timeout 20 \
+            -o "$RUNNER_TEMP/ndk-zip/ndk.zip" "$NDK_ZIP_URL"
+          unzip -q "$RUNNER_TEMP/ndk-zip/ndk.zip" -d "$RUNNER_TEMP/ndk-extract"
+          ndk_root="$(find "$RUNNER_TEMP/ndk-extract" -maxdepth 1 -mindepth 1 -type d | head -n 1)"
+          mkdir -p "$NDK_DIR"
+          cp -a "$ndk_root"/. "$NDK_DIR"/
+          "$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" --version
+
+      - name: Cross-compile static and shared libraries
+        run: |
+          set -euo pipefail
+          ANDROID_NDK_HOME="$NDK_DIR" \
+            scripts/build_android.sh \
+            --abi arm64-v8a,x86_64 \
+            --api 21 \
+            --build-static true \
+            --build-shared true
+
+      - name: Verify Android shared library dependencies
+        run: |
+          set -euo pipefail
+          LLVM_READELF="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          for abi in arm64-v8a x86_64; do
+            shared_lib="$BUILD_DIR/$abi/shared/install/lib/libexecutor.so"
+            test -f "$shared_lib"
+            if "$LLVM_READELF" -d "$shared_lib" | grep -q 'librt'; then
+              echo "Unexpected librt dependency in $shared_lib"
+              exit 1
+            fi
+            "$LLVM_READELF" -d "$shared_lib" | grep -E 'NEEDED|SONAME'
+          done
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: executor-android-${{ matrix.ndk }}
+          path: |
+            ${{ env.BUILD_DIR }}/arm64-v8a/static/install
+            ${{ env.BUILD_DIR }}/arm64-v8a/shared/install
+            ${{ env.BUILD_DIR }}/x86_64/static/install
+            ${{ env.BUILD_DIR }}/x86_64/shared/install
+          if-no-files-found: error
+          retention-days: 7
