@@ -4,6 +4,49 @@
 
 ---
 
+## [Unreleased]
+
+Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉编译为静态库/共享库，
+并纳入官方模拟器与真实 ARM64 runner 的验证流程。Android 上的线程优先级、CPU 亲和性、
+`mlockall` 与 timer slack 均保持 best-effort，不承诺硬实时；CUDA/OpenCL 不进入一期。
+
+### 新增
+
+- **Android CPU-only 构建支持**：新增 `if(ANDROID)` CMake 平台分支，bionic 下不再错误
+  链接 `librt`，也不导出 `libatomic`；Android 构建默认关闭 GPU/CUDA，用户仍可显式覆盖。
+- **便携 StopToken/JThread 兼容层**：新增 `include/executor/stop_token.hpp`。桌面平台
+  `executor::StopToken` 是 `std::stop_token` 别名，保持既有 override 源码与 ABI 兼容；
+  Android libc++ 未启用 jthread 时使用自有 `StopSource` / `StopToken` / `detail::JThread`。
+- **Android 线程与 affinity 默认值**：bionic 下使用 `sched_setaffinity` /
+  `sched_getaffinity`；默认线程池上限为 4，自动 affinity 来自 cgroup 允许 cpuset；
+  短周期实时线程不再自动申请 `SCHED_FIFO`。
+- **Android 构建与设备脚本**：新增 `scripts/build_android.sh`、
+  `scripts/run_android_tests.sh`、`scripts/capture_android_device_info.sh`，以及
+  `tests/android_smoke.cpp` 等无 GTest standalone 测试。
+- **Android CI**：新增 NDK r26c / r28b 交叉编译 workflow；新增手动触发的
+  `arm64-concurrency` workflow，覆盖 4 核、单核 pinned、ASan/UBSan 和可配置 MPSC soak。
+- **Android 打包文档**：新增 `docs/PACKAGE_ANDROID.md`，覆盖 NDK CMake、AGP、
+  `c++_shared` 打包、JNI shutdown 生命周期与 Prefab/AAR 模板。
+
+### 修复与改进
+
+- 修复 `test_multithread_mpsc` 在慢速 ARM64 模拟环境下消费者过早退出导致误报的测试逻辑。
+- Android 下实时调优路径统一为 best-effort：priority / affinity / mlock / timer slack
+  失败只写入状态字段，不改变任务接受结果。
+- 为 Android 平台裁剪 NDK clang 不支持的 warning 选项，并守卫仅适用于 desktop Linux
+  的 `/proc` 测试。
+
+### 验证
+
+- 官方 Android 模拟器（API 30 x86_64，KVM）：6/6 standalone 测试通过。
+- qemu-user + NDK bionic 静态 ARM64：6/6 测试通过。
+- GitHub ARM64 runner（Neoverse-N2，4 核）：6/6、单核 pinned、ASan/UBSan、600 秒
+  MPSC soak 均通过；结果见 `docs/performance/android_a3_validation.md`。
+- big.LITTLE Android 真机验证已登记为发布前 gate，正式版本不得在未完成该项时宣称
+  已在 big.LITTLE 设备验证。
+
+---
+
 ## [0.4.0] - 2026-08-13
 
 0.4.0 聚焦通信与并发执行路径的确定性边界：核心通信组件采用构造期固定存储和原子同步，新增进程内 Topic 扇出、LET 阶段通信、实时分配诊断及延迟分位数观测；任务图句柄保留和线程池真实扩缩容也获得明确的容量与并发语义。既有主要公开调用方式保持兼容，但“同步无锁”仅描述组件内部原子与固定存储，完整实时性仍须由调用方在目标环境验证。
