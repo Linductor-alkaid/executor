@@ -163,3 +163,15 @@
 
 - [x] 完成 [Executor 使用手册网站规划](../design/user_guide_website.md)
 - [ ] 执行 [Executor 使用手册网站实施计划](user_guide_website_plan.md)
+
+---
+
+## 阶段 17：Android 平台适配
+
+- [ ] 评审 [Android 适配方案](../design/android_port.md)
+- [ ] 执行 [Android 适配实施计划](android_port_plan.md)
+- [ ] 完成 Android CPU-only 交叉编译 CI（NDK，arm64-v8a / x86_64，static / shared，API 21）
+- [ ] 完成 `executor::StopToken` 兼容层与 Blocking I/O 生命周期迁移
+- [ ] 完成 Android best-effort 调度语义和线程数 / cpuset 自适应
+- [ ] 完成 arm64 设备 smoke test、Blocking I/O 与 MPSC 弱内存序压力验证
+- [ ] 完成 Android 打包与集成文档（NDK CMake / AGP / Prefab / `c++_shared`）
