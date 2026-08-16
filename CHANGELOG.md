@@ -36,6 +36,15 @@ Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉
   失败只写入状态字段，不改变任务接受结果。
 - 为 Android 平台裁剪 NDK clang 不支持的 warning 选项，并守卫仅适用于 desktop Linux
   的 `/proc` 测试。
+- **修复 P-260816-001**：`ExecutorManager::shutdown()` 不再在持有
+  `default_async_mutex_` 时执行默认执行器的阻塞排空（`stop(wait_for_tasks)` /
+  `wait_for_completion()` 含 worker join）。此前池内任务在排空期间再入
+  `submit()` / 状态查询等持锁读路径会与 shutdown 互相等待形成自死锁；现在改为
+  锁内置闩并快照执行器、锁外排空，置闩后读路径立即走拒绝分支，与 ThreadPool
+  自身"先停止接收新任务，再等待已接受任务完成"的关停顺序对齐。并发 shutdown
+  调用者通过新增的条件变量等待排空完成，保持"第二个调用者等第一个排空结束后
+  才返回"的旧语义。新增回归测试 `tests/test_shutdown_drain_reentrancy.cpp`
+  （旧实现在该测试下确定性死锁）。
 
 ### 验证
 
@@ -45,6 +54,10 @@ Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉
   MPSC soak 均通过；结果见 `docs/performance/android_a3_validation.md`。
 - big.LITTLE Android 真机验证已登记为发布前 gate，正式版本不得在未完成该项时宣称
   已在 big.LITTLE 设备验证。
+- P-260816-001 修复验证：树内 Debug 构建 105/105 ctest 通过（除 benchmark 标签外）；
+  关停/生命周期相关测试（`test_shutdown_drain_reentrancy`、`test_concurrent_stop_submit`、
+  `test_thread_pool_self_shutdown` 等）在 ThreadSanitizer 下无警告；该回归测试已加入
+  CI TSan 任务清单。
 
 ---
 
