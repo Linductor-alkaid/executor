@@ -23,9 +23,15 @@ foreach(STANDALONE_TEST_SOURCE
         target_compile_options(${STANDALONE_TEST_NAME} PRIVATE /utf-8)
     endif()
     add_test(NAME ${STANDALONE_TEST_NAME} COMMAND ${STANDALONE_TEST_NAME})
+    if(STANDALONE_TEST_NAME STREQUAL "android_smoke")
+        # android_smoke 支持 EXECUTOR_ANDROID_SOAK_SECONDS 长稳模式。
+        set(STANDALONE_TEST_TIMEOUT 900)
+    else()
+        set(STANDALONE_TEST_TIMEOUT 120)
+    endif()
     set_tests_properties(${STANDALONE_TEST_NAME} PROPERTIES
         LABELS "unit;standalone"
-        TIMEOUT 120
+        TIMEOUT ${STANDALONE_TEST_TIMEOUT}
     )
 endforeach()
 
