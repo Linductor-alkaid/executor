@@ -16,6 +16,10 @@
 #include "executor/thread_pool/priority_scheduler.hpp"
 #include "executor/thread_pool/thread_pool.hpp"
 
+#ifdef __ANDROID__
+#include "executor/util/thread_utils.hpp"
+#endif
+
 using namespace executor;
 
 // 测试辅助宏
@@ -331,6 +335,32 @@ bool test_thread_pool_init_worker_thread_failure_rolls_back() {
     pool.shutdown();
 
     std::cout << "  ThreadPool initialize worker thread failure rollback: PASSED" << std::endl;
+    return true;
+}
+
+bool test_thread_pool_invalid_cpu_affinity_is_nonfatal() {
+    std::cout << "Testing ThreadPool invalid cpu_affinity is nonfatal..." << std::endl;
+
+    ThreadPool pool;
+    ThreadPoolConfig config;
+    config.min_threads = 1;
+    config.max_threads = 1;
+    config.queue_capacity = 8;
+    // 显式给出必然越界的 CPU id；worker 启动时绑核失败但线程池必须继续可用。
+    // Android 上 cgroup/SELinux 导致的运行时 EPERM/EINVAL 走同一非致命路径。
+    config.cpu_affinity = {999999};
+
+    TEST_ASSERT(pool.initialize(config),
+                "pool with invalid explicit affinity should still initialize");
+    auto future = pool.submit([]() noexcept { return 7; });
+    TEST_ASSERT(future.get() == 7,
+                "pool with failed affinity request should still execute tasks");
+    TEST_ASSERT(pool.get_status().total_threads == 1,
+                "pool with failed affinity request should still create its worker");
+    TEST_ASSERT(pool.shutdown(true) == ShutdownResult::Completed,
+                "pool with failed affinity request should shut down");
+
+    std::cout << "  ThreadPool invalid cpu_affinity nonfatal: PASSED" << std::endl;
     return true;
 }
 
@@ -994,6 +1024,20 @@ bool test_default_enable_work_stealing_is_true() {
 }
 
 bool test_default_cpu_affinity_is_auto_allocated() {
+#if defined(__ANDROID__)
+    std::cout << "Testing default cpu_affinity is auto-allocated from Android cpuset..." << std::endl;
+
+    ExecutorConfig config;
+    TEST_ASSERT(config.cpu_affinity.empty(), "Default cpu_affinity should be empty (auto sentinel)");
+
+    const std::vector<int> auto_affinity = executor::util::get_current_thread_affinity();
+    std::cout << "  Android allowed-cpuset affinity size = " << auto_affinity.size() << std::endl;
+    // cgroup cpuset 因设备而异，甚至可能为空；不校验具体 0..hw-1 内容。
+    for (int cpu : auto_affinity) {
+        TEST_ASSERT(cpu >= 0, "allowed cpu id must not be negative");
+    }
+    return true;
+#else
     std::cout << "Testing default cpu_affinity is auto-allocated [0..hw-1]..." << std::endl;
 
     // 1. Default config has empty cpu_affinity
@@ -1032,6 +1076,7 @@ bool test_default_cpu_affinity_is_auto_allocated() {
 
     std::cout << "  auto-affinity size = " << auto_affinity.size() << std::endl;
     return true;
+#endif
 }
 
 int main() {
@@ -1056,6 +1101,7 @@ int main() {
     all_passed &= test_thread_pool_initialize();
     all_passed &= test_thread_pool_init_oom_safety();
     all_passed &= test_thread_pool_init_worker_thread_failure_rolls_back();
+    all_passed &= test_thread_pool_invalid_cpu_affinity_is_nonfatal();
     all_passed &= test_thread_pool_shutdown_drains_when_workers_start_late();
     all_passed &= test_thread_pool_submit_basic();
     all_passed &= test_thread_pool_submit_priority();

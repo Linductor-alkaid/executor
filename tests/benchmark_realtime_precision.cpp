@@ -55,6 +55,8 @@ EnvironmentInfo environment_info() {
     info.compiler = "unknown";
 #endif
 #ifdef __linux__
+    // Android 也定义 __linux__；bionic 自 API 21 提供 sched_getcpu /
+    // sched_getscheduler，但调度策略可能返回 SCHED_NORMAL 且 affinity 受限。
     info.cpu = sched_getcpu();
     switch (sched_getscheduler(0)) {
     case SCHED_FIFO: info.scheduler = "SCHED_FIFO"; break;

@@ -16,7 +16,7 @@
 #include "executor/config.hpp"
 #include "executor/realtime_thread_executor.hpp"
 
-#ifdef __linux__
+#if defined(__linux__) && !defined(__ANDROID__)
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/resource.h>
@@ -56,7 +56,7 @@ bool test_realtime_memory_lock_process_scoped_contract() {
     TEST_ASSERT(disabled_status.process_memory_lock_errno == 0,
                 "Disabled process lock must not report a failed mlockall call");
 
-#ifdef __linux__
+#if defined(__linux__) && !defined(__ANDROID__)
     struct rlimit original_limit {};
     if (getrlimit(RLIMIT_MEMLOCK, &original_limit) == 0) {
         struct rlimit denied_limit = original_limit;
@@ -94,7 +94,7 @@ bool test_set_current_thread_name() {
     const std::string short_name = "rtchk";  // 5 字符短名
     set_current_thread_name(short_name);
 
-#ifdef __linux__
+#if defined(__linux__) && !defined(__ANDROID__)
     // 读取 /proc/self/task/<tid>/comm 验证线程名被内核接受
     pid_t tid = static_cast<pid_t>(syscall(SYS_gettid));
     std::string path = "/proc/self/task/" + std::to_string(tid) + "/comm";
@@ -108,8 +108,9 @@ bool test_set_current_thread_name() {
                 "Thread name in /proc comm should match the name set");
     std::cout << "  /proc comm = '" << comm << "'" << std::endl;
 #else
-    // 非 Linux 平台仅验证不崩溃
-    std::cout << "  (non-Linux: name set, no /proc verification)" << std::endl;
+    // Windows / Android 平台仅验证不崩溃；Android /proc 可读性由设备策略决定，
+    // 线程名验证放到 A3 真机测试。
+    std::cout << "  (non-Linux or Android: name set, no /proc verification)" << std::endl;
 #endif
 
     return true;
@@ -208,6 +209,33 @@ bool test_realtime_priority_adaptive() {
     }
 
     return true;
+}
+
+bool test_android_realtime_auto_priority_is_disabled() {
+#if defined(__ANDROID__)
+    std::cout << "Testing Android realtime auto-priority stays ordinary..." << std::endl;
+
+    executor::RealtimeThreadConfig config;
+    config.thread_name = "android_rt_auto";
+    config.cycle_period_ns = 1'000'000;  // desktop Linux 会自动建议 SCHED_FIFO 80
+    config.thread_priority = 0;
+    config.timer_slack_ns = 0;
+    config.cycle_callback = [] {};
+
+    executor::RealtimeThreadExecutor executor("android_rt_auto", config);
+    TEST_ASSERT(executor.start(), "Android short-period RT executor should start");
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    const auto status = executor.get_status();
+    executor.stop();
+
+    TEST_ASSERT(!status.priority_applied,
+                "Android default priority 0 must not auto-request SCHED_FIFO");
+    std::cout << "  Android auto-priority applied = " << status.priority_applied << std::endl;
+    return true;
+#else
+    (void)0;
+    return true;
+#endif
 }
 
 // ========== P019C: RealtimeThreadConfig::cpu_affinity 自适应 sentinel 测试 ==========
@@ -339,6 +367,7 @@ int main() {
     all_passed &= test_set_current_thread_timer_slack_ns();
     all_passed &= test_default_config_is_optimal();
     all_passed &= test_realtime_priority_adaptive();
+    all_passed &= test_android_realtime_auto_priority_is_disabled();
     all_passed &= test_default_realtime_cpu_affinity_is_adaptive_sentinel();
     all_passed &= test_explicit_realtime_cpu_affinity_is_respected();
     all_passed &= test_realtime_round_robin_auto_affinity();

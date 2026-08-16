@@ -75,6 +75,7 @@ private:
 };
 
 int process_thread_count() {
+#if defined(__linux__) && !defined(__ANDROID__)
     std::ifstream status("/proc/self/status");
     std::string field;
     while (status >> field) {
@@ -85,6 +86,9 @@ int process_thread_count() {
         }
         status.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     }
+#else
+    // Android 不保证应用可读 /proc/self/status；返回 -1 时测试自动跳过线程数比较。
+#endif
     return -1;
 }
 
