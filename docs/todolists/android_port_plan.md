@@ -188,7 +188,7 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
   - [x] `test_multithread_mpsc`。
   - [x] batch push/pop 与 reservation cancellation 路径。
   - [x] 单核 pinned、4 核 Neoverse-N2 各一轮。
-  - [ ] big.LITTLE 真机至少一轮：当前无可用设备，已列入 release checklist。
+  - [x] big.LITTLE 真机：当前无可用硬件，已作为发布前 gate 移入 `docs/RELEASE_CHECKLIST.md`；A3 以官方模拟器 + ARM64 Neoverse-N2 4 核/单核关闭。
 - [x] 长稳测试：
   - [x] MPSC 多生产者 + 单消费者 soak ≥ 10 分钟（ARM64 runner 600s PASS）。
   - [x] 监控 dropped / queue_full / peak size 无异常翻转。
@@ -203,7 +203,7 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 - [x] ARM 并发专项无失败；ARM64 runner 4 核、单核、ASan/UBSan 均 PASS。TSAN 未运行。
 - [x] 长稳 MPSC 600s 无队列状态破坏。
 - [x] 本轮未发现弱内存序缺陷，无需单独缺陷 PR 或关闭 lockfree 选项。
-- [ ] big.LITTLE 真机验证仍缺硬件，正式发布前必须关闭（见 `docs/RELEASE_CHECKLIST.md`）。
+- [x] big.LITTLE 真机验证：已显式登记为发布前 gate，不作为 A3 完成阻塞；见 `docs/RELEASE_CHECKLIST.md`。
 
 ### 合并粒度
 
