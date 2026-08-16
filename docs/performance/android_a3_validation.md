@@ -25,11 +25,11 @@ ANDROID_NDK_HOME=/path/to/ndk-r26c \
   scripts/build_android.sh --abi x86_64 --api 21 --build-static true --build-shared false --build-tests true
 ```
 
-运行：
+运行（会自动采集设备型号、API、内核与 CPU 信息）：
 
 ```bash
 PATH=/path/to/platform-tools:$PATH ANDROID_SERIAL=emulator-5554 \
-  scripts/run_android_tests.sh --test-dir build-android/x86_64/static/tests
+  scripts/capture_android_device_info.sh --test-dir build-android/x86_64/static/tests --soak-seconds 0
 ```
 
 结果：6/6 PASS。
