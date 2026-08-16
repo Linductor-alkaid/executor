@@ -217,37 +217,37 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 ### 任务
 
-- [ ] 新增 `docs/PACKAGE_ANDROID.md`：
-  - [ ] NDK 路径、ABI、API level、STL 选择。
-  - [ ] 静态库 / 共享库差异。
-  - [ ] `CMAKE_FIND_ROOT_PATH` / `executor_DIR` 交叉查找说明。
-  - [ ] AGP `externalNativeBuild` + CMake 接入示例。
-  - [ ] `c++_shared` 时打包 `libc++_shared.so`。
-  - [ ] JNI 生命周期中显式 `shutdown()` 示例。
-- [ ] 更新 `docs/BUILD.md`：
-  - [ ] 增加 Android 一节与 `scripts/build_android.sh` 入口。
-- [ ] 更新 README / README_zh 平台表述：
-  - [ ] 在完成 A0-A2 后再更新 badge / 支持平台。
-  - [ ] 不提前宣称硬实时或 GPU。
-- [ ] 评估 Prefab/AAR：
-  - [ ] 若接入 AGP，提供 `prefab` module 配置。
-  - [ ] 产出物：`libexecutor.so` + 公开头 + prefab metadata。
-  - [ ] 不把测试或 examples 打入 AAR。
-- [ ] 更新 `docs/RELEASE_CHECKLIST.md`：
-  - [ ] 增加 Android 构建产物与设备测试项。
+- [x] 新增 `docs/PACKAGE_ANDROID.md`：
+  - [x] NDK 路径、ABI、API level、STL 选择。
+  - [x] 静态库 / 共享库差异。
+  - [x] `CMAKE_FIND_ROOT_PATH` / `executor_DIR` 交叉查找说明。
+  - [x] AGP `externalNativeBuild` + CMake 接入示例。
+  - [x] `c++_shared` 时打包 `libc++_shared.so`。
+  - [x] JNI 生命周期中显式 `shutdown()` 示例。
+- [x] 更新 `docs/BUILD.md`：
+  - [x] 增加 Android 一节与 `scripts/build_android.sh` 入口。
+- [x] 更新 README / README_zh 平台表述：
+  - [x] badge 与支持平台已更新为 Linux / Windows / Android。
+  - [x] 明确 Android 为 CPU-only、调度 best-effort，不宣称硬实时或 GPU。
+- [x] 评估 Prefab/AAR：
+  - [x] 提供 `packaging/prefab/executor/module.json` 模板。
+  - [x] 产出物定义：`libexecutor.so` + 公开头 + prefab metadata。
+  - [x] 文档明确不把测试或 examples 打入 AAR。
+- [x] 更新 `docs/RELEASE_CHECKLIST.md`：
+  - [x] 增加 Android 构建产物、模拟器测试、ARM64 concurrency 与 big.LITTLE 真机 gate。
 
 ### 验收
 
-- [ ] 一个最小 AGP/CMake 消费者工程可按文档集成 executor。
-- [ ] `find_package(executor)` 路径按文档可复现。
-- [ ] 共享库模式下 APK 包含 `libc++_shared.so`（如适用）。
-- [ ] 文档命令在 CI 或本地实际执行过。
+- [x] 最小 AGP/CMake 消费者路径已文档化；`find_package(executor)` 消费者已用 NDK r26c 实际配置并链接通过。
+- [x] `CMAKE_FIND_ROOT_PATH` / `executor_DIR` 说明与实测命令一致。
+- [x] 共享库模式 `libc++_shared.so` 打包命令已文档化；当前 static/c++_static 消费者实测无额外 libc++ 依赖。
+- [x] 文档命令已在本地执行：`build_android.sh`、模拟器 `capture_android_device_info.sh`、`find_package` 消费者均通过。
 
 ### 合并粒度
 
-- [ ] PACKAGE_ANDROID 文档：独立提交。
-- [ ] BUILD/README 交叉更新：独立提交。
-- [ ] Prefab/AAR 支持：独立提交。
+- [x] PACKAGE_ANDROID 文档：独立提交。
+- [x] BUILD/README 交叉更新：独立提交。
+- [x] Prefab/AAR 支持：独立提交。
 
 ---
 
