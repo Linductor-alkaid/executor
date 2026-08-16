@@ -10,5 +10,9 @@
 - [ ] 已确认仓库 **Settings → Pages** 的部署来源为 **GitHub Actions**，并检查文档 workflow 使用 Node.js 24。
 - [ ] 已检查 GitHub Pages 预览：首页、快速开始、API 参考和 404 页面可访问。
 - [ ] 已审阅用户反馈、404 和失效链接；需要修复的内容已建立 issue。
+- [ ] Android CI（NDK r26c / r28b，arm64-v8a / x86_64，static / shared）最近一次为 success。
+- [ ] Android 官方模拟器已运行 `scripts/run_android_tests.sh` 全部 standalone 测试并 PASS。
+- [ ] ARM64 concurrency workflow（4 核、单核、ASan/UBSan、600s soak）最近一次为 success；结果同步至 `docs/performance/android_a3_validation.md`。
+- [ ] 至少一台 big.LITTLE Android 真机已复测 A3 测试集和 10 分钟 soak；如未完成，本版本不得宣称已在 big.LITTLE 设备验证。
 
 稳定版以发布 tag 触发正式发布；`master` 推送部署当前开发快照。若需要变更这一策略，先更新网站版本说明和 Pages workflow，再发布内容。

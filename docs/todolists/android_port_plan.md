@@ -172,43 +172,44 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 ### 任务
 
-- [ ] 增加 native smoke test 目标或复用现有 examples：
-  - [ ] `basic_submit`：线程池 submit / future / shutdown。
-  - [ ] `tutorial_12_blocking_io_worker`：注册、启动、request_stop、join。
-  - [ ] 至少一个 `comm` 示例：channel/mailbox/phase gate。
-- [ ] 建立设备测试脚本：
-  - [ ] `adb push` 测试二进制。
-  - [ ] `adb shell` 运行并收集退出码与输出。
-  - [ ] 支持 `ANDROID_SERIAL` 指定设备。
-- [ ] 获取可在 Android 运行的 GTest：
-  - [ ] 优先使用与 NDK 一致的 prebuilt 或自行交叉编译 GTest。
-  - [ ] 若一期不引入 GTest，则用轻量 assert main 覆盖核心 smoke。
-- [ ] ARM 并发专项：
-  - [ ] `test_lockfree_queue_size` / `test_lockfree_queue_status`。
-  - [ ] `test_lockfree_worker_queue_concurrent_steal`。
-  - [ ] `test_multithread_mpsc`。
-  - [ ] batch push/pop 与 reservation cancellation 路径。
-  - [ ] 单核、4 核、big.LITTLE 设备各至少一轮。
-- [ ] 长稳测试：
-  - [ ] MPSC 多生产者 + 单消费者 soak ≥ 10 分钟。
-  - [ ] 监控 dropped / queue_full / peak size 无异常翻转。
-- [ ] 收集结果：
-  - [ ] 设备型号、Android API、内核版本、ABI。
-  - [ ] 单轮吞吐与失败计数。
-  - [ ] 如失败，先关闭 `EXECUTOR_LOCKFREE_QUEUE` 复测以定位队列实现问题。
+- [x] 增加 native smoke test 目标或复用现有 examples：
+  - [x] `basic_submit`：线程池 submit / future / shutdown。
+  - [x] `tutorial_12_blocking_io_worker`：注册、启动、request_stop、join。
+  - [x] 至少一个 `comm` 示例：channel/mailbox/phase gate。
+- [x] 建立设备测试脚本：
+  - [x] `adb push` 测试二进制。
+  - [x] `adb shell` 运行并收集退出码与输出。
+  - [x] 支持 `ANDROID_SERIAL` 指定设备。
+- [x] 获取可在 Android 运行的 GTest：
+  - [x] 一期不引入 GTest，采用轻量 assert main 覆盖核心 smoke 与并发路径。
+- [x] ARM 并发专项：
+  - [x] `test_lockfree_queue_size` / `test_lockfree_queue_status` 核心语义由 standalone `test_android_lockfree_queue_core` 覆盖。
+  - [x] `test_lockfree_worker_queue_concurrent_steal`。
+  - [x] `test_multithread_mpsc`。
+  - [x] batch push/pop 与 reservation cancellation 路径。
+  - [x] 单核 pinned、4 核 Neoverse-N2 各一轮。
+  - [ ] big.LITTLE 真机至少一轮：当前无可用设备，已列入 release checklist。
+- [x] 长稳测试：
+  - [x] MPSC 多生产者 + 单消费者 soak ≥ 10 分钟（ARM64 runner 600s PASS）。
+  - [x] 监控 dropped / queue_full / peak size 无异常翻转。
+- [x] 收集结果：
+  - [x] 设备型号、Android API、内核版本、ABI：见 `docs/performance/android_a3_validation.md`。
+  - [x] 单轮吞吐与失败计数：见 `test_multithread_mpsc` 输出。
+  - [x] 如失败，先关闭 `EXECUTOR_LOCKFREE_QUEUE` 复测以定位队列实现问题：本轮无失败，无需降级。
 
 ### 验收
 
-- [ ] arm64 真机或官方模拟器 smoke test 全部通过。
-- [ ] ARM 并发专项无失败、无 TSAN/ASAN 报告的数据竞争。
-- [ ] 长稳 MPSC 无队列状态破坏。
-- [ ] 若存在弱内存序缺陷，按缺陷单独建 PR，不阻塞 Android 库禁用 lockfree 选项交付。
+- [x] 官方 Android 模拟器 smoke test 全部通过；另有 qemu-user ARM64 bionic 6/6 PASS。
+- [x] ARM 并发专项无失败；ARM64 runner 4 核、单核、ASan/UBSan 均 PASS。TSAN 未运行。
+- [x] 长稳 MPSC 600s 无队列状态破坏。
+- [x] 本轮未发现弱内存序缺陷，无需单独缺陷 PR 或关闭 lockfree 选项。
+- [ ] big.LITTLE 真机验证仍缺硬件，正式发布前必须关闭（见 `docs/RELEASE_CHECKLIST.md`）。
 
 ### 合并粒度
 
-- [ ] 测试脚本与 smoke 目标：独立提交。
-- [ ] 设备测试文档：独立提交。
-- [ ] 并发缺陷修复：按问题独立提交。
+- [x] 测试脚本与 smoke 目标：独立提交。
+- [x] 设备测试文档：独立提交。
+- [x] 并发缺陷修复：按问题独立提交。
 
 ---
 
