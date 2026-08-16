@@ -196,7 +196,15 @@ bool set_cpu_affinity(std::thread::native_handle_type handle,
         CPU_SET(static_cast<size_t>(cpu_id), &cpuset);
     }
     
+#ifdef __ANDROID__
+    // bionic 没有 glibc 的 pthread_setaffinity_np 扩展；Android 上对当前线程
+    // 设置 affinity 使用 gettid() + sched_setaffinity()。普通 App 仍可能因
+    // cgroup/SELinux 限制而失败，调用方继续按 best-effort 处理返回值。
+    (void)handle;
+    return sched_setaffinity(gettid(), sizeof(cpu_set_t), &cpuset) == 0;
+#else
     return pthread_setaffinity_np(handle, sizeof(cpu_set_t), &cpuset) == 0;
+#endif
 }
 
 int get_current_thread_priority() {
@@ -226,10 +234,16 @@ std::vector<int> get_current_thread_affinity() {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     
+#ifdef __ANDROID__
+    if (sched_getaffinity(gettid(), sizeof(cpu_set_t), &cpuset) != 0) {
+        return {};
+    }
+#else
     pthread_t thread = pthread_self();
     if (pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset) != 0) {
         return {};
     }
+#endif
     
     std::vector<int> cpu_ids;
     for (int i = 0; i < CPU_SETSIZE; ++i) {
