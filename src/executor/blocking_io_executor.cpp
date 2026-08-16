@@ -48,7 +48,7 @@ bool BlockingIoExecutor::start() {
 
         running_.store(true, std::memory_order_release);
         try {
-            thread_ = thread_factory_([this](std::stop_token stop_token) noexcept {
+            thread_ = thread_factory_([this](StopToken stop_token) noexcept {
                 run(stop_token);
             });
         } catch (...) {
@@ -103,7 +103,7 @@ void BlockingIoExecutor::request_stop_locked() noexcept {
 }
 
 void BlockingIoExecutor::stop() {
-    std::jthread joiner;
+    detail::JThread joiner;
     {
         std::lock_guard<std::mutex> lock(lifecycle_mutex_);
         request_stop_locked();
@@ -145,7 +145,7 @@ BlockingIoExecutorStatus BlockingIoExecutor::get_status() const {
     return status;
 }
 
-void BlockingIoExecutor::run(std::stop_token stop_token) noexcept {
+void BlockingIoExecutor::run(StopToken stop_token) noexcept {
     {
         std::lock_guard<std::mutex> lock(lifecycle_mutex_);
         worker_id_ = std::this_thread::get_id();

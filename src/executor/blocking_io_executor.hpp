@@ -27,19 +27,19 @@ public:
     BlockingIoExecutorStatus get_status() const override;
 
 private:
-    using ThreadFactory = std::function<std::jthread(
-        std::function<void(std::stop_token)>)>;
+    using ThreadFactory = std::function<detail::JThread(
+        std::function<void(StopToken)>)>;
 
-    void run(std::stop_token stop_token) noexcept;
+    void run(StopToken stop_token) noexcept;
     void request_stop_locked() noexcept;
     void set_error(std::string message);
 
     const std::string name_;
     const BlockingIoConfig config_;
     std::unique_ptr<IBlockingIoWorker> worker_;
-    std::jthread thread_;
-    ThreadFactory thread_factory_{[](std::function<void(std::stop_token)> entry) {
-        return std::jthread(std::move(entry));
+    detail::JThread thread_;
+    ThreadFactory thread_factory_{[](std::function<void(StopToken)> entry) {
+        return detail::JThread(std::move(entry));
     }};
     std::thread::id worker_id_;
 
