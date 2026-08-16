@@ -135,36 +135,36 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 ### 任务
 
-- [ ] `ExecutorManager` 默认线程数：
-  - [ ] Android 下默认 `max_threads` 上限设为 4（待评审后固化）。
-  - [ ] `hardware_concurrency()` 失败时继续走现有安全默认。
-- [ ] 自动 CPU affinity：
-  - [ ] Android 下不使用 `0..hw-1` 伪列表。
-  - [ ] 优先从 `util::get_current_thread_affinity()` 获得允许 cpuset。
-  - [ ] 空 mask 时保持 OS 自由调度。
-- [ ] 实时线程执行器：
-  - [ ] 保持 `priority_applied` / `cpu_affinity_applied` / `process_memory_lock_applied` / `timer_slack_applied` 状态语义。
-  - [ ] 确认 `SCHED_FIFO` EPERM 时只记录失败，不影响周期任务。
-  - [ ] 评审是否在 Android 上默认关闭自动 `SCHED_FIFO` 建议值。
-- [ ] 测试代码平台守卫：
-  - [ ] `/proc/self/task/.../comm` 测试增加 `__ANDROID__` 跳过或改用其他验证。
-  - [ ] `sched_getcpu()` 测试增加 Android 分支注释，确认 API 21 行为。
-  - [ ] 所有仅适合 desktop Linux 的测试用 `__linux__ && !defined(__ANDROID__)` 区分。
-- [ ] 更新状态字段注释：
-  - [ ] Android 上 priority / affinity / mlock / timer slack 均标注 best-effort。
+- [x] `ExecutorManager` 默认线程数：
+  - [x] Android 下默认 `max_threads` 上限设为 4。
+  - [x] `hardware_concurrency()` 失败时继续走现有安全默认。
+- [x] 自动 CPU affinity：
+  - [x] Android 下不使用 `0..hw-1` 伪列表。
+  - [x] 优先从 `util::get_current_thread_affinity()` 获得允许 cpuset。
+  - [x] 空 mask 时保持 OS 自由调度。
+- [x] 实时线程执行器：
+  - [x] 保持 `priority_applied` / `cpu_affinity_applied` / `process_memory_lock_applied` / `timer_slack_applied` 状态语义。
+  - [x] 确认 `SCHED_FIFO` EPERM 时只记录失败，不影响周期任务。
+  - [x] 决策：Android 默认不自动申请 `SCHED_FIFO`；显式 `thread_priority` 仍 best-effort 尝试。
+- [x] 测试代码平台守卫：
+  - [x] `/proc/self/task/.../comm` 测试使用 `__linux__ && !defined(__ANDROID__)`。
+  - [x] `sched_getcpu()` 测试增加 Android 分支注释，确认 API 21 行为。
+  - [x] 仅适合 desktop Linux 的 `/proc` 测试增加 Android 守卫。
+- [x] 更新状态字段注释：
+  - [x] Android 上 priority / affinity / mlock / timer slack 均标注 best-effort。
 
 ### 验收
 
-- [ ] Android 上默认 async executor 初始化成功，线程数不超过 4。
-- [ ] 显式配置 affinity 在无权限设备上失败时，任务提交和 shutdown 不异常。
-- [ ] 相关桌面测试通过。
-- [ ] 现有 Linux 行为（线程数、affinity 列表）不变。
+- [x] Android 默认 async executor 初始化成功且线程数不超过 4：已通过 `-D__ANDROID__` 本机模拟路径运行验证，另已交叉编译。
+- [x] 显式 affinity 失败时任务提交和 shutdown 不异常：`test_thread_pool_invalid_cpu_affinity_is_nonfatal` 在桌面与 Android 模拟路径均通过。
+- [x] 相关桌面测试通过：`test_thread_pool`、`test_realtime_hardening` 通过。
+- [x] 现有 Linux 行为（线程数、affinity 列表）不变：桌面 `test_thread_pool` 全量通过。
 
 ### 合并粒度
 
-- [ ] 线程数上限：独立提交。
-- [ ] cpuset 自适应：独立提交。
-- [ ] 测试守卫：独立提交。
+- [x] 线程数上限：独立提交。
+- [x] cpuset 自适应：独立提交。
+- [x] 测试守卫：独立提交。
 
 ---
 

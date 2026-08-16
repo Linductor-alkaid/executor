@@ -402,7 +402,7 @@ std::vector<std::string> get_realtime_task_list() const;
 
 ### 4.4 实时调优的降级与部署检查
 
-Linux 上请求 `SCHED_FIFO`、CPU 亲和性和 `mlockall` 可能因 `CAP_SYS_NICE`、`CAP_IPC_LOCK`、容器 cpuset 或平台限制而失败；库会继续运行以保持可用性。这不表示所请求的调优已经生效。`RealtimeExecutorStatus` 通过 `priority_applied`、`cpu_affinity_applied`、`memory_locked` 和 `timer_slack_applied` 报告各项请求的实际结果；未请求、平台不支持或权限不足的项目均为 `false`。这些字段可与周期统计和丢弃计数共同构成应用的健康或降级状态。
+Linux 上请求 `SCHED_FIFO`、CPU 亲和性和 `mlockall` 可能因 `CAP_SYS_NICE`、`CAP_IPC_LOCK`、容器 cpuset 或平台限制而失败；库会继续运行以保持可用性。这不表示所请求的调优已经生效。Android 同样按 best-effort 处理：普通 App 通常无法申请 `SCHED_FIFO`、绑核或 `mlockall`，周期短于 10 ms 时也不会自动提升优先级；显式设置的 `thread_priority` / `cpu_affinity` 仍会尝试并记录结果。`RealtimeExecutorStatus` 通过 `priority_applied`、`cpu_affinity_applied`、`memory_locked` 和 `timer_slack_applied` 报告各项请求的实际结果；未请求、平台不支持或权限不足的项目均为 `false`。这些字段可与周期统计和丢弃计数共同构成应用的健康或降级状态。
 
 ---
 
@@ -1099,11 +1099,11 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 
 - `ThreadPoolConfig.min_threads` / `max_threads` = 0（sentinel，自适应）
 - `ThreadPoolConfig.enable_work_stealing` = `true`（默认开）
-- `ThreadPoolConfig.cpu_affinity` 空 → auto-allocate [0..hw-1]
+- `ThreadPoolConfig.cpu_affinity` 空 → auto-allocate [0..hw-1]；Android 使用当前线程允许 cpuset
 - `RealtimeThreadConfig.enable_process_memory_lock` = `false`（默认不调用进程级 `mlockall`；仅在显式启用并接受其资源影响时请求）
 - `RealtimeThreadConfig.timer_slack_ns` = 1（尽力设置 1 ns；不可用或权限不足时安全回退）
 - `RealtimeThreadConfig.cpu_affinity` 空 → 通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；若可用 CPU 数量 <= 1，则不设置亲和性
-- `RealtimeThreadConfig.thread_priority` = 0 → 自适应按 `cycle_period_ns` 建议
+- `RealtimeThreadConfig.thread_priority` = 0 → 自适应按 `cycle_period_ns` 建议；Android 保持普通调度，显式设值才尝试
 - `task_timeout_ms > 0`: 软超时 (执行前 skip + 记录 timeout_count; future 抛 `TimedOutException`; 不计入 fail_count; C++ 无安全 kill 机制, 执行中不强制中断)
 
 ### 7.1 ExecutorConfig / ThreadPoolConfig（线程池配置）
@@ -1112,11 +1112,11 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `min_threads` | `size_t` | `0` | 0 = 自适应 sentinel；`ExecutorManager::initialize` 时按 `hw_concurrency` 计算（min 2） |
-| `max_threads` | `size_t` | `0` | 0 = 自适应 sentinel；默认 hw；探测失败退到 (2, 4) |
+| `min_threads` | `size_t` | `0` | 0 = 自适应 sentinel；按 `hw_concurrency` 计算（min 2）；Android 按不超过 4 核的调度预算计算 |
+| `max_threads` | `size_t` | `0` | 0 = 自适应 sentinel；默认 hw；Android 默认上限 4；探测失败退到 (2, 4) |
 | `queue_capacity` | `size_t` | `1000` | 任务队列容量 |
 | `thread_priority` | `int` | `0` | 线程优先级（Linux SCHED_FIFO 1–99，Windows `SetThreadPriority`） |
-| `cpu_affinity` | `std::vector<int>` | 空 | 空 = 自适应 sentinel；`ExecutorManager` 自动填 [0..hw-1]；显式设值保留 |
+| `cpu_affinity` | `std::vector<int>` | 空 | 空 = 自适应 sentinel；桌面 Linux 自动填 [0..hw-1]；Android 取 `sched_getaffinity` 允许 cpuset，失败则保持 OS 自由调度；显式设值保留 |
 | `task_timeout_ms` | `int64_t` | `0` | > 0: 软超时 (执行前 check elapsed >= timeout 则 skip + 记录 timeout_count; 暴露的 future 抛 `TimedOutException`; 不计入 fail_count; 0 = 不超时; 注意: 执行中不强制中断, C++ 无安全 kill 机制) |
 | `enable_work_stealing` | `bool` | `true` | 无锁工作窃取；`max_threads == 1` 时自动关；-10.7% 性能退化关闭 |
 | `enable_monitoring` | `bool` | `true` | 是否启用监控 |
@@ -1132,13 +1132,13 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 |------|------|------|
 | `thread_name` | `std::string` | 线程名称（Linux 下通过 `pthread_setname_np` 设置，便于 top/perf 识别） |
 | `cycle_period_ns` | `int64_t` | 周期（纳秒），如 2 000 000 表示 2 ms |
-| `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99）；== 0 时按 `cycle_period_ns` 自适应建议（≤1 ms → 80，≤10 ms → 50，>10 ms → 0）；显式设值保留 |
-| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；若可用 CPU 数量 <= 1，则不设置亲和性；显式设值保留 |
+| `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99）；== 0 时按 `cycle_period_ns` 自适应建议（≤1 ms → 80，≤10 ms → 50，>10 ms → 0）；Android 默认保持普通调度，显式设值仍 best-effort 尝试 |
+| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；Android 的允许集合受 cgroup/SELinux 限制；显式设值保留 |
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
 | `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |
 | `enable_allocation_guard` | `bool` | Linux 诊断构建中在 `cycle_callback` 外挂载记录型分配 guard；默认 `false`，仅在构建时启用 `EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD` 后生效。它不构成实时安全证明。 |
-| `enable_process_memory_lock` | `bool` | 是否显式请求 Linux `mlockall(MCL_CURRENT \| MCL_FUTURE)`；这是进程级操作，会锁定当前映射及后续映射，默认 `false`。权限或 `RLIMIT_MEMLOCK` 不足时安全回退，并在状态中报告 errno。 |
+| `enable_process_memory_lock` | `bool` | 是否显式请求 Linux `mlockall(MCL_CURRENT \| MCL_FUTURE)`；这是进程级操作，会锁定当前映射及后续映射，默认 `false`。权限或 `RLIMIT_MEMLOCK` 不足时安全回退；Android 普通 App 通常无权限，同样只报告状态。 |
 | `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，尽力设置，不可用或权限不足时安全回退）；`0` = 显式 opt-out 保留内核默认 |
 
 ### 7.3 状态与统计类型
