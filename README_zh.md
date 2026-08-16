@@ -4,7 +4,7 @@
   <img src="docs/executor.svg" width="160" alt="Executor 标志">
 </p>
 
-[![CI](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml) [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](https://isocpp.org/) [![CMake](https://img.shields.io/badge/CMake-3.16%2B-064F8C?logo=cmake)](https://cmake.org/) [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-1793D1)](https://github.com)
+[![CI](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml) [![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](https://isocpp.org/) [![CMake](https://img.shields.io/badge/CMake-3.16%2B-064F8C?logo=cmake)](https://cmake.org/) [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE) [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20Android-1793D1)](https://github.com)
 
 > English: [README.md](README.md)
 
@@ -36,7 +36,7 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-要求 C++20 和 CMake 3.16+。支持 Linux 与 Windows；GPU 后端是可选能力，没有可用 GPU 时不影响普通 CPU 路径。
+要求 C++20 和 CMake 3.16+。支持 Linux 与 Windows；Android 提供 CPU-only 支持，可通过 NDK 工具链构建，见 [PACKAGE_ANDROID.md](docs/PACKAGE_ANDROID.md)。GPU 后端是可选能力，没有可用 GPU 时不影响普通 CPU 路径。
 
 ### 提交第一个任务
 

@@ -9,6 +9,7 @@
 - **C++20** 编译器（GCC 10+、Clang 10+ 等）
 - **CMake** 3.16 或更高
 - **Linux**：`pthread`、`rt`（一般系统已提供）
+- **Android**：NDK r26c / r28b（交叉编译建议 CMake 3.28+），一期为 CPU-only
 
 ---
 
@@ -59,14 +60,40 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_BUILD_SHARED=ON
 cmake --build build
 ```
 
-### 3.4 关闭测试
+### 3.4 Android 交叉编译
+
+Android 一期为 CPU-only；GPU 默认关闭。先准备 NDK，再调用专用脚本：
+
+```bash
+export ANDROID_NDK_HOME=/path/to/android-ndk-r26c
+
+# arm64-v8a + x86_64，API 21，static + shared
+scripts/build_android.sh
+
+# 只构建 arm64-v8a 静态库与 standalone 测试
+scripts/build_android.sh \
+    --abi arm64-v8a \
+    --api 21 \
+    --build-static true \
+    --build-shared false \
+    --build-tests true
+```
+
+产物位于 `build-android/<abi>/<static|shared>/install`。NDK/AGP/`c++_shared` 打包说明见
+[PACKAGE_ANDROID.md](PACKAGE_ANDROID.md)，设备测试脚本见 `scripts/run_android_tests.sh` 与
+`scripts/capture_android_device_info.sh`。
+
+> Android 不支持 CUDA，OpenCL 也不在一期范围。Android 上的 priority / affinity /
+> mlock / timer slack 均为 best-effort，不承诺硬实时。
+
+### 3.5 关闭测试
 
 ```bash
 cmake -B build -DEXECUTOR_BUILD_TESTS=OFF
 cmake --build build
 ```
 
-### 3.5 启用 GPU 支持
+### 3.6 启用 GPU 支持
 
 ```bash
 # 启用 CUDA（NVIDIA GPU）
@@ -90,7 +117,7 @@ cmake --build build
 
 GPU 环境配置详见 [setup/opencl_setup.md](setup/opencl_setup.md)。
 
-### 3.6 指定安装前缀（安装时使用）
+### 3.7 指定安装前缀（安装时使用）
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
