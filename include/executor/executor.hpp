@@ -664,19 +664,26 @@ public:
     gpu::GpuScheduler::Config get_scheduler_config() const;
 
 private:
+    // 每代定时器线程的独立停止标志（定义见下方成员区）。
+    // P-260816-002: 停止只对本代置位，并发重启产生的新一代不会复活旧线程，
+    // 保证 stop_timer_thread() 中的 join 必定返回。
+    struct TimerThreadState;
+
     /**
      * @brief 单例模式构造函数（私有）
-     * 
+     *
      * @param manager ExecutorManager 单例引用
      */
     Executor(ExecutorManager& manager);
 
     /**
      * @brief 定时器线程函数
-     * 
+     *
      * 处理延迟任务和周期性任务。
+     *
+     * @param state 本代线程的停止标志
      */
-    void timer_thread_func();
+    void timer_thread_func(std::shared_ptr<TimerThreadState> state);
 
     /**
      * @brief 启动定时器线程
@@ -819,8 +826,19 @@ private:
     mutable std::mutex periodic_tasks_mutex_;
 
     // 定时器线程
-    std::thread timer_thread_;
+    // P-260816-002: timer_thread_ 的赋值(start)与 joinable/读取(stop)原先无同步，
+    // 启停竞态下 stop 会读到尚未赋值的成员(数据竞争 UB)并跳过 join，之后成员
+    // 在 joinable 状态下被析构触发 std::terminate。现在三个成员均由
+    // timer_thread_mutex_ 保护；timer_running_ 仍是原子量，仅供提交路径做
+    // 快速提示（权威判断在锁内）。
+    struct TimerThreadState {
+        std::atomic<bool> stop_requested{false};
+    };
+    std::thread timer_thread_;                        // guarded by timer_thread_mutex_
+    std::shared_ptr<TimerThreadState> timer_state_;   // guarded by timer_thread_mutex_
+    mutable std::mutex timer_thread_mutex_;
     std::atomic<bool> timer_running_{false};
+    // 测试注入用线程工厂，guarded by timer_thread_mutex_
     std::function<std::thread(std::function<void()>)> timer_thread_factory_for_test_;
 
     static constexpr size_t kDefaultRecentFailureCapacity = 128;
@@ -1263,9 +1281,22 @@ auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
 
     {
         std::lock_guard<std::mutex> lock(delayed_tasks_mutex_);
-        delayed_tasks_.push(std::move(delayed_task));
+        // P-260816-002: start_timer_thread() 返回后定时器可能已被并发停止。
+        // timer_running_ 在 stop 的排空之前置 false：任务要么先于排空入队（被
+        // 排空路径拒绝），要么在这里直接拒绝，不会出现"入队后无人处理"的
+        // 悬挂 future。
+        if (timer_running_.load(std::memory_order_acquire)) {
+            delayed_tasks_.push(std::move(delayed_task));
+            return future;
+        }
     }
 
+    // 定时器已停止：在锁外走拒绝路径（on_rejected 可能重入 facade）。
+    auto stopped_exception = std::make_exception_ptr(std::runtime_error(
+        "Timer stopped before delayed task execution"));
+    if (delayed_task.on_rejected) {
+        delayed_task.on_rejected(stopped_exception);
+    }
     return future;
 }
 

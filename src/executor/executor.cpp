@@ -278,6 +278,8 @@ ShutdownResult Executor::shutdown(bool wait_for_tasks) {
 
 void Executor::set_timer_thread_factory_for_test(
     std::function<std::thread(std::function<void()>)> factory) {
+    // P-260816-002: 与 start_timer_thread() 读取工厂的路径互相同步。
+    std::lock_guard<std::mutex> lock(timer_thread_mutex_);
     timer_thread_factory_for_test_ = std::move(factory);
 }
 
@@ -1540,34 +1542,56 @@ gpu::GpuScheduler::Config Executor::get_scheduler_config() const {
 }
 
 // 启动定时器线程
+//
+// P-260816-002: 全程持有 timer_thread_mutex_，与 stop_timer_thread() 串行化。
+// 旧实现先 exchange 置位 timer_running_ 再创建线程：并发 stop 会在成员尚未
+// 赋值时读到 timer_thread_（数据竞争 UB）并跳过 join，之后 joinable 的成员
+// 被 join 前 stop_timer_thread() 已提前返回，析构时触发 std::terminate。
+// 现在赋值完成后才置位 timer_running_，失败路径无需回滚标志。
 void Executor::start_timer_thread() {
-    if (timer_running_.exchange(true)) {
-        return;  // 已经在运行
+    std::lock_guard<std::mutex> lock(timer_thread_mutex_);
+    if (timer_running_) {
+        return;  // 已经在运行（权威判断在锁内）
     }
-    
-    try {
-        auto timer_entry = [this]() {
-            timer_thread_func();
-        };
-        if (timer_thread_factory_for_test_) {
-            timer_thread_ = timer_thread_factory_for_test_(std::move(timer_entry));
-        } else {
-            timer_thread_ = std::thread(std::move(timer_entry));
-        }
-    } catch (...) {
-        timer_running_.store(false);
-        throw;
+
+    auto state = std::make_shared<TimerThreadState>();
+    // 线程创建失败直接抛出：timer_thread_/timer_state_ 均未赋值、
+    // timer_running_ 尚未置位，无状态需要回滚。
+    auto timer_entry = [this, state]() {
+        timer_thread_func(state);
+    };
+    if (timer_thread_factory_for_test_) {
+        timer_thread_ = timer_thread_factory_for_test_(std::move(timer_entry));
+    } else {
+        timer_thread_ = std::thread(std::move(timer_entry));
     }
+    timer_state_ = std::move(state);
+    timer_running_ = true;
 }
 
 // 停止定时器线程
+//
+// P-260816-002: 成员的移动/joinable 判断都在锁内完成；join 在锁外执行
+// （定时器线程自身不获取 timer_thread_mutex_，不会与持有者互等）。每代线程
+// 持有独立的 TimerThreadState：即使 join 期间另一线程重启了新一代定时器
+// （timer_running_ 重新置位），旧线程依据本代 stop 位退出，join 必定返回。
 void Executor::stop_timer_thread() {
-    if (!timer_running_.exchange(false)) {
-        return;  // 已经停止
+    std::thread thread_to_join;
+    {
+        std::lock_guard<std::mutex> lock(timer_thread_mutex_);
+        if (!timer_running_) {
+            return;  // 已经停止
+        }
+        timer_running_ = false;
+        if (timer_state_) {
+            timer_state_->stop_requested.store(true, std::memory_order_release);
+        }
+        thread_to_join = std::move(timer_thread_);
+        timer_state_.reset();
     }
 
-    if (timer_thread_.joinable()) {
-        timer_thread_.join();
+    if (thread_to_join.joinable()) {
+        thread_to_join.join();
     }
 
     std::vector<DelayedTask> pending_delayed_tasks;
@@ -1619,11 +1643,11 @@ struct DuePeriodicTask {
 }  // namespace
 
 // 定时器线程函数
-void Executor::timer_thread_func() {
+void Executor::timer_thread_func(std::shared_ptr<TimerThreadState> state) {
     using clock = std::chrono::steady_clock;
     const auto max_interval = std::chrono::milliseconds(kTimerMaxSleepMs);
 
-    while (timer_running_.load(std::memory_order_acquire)) {
+    while (!state->stop_requested.load(std::memory_order_acquire)) {
         auto now = clock::now();
         auto next_wake = now + max_interval;
         auto executor = manager_->get_default_async_executor_snapshot();
