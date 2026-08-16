@@ -21,6 +21,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Report runner CPU topology
+        run: |
+          uname -m
+          nproc
+          lscpu
+
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
