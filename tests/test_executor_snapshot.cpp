@@ -26,7 +26,7 @@ using namespace executor;
 
 class IdleBlockingWorker final : public IBlockingIoWorker {
 public:
-    void run(std::stop_token stop_token) override {
+    void run(StopToken stop_token) override {
         while (!stop_token.stop_requested()) {
             std::this_thread::yield();
         }

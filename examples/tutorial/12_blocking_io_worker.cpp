@@ -4,7 +4,6 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <stop_token>
 
 #include <executor/executor.hpp>
 
@@ -12,7 +11,7 @@ namespace {
 
 class MockBlockingWorker final : public executor::IBlockingIoWorker {
 public:
-    void run(std::stop_token stop_token) override {
+    void run(executor::StopToken stop_token) override {
         std::unique_lock<std::mutex> lock(mutex_);
         started_.store(true, std::memory_order_release);
         condition_.notify_all();

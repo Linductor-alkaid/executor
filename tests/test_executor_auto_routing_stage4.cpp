@@ -22,7 +22,7 @@ namespace {
 
 class WakeableWorker final : public IBlockingIoWorker {
 public:
-    void run(std::stop_token stop_token) override {
+    void run(StopToken stop_token) override {
         std::unique_lock<std::mutex> lock(mutex_);
         entered_ = true;
         entered_cv_.notify_all();

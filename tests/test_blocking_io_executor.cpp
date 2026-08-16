@@ -43,7 +43,7 @@ public:
     explicit BlockingWorker(std::shared_ptr<WorkerState> state)
         : state_(std::move(state)) {}
 
-    void run(std::stop_token stop_token) override {
+    void run(StopToken stop_token) override {
         state_->entered.count_down();
         std::unique_lock<std::mutex> lock(state_->mutex);
         state_->cv.wait(lock, [this, stop_token] {
@@ -70,7 +70,7 @@ public:
     explicit ThrowingWorker(std::shared_ptr<std::latch> failed)
         : failed_(std::move(failed)) {}
 
-    void run(std::stop_token) override {
+    void run(StopToken) override {
         failed_->count_down();
         throw std::runtime_error("transport failed");
     }
@@ -90,7 +90,7 @@ public:
         executor_ = executor;
     }
 
-    void run(std::stop_token) override {
+    void run(StopToken) override {
         executor_->stop();
         stopped_->count_down();
     }
@@ -107,7 +107,7 @@ public:
     explicit ReturningWorker(std::shared_ptr<std::latch> returned)
         : returned_(std::move(returned)) {}
 
-    void run(std::stop_token) override {
+    void run(StopToken) override {
         returned_->count_down();
     }
 
@@ -260,7 +260,7 @@ bool test_start_failure_and_timeout_rollback() {
     auto state = std::make_shared<WorkerState>();
     BlockingIoExecutor creation_failure(
         "creation_failure", valid_config(), std::make_unique<BlockingWorker>(state));
-    creation_failure.thread_factory_ = [](std::function<void(std::stop_token)>) -> std::jthread {
+    creation_failure.thread_factory_ = [](std::function<void(StopToken)>) -> executor::detail::JThread {
         throw std::system_error(
             std::make_error_code(std::errc::resource_unavailable_try_again),
             "test thread creation failure");
@@ -275,8 +275,8 @@ bool test_start_failure_and_timeout_rollback() {
     timeout_config.startup_timeout = std::chrono::milliseconds(1);
     BlockingIoExecutor timeout_executor(
         "startup_timeout", timeout_config, std::make_unique<BlockingWorker>(timeout_state));
-    timeout_executor.thread_factory_ = [](std::function<void(std::stop_token)>) {
-        return std::jthread([](std::stop_token stop_token) {
+    timeout_executor.thread_factory_ = [](std::function<void(StopToken)>) {
+        return executor::detail::JThread([](StopToken stop_token) {
             while (!stop_token.stop_requested()) {
                 std::this_thread::yield();
             }
