@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 #include <map>
+#include <condition_variable>
 #include <shared_mutex>
 #include <mutex>
 #include <atomic>
@@ -306,14 +307,24 @@ public:
 private:
     void bump_state_epoch() noexcept;
     bool is_executor_name_registered_locked(const std::string& name) const;
+    void finish_default_async_shutdown_drain();
 
-    // Protects default_async_executor_ and default_async_shutdown_.
+    // Protects default_async_executor_, default_async_shutdown_ and
+    // default_async_shutdown_in_progress_.
     mutable std::mutex default_async_mutex_;
     // 默认异步执行器（线程池）
     std::shared_ptr<IAsyncExecutor> default_async_executor_;
 
     // 已关闭标记：shutdown 后不再懒初始化，get_default_async_executor() 直接返回 nullptr
     bool default_async_shutdown_ = false;
+
+    // P-260816-001: 默认执行器的排空（stop/wait_for_completion 含 worker join，
+    // 可阻塞数秒）在 default_async_mutex_ 之外执行，避免池内任务再入
+    // submit()/状态读路径时与 shutdown 互相等待形成自死锁。并发 shutdown
+    // 调用者在 default_async_shutdown_cv_ 上等待排空完成，保持旧实现
+    // "第二个调用者等第一个排空结束后才返回"的语义。
+    bool default_async_shutdown_in_progress_ = false;
+    std::condition_variable default_async_shutdown_cv_;
 
     // 懒初始化用：保证多线程首次调用 get_default_async_executor() 时只初始化一次
     std::once_flag default_init_once_;

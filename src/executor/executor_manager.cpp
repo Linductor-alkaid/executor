@@ -781,26 +781,61 @@ ShutdownResult ExecutorManager::shutdown(bool wait_for_tasks) {
         }
     }
     
-    // 停止异步执行器
+    // 停止异步执行器。
+    //
+    // P-260816-001: 排空（stop/wait_for_completion 内含 worker join，可阻塞数秒）
+    // 绝不能在持有 default_async_mutex_ 时进行 —— submit()/snapshot/状态查询等
+    // 读路径都要拿这把锁，池内任务在排空期间再入 facade 会与 shutdown 互相
+    // 等待形成自死锁。这里只在锁内置 shutdown 闩并快照执行器，随后在锁外
+    // 排空；并发 shutdown 调用者通过 default_async_shutdown_cv_ 等待排空完成，
+    // 与旧实现（持锁阻塞到排空结束）的对外语义一致，但不再阻塞无关读路径。
+    // 置闩后读路径立即走拒绝分支，与 ThreadPool 自身"先停止接收新任务，再
+    // 等待已接受任务完成"的关停顺序对齐。
+    std::shared_ptr<IAsyncExecutor> executor_to_stop;
     {
-        std::lock_guard<std::mutex> lock(default_async_mutex_);
-        if (default_async_executor_) {
+        std::unique_lock<std::mutex> lock(default_async_mutex_);
+        default_async_shutdown_cv_.wait(
+            lock, [this] { return !default_async_shutdown_in_progress_; });
+
+        default_async_shutdown_ = true;
+        executor_to_stop = default_async_executor_;
+        if (executor_to_stop) {
+            default_async_shutdown_in_progress_ = true;
             shutdown_requested_from_worker =
-                default_async_executor_->is_current_worker_thread();
-            default_async_executor_->stop(wait_for_tasks);
-            if (wait_for_tasks && !shutdown_requested_from_worker) {
-                default_async_executor_->wait_for_completion();
-            }
+                executor_to_stop->is_current_worker_thread();
             if (!shutdown_requested_from_worker) {
+                // 管理器侧引用在此释放；本地快照保活执行器到排空结束，
+                // 其析构（含最后的 join）发生在锁外。
                 default_async_executor_.reset();
             }
+            // worker 发起的 shutdown 保留成员，由外部调用者最终化。
         }
-        default_async_shutdown_ = true;
         bump_state_epoch();
+    }
+
+    if (executor_to_stop) {
+        try {
+            executor_to_stop->stop(wait_for_tasks);
+            if (wait_for_tasks && !shutdown_requested_from_worker) {
+                executor_to_stop->wait_for_completion();
+            }
+        } catch (...) {
+            finish_default_async_shutdown_drain();
+            throw;
+        }
+        finish_default_async_shutdown_drain();
     }
     return shutdown_requested_from_worker
                ? ShutdownResult::RequestedFromWorker
                : ShutdownResult::Completed;
+}
+
+void ExecutorManager::finish_default_async_shutdown_drain() {
+    {
+        std::lock_guard<std::mutex> lock(default_async_mutex_);
+        default_async_shutdown_in_progress_ = false;
+    }
+    default_async_shutdown_cv_.notify_all();
 }
 
 } // namespace executor
