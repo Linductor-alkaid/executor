@@ -109,7 +109,7 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
   - [x] 确保桌面代码使用 `std::stop_token` 仍可 override（alias 兼容性测试）。
 - [x] 新增编译期测试：
   - [x] 桌面 `static_assert(std::is_same_v<executor::StopToken, std::stop_token>)`。
-  - [x] Android fallback 的复制/移动和 request_stop 单测（`tests/test_stop_token_compat.cpp`，待设备运行）。
+  - [x] Android fallback 的复制/移动和 request_stop 单测（`tests/test_stop_token_compat.cpp`；主机 forced fallback 已运行，真机执行归 A3）。
 - [x] 文档：
   - [x] `docs/API.md` 增加 `executor::StopToken` 说明。
   - [x] `docs/MIGRATION.md` 增加 Android Blocking I/O worker 接入说明。
@@ -120,7 +120,7 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 - [x] `tutorial_12_blocking_io_worker` 交叉编译通过。
 - [x] 桌面 Blocking I/O 测试全部通过，ABI/API 不回归。
 - [x] 重复 stop、ready 超时、worker 异常、自停止路径在桌面继续通过。
-- [ ] Android fallback 的 `JThread` 析构/移动不产生 double join（已交叉编译；运行时验证留给设备测试）。
+- [x] Android fallback 的 `JThread` 析构/移动不产生 double join（`EXECUTOR_STOP_TOKEN_FORCE_FALLBACK` 已在本机运行时验证；真机执行仍归 A3）。
 
 ### 合并粒度
 

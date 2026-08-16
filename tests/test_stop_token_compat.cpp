@@ -5,7 +5,10 @@
 
 #include <executor/stop_token.hpp>
 
-#if !defined(__ANDROID__) || defined(__cpp_lib_jthread)
+#if defined(EXECUTOR_STOP_TOKEN_FORCE_FALLBACK)
+static_assert(!std::is_same_v<executor::StopToken, std::stop_token>,
+              "forced fallback must instantiate executor's own StopToken implementation");
+#elif !defined(__ANDROID__) || defined(__cpp_lib_jthread)
 static_assert(std::is_same_v<executor::StopToken, std::stop_token>,
               "executor::StopToken must alias std::stop_token on desktop/standard-lib path");
 #endif
@@ -54,10 +57,109 @@ bool test_jthread_passes_stop_token_and_joins() {
     return true;
 }
 
+bool test_jthread_destructor_requests_stop_and_joins() {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> left{false};
+
+    {
+        executor::detail::JThread thread([&](executor::StopToken token) {
+            entered.store(true, std::memory_order_release);
+            while (!token.stop_requested()) {
+                std::this_thread::yield();
+            }
+            left.store(true, std::memory_order_release);
+        });
+
+        while (!entered.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        TEST_ASSERT(thread.joinable(), "jthread must be joinable before destruction");
+    }
+
+    TEST_ASSERT(left.load(std::memory_order_acquire),
+                "jthread destructor must request stop and join its entry");
+    return true;
+}
+
+bool test_jthread_move_constructor_does_not_double_join() {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> left{false};
+
+    {
+        executor::detail::JThread source([&](executor::StopToken token) {
+            entered.store(true, std::memory_order_release);
+            while (!token.stop_requested()) {
+                std::this_thread::yield();
+            }
+            left.store(true, std::memory_order_release);
+        });
+
+        while (!entered.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        executor::detail::JThread target(std::move(source));
+        TEST_ASSERT(!source.joinable(), "moved-from jthread must not be joinable");
+        TEST_ASSERT(target.joinable(), "move-constructed jthread must own the thread");
+        TEST_ASSERT(target.request_stop(), "target jthread must expose its stop source");
+        target.join();
+    }
+
+    TEST_ASSERT(left.load(std::memory_order_acquire),
+                "move-constructed jthread entry must observe stop token");
+    return true;
+}
+
+bool test_jthread_move_assignment_joins_previous_thread() {
+    std::atomic<bool> first_entered{false};
+    std::atomic<bool> first_left{false};
+    std::atomic<bool> second_entered{false};
+    std::atomic<bool> second_left{false};
+
+    {
+        executor::detail::JThread target([&](executor::StopToken token) {
+            first_entered.store(true, std::memory_order_release);
+            while (!token.stop_requested()) {
+                std::this_thread::yield();
+            }
+            first_left.store(true, std::memory_order_release);
+        });
+
+        while (!first_entered.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        executor::detail::JThread source([&](executor::StopToken token) {
+            second_entered.store(true, std::memory_order_release);
+            while (!token.stop_requested()) {
+                std::this_thread::yield();
+            }
+            second_left.store(true, std::memory_order_release);
+        });
+
+        while (!second_entered.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+
+        target = std::move(source);
+        TEST_ASSERT(first_left.load(std::memory_order_acquire),
+                    "move assignment must stop and join the previous thread first");
+        TEST_ASSERT(!source.joinable(), "moved-from jthread must not be joinable");
+        TEST_ASSERT(target.joinable(), "move-assigned jthread must own the new thread");
+    }
+
+    TEST_ASSERT(second_left.load(std::memory_order_acquire),
+                "destructor must stop and join the move-assigned thread");
+    return true;
+}
+
 int main() {
     bool ok = true;
     ok &= test_stop_source_request_once();
     ok &= test_jthread_passes_stop_token_and_joins();
+    ok &= test_jthread_destructor_requests_stop_and_joins();
+    ok &= test_jthread_move_constructor_does_not_double_join();
+    ok &= test_jthread_move_assignment_joins_previous_thread();
     std::cout << (ok ? "All stop_token compatibility tests PASSED\n"
                      : "stop_token compatibility tests FAILED\n");
     return ok ? 0 : 1;

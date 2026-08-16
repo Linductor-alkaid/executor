@@ -11,7 +11,10 @@
 #include <version>
 #endif
 
-#if defined(__ANDROID__) && !defined(__cpp_lib_jthread)
+// EXECUTOR_STOP_TOKEN_FORCE_FALLBACK 仅用于测试：在桌面编译时强制实例化
+// Android fallback 实现，验证 StopSource / StopToken / JThread 的运行时语义。
+#if defined(EXECUTOR_STOP_TOKEN_FORCE_FALLBACK) || \
+    (defined(__ANDROID__) && !defined(__cpp_lib_jthread))
 
 namespace executor {
 
