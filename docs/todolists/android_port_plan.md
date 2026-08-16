@@ -36,46 +36,53 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 ## 阶段 A0：Android 构建系统与平台层
 
+> 进度说明：A0 代码任务除 Android CI workflow 外已实现。由于 A1 的
+> `executor::StopToken` 尚未落地，Android 默认构建仍会被 `<stop_token>` 阻塞；
+> 本阶段已用 NDK r28b + `-fexperimental-library` 做临时交叉编译验证，待 A1
+> 合入后切换为无 experimental flag 的默认验收命令。
+
 ### 任务
 
-- [ ] 在 `src/CMakeLists.txt` 增加 `if(ANDROID)` 分支：
-  - [ ] `find_package(Threads REQUIRED)` 保留。
-  - [ ] 不链接 `rt`。
-  - [ ] 不把 `atomic` 作为 Android 公共依赖导出。
-- [ ] 在根 `CMakeLists.txt` 中，Android 构建默认关闭 GPU：
-  - [ ] `EXECUTOR_ENABLE_CUDA` 默认 OFF。
-  - [ ] `EXECUTOR_ENABLE_OPENCL` 默认 OFF。
-  - [ ] 保留用户显式覆盖能力。
-- [ ] 在 `src/executor/util/thread_utils.cpp` 增加 `__ANDROID__` affinity 路径：
-  - [ ] `set_cpu_affinity()` 使用 `sched_setaffinity(gettid(), ...)`。
-  - [ ] `get_current_thread_affinity()` 使用 `sched_getaffinity(gettid(), ...)`。
-  - [ ] 保持返回值语义：空列表 / false 表示未生效。
-- [ ] 处理 NDK clang 不支持的 warning 选项：
-  - [ ] `-Wlogical-op`、`-Wnoexcept`、`-Wstrict-null-sentinel` 不用于 Android/Clang。
-  - [ ] 保持 GCC 与 MSVC 现有 warning 行为不变。
-- [ ] 新增 `scripts/build_android.sh`：
-  - [ ] 参数：NDK 路径、ABI、API level、static/shared、examples 开关。
-  - [ ] 默认 arm64-v8a + x86_64，API 21，CPU-only。
-  - [ ] 输出物统一到 `build-android/<abi>/...`。
+- [x] 在 `src/CMakeLists.txt` 增加 `if(ANDROID)` 分支：
+  - [x] `find_package(Threads REQUIRED)` 保留。
+  - [x] 不链接 `rt`。
+  - [x] 不把 `atomic` 作为 Android 公共依赖导出。
+- [x] 在根 `CMakeLists.txt` 中，Android 构建默认关闭 GPU：
+  - [x] `EXECUTOR_ENABLE_CUDA` 默认 OFF。
+  - [x] `EXECUTOR_ENABLE_OPENCL` 保持现有默认 OFF。
+  - [x] 保留用户显式覆盖能力。
+- [x] 在 `src/executor/util/thread_utils.cpp` 增加 `__ANDROID__` affinity 路径：
+  - [x] `set_cpu_affinity()` 使用 `sched_setaffinity(gettid(), ...)`。
+  - [x] `get_current_thread_affinity()` 使用 `sched_getaffinity(gettid(), ...)`。
+  - [x] 保持返回值语义：空列表 / false 表示未生效。
+- [x] 处理 NDK clang 不支持的 warning 选项：
+  - [x] `-Wlogical-op`、`-Wnoexcept`、`-Wstrict-null-sentinel` 不用于 Android/Clang。
+  - [x] 保持 GCC 与 MSVC 现有 warning 行为不变。
+- [x] 新增 `scripts/build_android.sh`：
+  - [x] 参数：NDK 路径、ABI、API level、static/shared、examples 开关。
+  - [x] 默认 arm64-v8a + x86_64，API 21，CPU-only。
+  - [x] 输出物统一到 `build-android/<abi>/...`。
 - [ ] 新增 `.github/workflows/android.yml`：
   - [ ] NDK r26c 与 r28b 双版本交叉编译。
   - [ ] arm64-v8a / x86_64，static + shared。
   - [ ] 缓存 NDK，不上传 GB 级 SDK 到 artifacts。
   - [ ] 当前只做构建门禁，不运行设备测试。
+  - [ ] 依赖 A1：默认构建必须先摆脱 `<stop_token>` / experimental flag。
 
 ### 验收
 
-- [ ] 未修改公共 API，`cmake --build build-android` 能产出 CPU-only 静态库与共享库。
-- [ ] A0 结束后，`basic_submit` 等 CPU 示例可交叉编译（不要求此时运行）。
-- [ ] Linux / Windows CI 全部通过，无 warning 行为回归。
-- [ ] Android 共享库 `readelf -d` 不含对 `librt` 的依赖。
+- [ ] A1 合入后，`cmake --build build-android` 能在默认配置下产出 CPU-only 静态库与共享库。
+- [x] 已用 NDK r28b + 临时 `-fexperimental-library` 验证四个 ABI 的 static + shared 交叉编译。
+- [x] `basic_submit` 已用同样临时配置交叉编译通过（arm64-v8a）。
+- [x] Linux 本机构建通过；Windows CI 待远端 workflow 运行后确认，本轮改动未触及 MSVC 分支。
+- [x] Android 共享库 `llvm-readelf -d` 不含对 `librt` 的依赖。
 
 ### 合并粒度
 
-- [ ] CMake 链接分支 + GPU 默认值：独立提交。
-- [ ] thread_utils Android affinity：独立提交。
-- [ ] warning 裁剪：独立提交。
-- [ ] 构建脚本 + CI：独立提交。
+- [x] CMake 链接分支 + GPU 默认值：独立提交。
+- [x] thread_utils Android affinity：独立提交。
+- [x] warning 裁剪：独立提交。
+- [ ] 构建脚本已提交；CI workflow 待 A1 前后补齐并提交。
 
 ---
 
