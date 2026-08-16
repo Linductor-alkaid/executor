@@ -59,8 +59,8 @@
 
 ### 推荐迁移路径
 
-1. 将长期循环封装为 `IBlockingIoWorker`：把主体放入 `run(std::stop_token)`，实现不抛异常且可重复调用的 `wakeup()`。
-2. 保证停止可达：`wakeup()` 要直接解除等待；不能直接唤醒时使用有限 timeout，并在每次返回后检查 `stop_token`。不要依赖 stop token 自动中断外部库调用。
+1. 将长期循环封装为 `IBlockingIoWorker`：把主体放入 `run(executor::StopToken)`，实现不抛异常且可重复调用的 `wakeup()`。
+2. 保证停止可达：`wakeup()` 要直接解除等待；不能直接唤醒时使用有限 timeout，并在每次返回后检查 `executor::StopToken`。不要依赖 stop token 自动中断外部库调用。桌面平台上该类型等价于 `std::stop_token`，现有 override 保持源码与 ABI 兼容。
 3. 用 `register_blocking_io_worker_ex()` 注册，再用 `start_blocking_io_worker_ex()` 启动；将 `ExecutorResult` 的拒绝原因写入调用方日志或诊断。
 4. 用 `stop_blocking_io_worker()` 或 `Executor::shutdown()` 收敛生命周期。不要 detach worker，也不要在 `shutdown(false)` 时假定 I/O worker 会继续运行。
 

@@ -419,12 +419,12 @@ Linux 上请求 `SCHED_FIFO`、CPU 亲和性和 `mlockall` 可能因 `CAP_SYS_NI
 class IBlockingIoWorker {
 public:
     virtual ~IBlockingIoWorker() = default;
-    virtual void run(std::stop_token stop_token) = 0;
+    virtual void run(executor::StopToken stop_token) = 0;
     virtual void wakeup() noexcept = 0;
 };
 ```
 
-`wakeup()` 必须解除 `run()` 当前的等待，且可重复调用、不抛异常。仅请求 `stop_token` 不会中断第三方库或操作系统的无限阻塞调用；若等待原语不能直接唤醒，worker 必须使用有限 timeout 并在返回后检查 stop token。
+`wakeup()` 必须解除 `run()` 当前的等待，且可重复调用、不抛异常。仅请求 `executor::StopToken` 不会中断第三方库或操作系统的无限阻塞调用；若等待原语不能直接唤醒，worker 必须使用有限 timeout 并在返回后检查 stop token。桌面平台上 `executor::StopToken` 是 `std::stop_token` 的别名；Android 上使用等价的库内实现。
 
 #### 4.5.2 注册与生命周期
 

@@ -36,10 +36,8 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 ## 阶段 A0：Android 构建系统与平台层
 
-> 进度说明：A0 代码任务除 Android CI workflow 外已实现。由于 A1 的
-> `executor::StopToken` 尚未落地，Android 默认构建仍会被 `<stop_token>` 阻塞；
-> 本阶段已用 NDK r28b + `-fexperimental-library` 做临时交叉编译验证，待 A1
-> 合入后切换为无 experimental flag 的默认验收命令。
+> 进度说明：A0 已随 A1 的 `executor::StopToken` 兼容层一起完成代码任务；
+> CI workflow 已新增，默认 Android 构建不再依赖 `-fexperimental-library`。
 
 ### 任务
 
@@ -62,18 +60,17 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
   - [x] 参数：NDK 路径、ABI、API level、static/shared、examples 开关。
   - [x] 默认 arm64-v8a + x86_64，API 21，CPU-only。
   - [x] 输出物统一到 `build-android/<abi>/...`。
-- [ ] 新增 `.github/workflows/android.yml`：
-  - [ ] NDK r26c 与 r28b 双版本交叉编译。
-  - [ ] arm64-v8a / x86_64，static + shared。
-  - [ ] 缓存 NDK，不上传 GB 级 SDK 到 artifacts。
-  - [ ] 当前只做构建门禁，不运行设备测试。
-  - [ ] 依赖 A1：默认构建必须先摆脱 `<stop_token>` / experimental flag。
+- [x] 新增 `.github/workflows/android.yml`：
+  - [x] NDK r26c 与 r28b 双版本交叉编译。
+  - [x] arm64-v8a / x86_64，static + shared。
+  - [x] 缓存 NDK，不上传 GB 级 SDK 到 artifacts。
+  - [x] 当前只做构建门禁，不运行设备测试。
 
 ### 验收
 
-- [ ] A1 合入后，`cmake --build build-android` 能在默认配置下产出 CPU-only 静态库与共享库。
-- [x] 已用 NDK r28b + 临时 `-fexperimental-library` 验证四个 ABI 的 static + shared 交叉编译。
-- [x] `basic_submit` 已用同样临时配置交叉编译通过（arm64-v8a）。
+- [x] 默认配置（无 `-fexperimental-library`）在 NDK r26c / r28b 上产出 CPU-only 静态库与共享库。
+- [x] arm64-v8a / x86_64，API 21，static + shared 已本地交叉编译验证。
+- [x] `basic_submit` 和全部 CPU examples/tutorial 已交叉编译通过。
 - [x] Linux 本机构建通过；Windows CI 待远端 workflow 运行后确认，本轮改动未触及 MSVC 分支。
 - [x] Android 共享库 `llvm-readelf -d` 不含对 `librt` 的依赖。
 
@@ -82,7 +79,7 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 - [x] CMake 链接分支 + GPU 默认值：独立提交。
 - [x] thread_utils Android affinity：独立提交。
 - [x] warning 裁剪：独立提交。
-- [ ] 构建脚本已提交；CI workflow 待 A1 前后补齐并提交。
+- [x] 构建脚本 + CI workflow：已提交。
 
 ---
 
@@ -90,47 +87,47 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 ### 任务
 
-- [ ] 新增 `include/executor/stop_token.hpp`：
-  - [ ] 桌面：`using StopToken = std::stop_token;`。
-  - [ ] Android 且 `__cpp_lib_jthread` 不可用时启用自有实现。
-  - [ ] 提供 `StopToken::stop_requested()`。
-  - [ ] 提供 `StopSource::request_stop()` / `get_token()`。
-  - [ ] 提供 `detail::JThread`：可移动、析构 request_stop + join。
-  - [ ] 不在 `std` 命名空间注入符号。
-  - [ ] 头文件可独立包含。
-- [ ] `include/executor/blocking_io.hpp`：
-  - [ ] `IBlockingIoWorker::run()` 参数改为 `executor::StopToken`。
-  - [ ] 文档注释继续说明 stop token 只表达请求，wakeup 才能解除底层阻塞。
-- [ ] `src/executor/blocking_io_executor.hpp/.cpp`：
-  - [ ] 桌面继续使用 `std::jthread`。
-  - [ ] Android fallback 使用 `executor::detail::JThread` 与 `StopSource`。
-  - [ ] `request_stop_locked()` 的平台分支保持“标记 -> request_stop -> wakeup”顺序。
-  - [ ] `stop()` 的 join 与自停止语义不改变。
-- [ ] 项目内示例与测试迁移：
-  - [ ] `examples/tutorial/12_blocking_io_worker.cpp` 使用 `executor::StopToken`。
-  - [ ] `tests/test_blocking_io_executor.cpp` 与 facade 测试使用 `executor::StopToken`。
-  - [ ] 确保桌面代码使用 `std::stop_token` 仍可 override（alias 兼容性测试）。
-- [ ] 新增编译期测试：
-  - [ ] 桌面 `static_assert(std::is_same_v<executor::StopToken, std::stop_token>)`。
-  - [ ] Android fallback 的复制/移动和 request_stop 单测。
-- [ ] 文档：
-  - [ ] `docs/API.md` 增加 `executor::StopToken` 说明。
-  - [ ] `docs/MIGRATION.md` 增加 Android Blocking I/O worker 接入说明。
+- [x] 新增 `include/executor/stop_token.hpp`：
+  - [x] 桌面：`using StopToken = std::stop_token;`。
+  - [x] Android 且 `__cpp_lib_jthread` 不可用时启用自有实现。
+  - [x] 提供 `StopToken::stop_requested()`。
+  - [x] 提供 `StopSource::request_stop()` / `get_token()`。
+  - [x] 提供 `detail::JThread`：可移动、析构 request_stop + join。
+  - [x] 不在 `std` 命名空间注入符号。
+  - [x] 头文件可独立包含。
+- [x] `include/executor/blocking_io.hpp`：
+  - [x] `IBlockingIoWorker::run()` 参数改为 `executor::StopToken`。
+  - [x] 文档注释继续说明 stop token 只表达请求，wakeup 才能解除底层阻塞。
+- [x] `src/executor/blocking_io_executor.hpp/.cpp`：
+  - [x] 桌面继续使用 `std::jthread`（通过 `detail::JThread` 别名）。
+  - [x] Android fallback 使用 `executor::detail::JThread` 与 `StopSource`。
+  - [x] `request_stop_locked()` 的平台分支保持“标记 -> request_stop -> wakeup”顺序。
+  - [x] `stop()` 的 join 与自停止语义不改变。
+- [x] 项目内示例与测试迁移：
+  - [x] `examples/tutorial/12_blocking_io_worker.cpp` 使用 `executor::StopToken`。
+  - [x] `tests/test_blocking_io_executor.cpp` 与 facade 测试使用 `executor::StopToken`。
+  - [x] 确保桌面代码使用 `std::stop_token` 仍可 override（alias 兼容性测试）。
+- [x] 新增编译期测试：
+  - [x] 桌面 `static_assert(std::is_same_v<executor::StopToken, std::stop_token>)`。
+  - [x] Android fallback 的复制/移动和 request_stop 单测（`tests/test_stop_token_compat.cpp`，待设备运行）。
+- [x] 文档：
+  - [x] `docs/API.md` 增加 `executor::StopToken` 说明。
+  - [x] `docs/MIGRATION.md` 增加 Android Blocking I/O worker 接入说明。
 
 ### 验收
 
-- [ ] NDK r26c 与 r28b（不传 `-fexperimental-library`）均能编译 `blocking_io.hpp`。
-- [ ] `tutorial_12_blocking_io_worker` 交叉编译通过。
-- [ ] 桌面 Blocking I/O 测试全部通过，ABI/API 不回归。
-- [ ] 重复 stop、ready 超时、worker 异常、自停止路径在桌面继续通过。
-- [ ] Android fallback 的 `JThread` 析构/移动不产生 double join。
+- [x] NDK r26c 与 r28b（不传 `-fexperimental-library`）均能编译 `blocking_io.hpp` 并构建完整库。
+- [x] `tutorial_12_blocking_io_worker` 交叉编译通过。
+- [x] 桌面 Blocking I/O 测试全部通过，ABI/API 不回归。
+- [x] 重复 stop、ready 超时、worker 异常、自停止路径在桌面继续通过。
+- [ ] Android fallback 的 `JThread` 析构/移动不产生 double join（已交叉编译；运行时验证留给设备测试）。
 
 ### 合并粒度
 
-- [ ] 公开兼容层头文件：独立提交。
-- [ ] BlockingIoExecutor 实现迁移：独立提交。
-- [ ] 示例/测试迁移：独立提交。
-- [ ] API/MIGRATION 文档：独立提交。
+- [x] 公开兼容层头文件：独立提交。
+- [x] BlockingIoExecutor 实现迁移：独立提交。
+- [x] 示例/测试迁移：独立提交。
+- [x] API/MIGRATION 文档：独立提交。
 
 ---
 
