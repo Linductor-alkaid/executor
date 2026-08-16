@@ -20,7 +20,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
     
     # 额外的有用警告
-    target_compile_options(${target} PRIVATE
+    set(_executor_extra_warnings
         -Wcast-align
         -Wcast-qual
         -Wconversion
@@ -47,6 +47,17 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         -Wunused
         -Wzero-as-null-pointer-constant
     )
+
+    # NDK clang 不认识部分 GCC 风格 warning，会产生大量 unknown warning option。
+    if(ANDROID AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        list(REMOVE_ITEM _executor_extra_warnings
+            -Wlogical-op
+            -Wnoexcept
+            -Wstrict-null-sentinel
+        )
+    endif()
+
+    target_compile_options(${target} PRIVATE ${_executor_extra_warnings})
     
     # Clang 特定警告
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
