@@ -18,7 +18,14 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_BUILD_EXAMPLES=ON -DEXECUTO
 cmake --build build
 ```
 
-Linux 需要 CMake 3.16+ 和 C++20 编译器；Windows 使用 Visual Studio 2019+ / MSVC。首次路径不要求 CUDA、OpenCL 或实时权限。
+Linux 需要 CMake 3.16+ 和 C++20 编译器；Windows 使用 Visual Studio 2019+ / MSVC。Android 使用 NDK r26c/r28b，一期为 CPU-only：
+
+```bash
+export ANDROID_NDK_HOME=/path/to/android-ndk-r26c
+scripts/build_android.sh --abi arm64-v8a --api 21
+```
+
+Android 构建、AGP 接入和 `c++_shared` 打包见 [PACKAGE_ANDROID.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/PACKAGE_ANDROID.md)。首次路径不要求 CUDA、OpenCL 或实时权限。
 
 ## 加入自己的工程
 
@@ -71,4 +78,4 @@ ctest --test-dir build -L tutorial --output-on-failure
 
 ## 下一步
 
-进入[第一个任务](/zh/quick-start/first-task)。准备部署到正式 Linux/Windows 环境时，使用[平台部署核对](/zh/reliability/platform-deployment)验证权限、亲和性和实际运行状态。
+进入[第一个任务](/zh/quick-start/first-task)。准备部署到正式 Linux、Windows 或 Android 环境时，使用[平台部署核对](/zh/reliability/platform-deployment)验证权限、亲和性和实际运行状态。

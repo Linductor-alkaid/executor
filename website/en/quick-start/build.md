@@ -18,7 +18,14 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_BUILD_EXAMPLES=ON -DEXECUTO
 cmake --build build
 ```
 
-Linux requires CMake 3.16+ and a C++20 compiler. On Windows, use Visual Studio 2019+ with MSVC. CUDA, OpenCL, and real-time privileges are not needed for this first path.
+Linux requires CMake 3.16+ and a C++20 compiler. On Windows, use Visual Studio 2019+ with MSVC. Android uses NDK r26c/r28b and is CPU-only in this stage:
+
+```bash
+export ANDROID_NDK_HOME=/path/to/android-ndk-r26c
+scripts/build_android.sh --abi arm64-v8a --api 21
+```
+
+For Android packaging, AGP integration, and `c++_shared`, see [PACKAGE_ANDROID.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/PACKAGE_ANDROID.md). CUDA, OpenCL, and real-time privileges are not needed for this first path.
 
 ## Use it from your project
 
@@ -61,5 +68,7 @@ To run all tutorial smoke tests:
 cmake --build build
 ctest --test-dir build -L tutorial --output-on-failure
 ```
+
+For a Linux, Windows, or Android production deployment, use the [platform deployment checklist](/en/reliability/platform-deployment) before tuning permissions or affinity.
 
 Next, [run your first task](/en/quick-start/first-task).

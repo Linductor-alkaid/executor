@@ -224,4 +224,4 @@ max_cycle_load      = max_cycle_time_ns / cycle_period_ns
 
 ## 下一步
 
-先在[通信可观察性](/zh/realtime-and-communication/observability)确认字段来源；遇到实际 drop、周期超限或关闭异常时使用[按症状排查运行故障](/zh/reliability/troubleshooting)。平台权限与调优状态见[Linux 与 Windows 部署核对](/zh/reliability/platform-deployment)。
+先在[通信可观察性](/zh/realtime-and-communication/observability)确认字段来源；遇到实际 drop、周期超限或关闭异常时使用[按症状排查运行故障](/zh/reliability/troubleshooting)。平台权限与调优状态见[Linux、Windows 与 Android 部署核对](/zh/reliability/platform-deployment)。

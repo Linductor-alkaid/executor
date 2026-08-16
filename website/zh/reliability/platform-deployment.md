@@ -1,9 +1,9 @@
 ---
-title: Linux 与 Windows 部署核对
-description: 核对编译产物、CPU 可用范围、实时调度、内存锁定、计时器和运行状态，区分平台预期差异与真实部署失败。
+title: Linux、Windows 与 Android 部署核对
+description: 核对 Linux、Windows 与 Android 的编译产物、CPU 可用范围、实时调度、内存锁定、计时器和运行状态，区分平台预期差异与真实部署失败。
 ---
 
-# Linux 与 Windows 部署核对
+# Linux、Windows 与 Android 部署核对
 
 ## 先定义部署是否合格
 
@@ -17,16 +17,16 @@ description: 核对编译产物、CPU 可用范围、实时调度、内存锁定
 
 ## 构建与运行差异
 
-| 项目 | Linux | Windows |
-| --- | --- | --- |
-| 推荐工具链 | CMake 3.16+，GCC/Clang，C++20 | CMake 3.16+，Visual Studio 2019+ / MSVC，C++20 |
-| 线程实现 | pthread | Windows thread API |
-| CMake 生成器 | 通常为单配置 | Visual Studio 通常为多配置，构建和 CTest 要指定 `Release` |
-| 实时优先级 | `SCHED_FIFO` 1–99，需要系统授权 | 映射到 `SetThreadPriority` 等级，不等价于 Linux `SCHED_FIFO` |
-| CPU 亲和性 | 当前线程允许的 cpuset 内选择 | `SetThreadAffinityMask`；当前实现使用单个 64 位 mask |
-| 内存锁定 | 显式 opt-in 的 `mlockall(MCL_CURRENT \| MCL_FUTURE)`，影响整个进程和后续映射 | 没有等价实现，`process_memory_lock_applied` 预期为 false |
-| timer slack | `PR_SET_TIMERSLACK` | 没有 per-thread 等价实现，`timer_slack_applied` 预期为 false |
-| 短周期计时 | Linux 单调时钟与 timer slack | 周期短于 20ms 时，线程生命周期内请求 1ms timer period |
+| 项目 | Linux | Windows | Android |
+| --- | --- | --- | --- |
+| 推荐工具链 | CMake 3.16+，GCC/Clang，C++20 | CMake 3.16+，Visual Studio 2019+ / MSVC，C++20 | NDK r26c/r28b + CMake；一期 CPU-only |
+| 线程实现 | pthread | Windows thread API | bionic pthread |
+| CMake 生成器 | 通常为单配置 | Visual Studio 通常为多配置，构建和 CTest 要指定 `Release` | NDK toolchain + Ninja/Make；由 `scripts/build_android.sh` 驱动 |
+| 实时优先级 | `SCHED_FIFO` 1–99，需要系统授权 | 映射到 `SetThreadPriority` 等级，不等价于 Linux `SCHED_FIFO` | 默认不自动申请 `SCHED_FIFO`；显式配置仍 best-effort，普通 App 通常 `priority_applied=false` |
+| CPU 亲和性 | 当前线程允许的 cpuset 内选择 | `SetThreadAffinityMask`；当前实现使用单个 64 位 mask | `sched_setaffinity` 当前允许 cpuset；受 cgroup/SELinux 限制，失败非致命 |
+| 内存锁定 | 显式 opt-in 的 `mlockall(MCL_CURRENT \| MCL_FUTURE)`，影响整个进程和后续映射 | 没有等价实现，`process_memory_lock_applied` 预期为 false | bionic 提供 `mlockall`，但普通 App 通常无权限，`process_memory_lock_applied` 预期为 false |
+| timer slack | `PR_SET_TIMERSLACK` | 没有 per-thread 等价实现，`timer_slack_applied` 预期为 false | `prctl(PR_SET_TIMERSLACK)` 存在，厂商内核可能忽略，状态字段为准 |
+| 短周期计时 | Linux 单调时钟与 timer slack | 周期短于 20ms 时，线程生命周期内请求 1ms timer period | `std::chrono::steady_clock` 软周期；不承诺硬实时精度 |
 
 Linux Release 构建：
 
@@ -37,6 +37,13 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DEXECUTOR_ENABLE_GPU=OFF
 cmake --build build -j
 ctest --test-dir build -L tutorial --output-on-failure
+```
+
+Android CPU-only Release 构建：
+
+```bash
+export ANDROID_NDK_HOME=/path/to/android-ndk-r26c
+scripts/build_android.sh --abi arm64-v8a,x86_64 --api 21 --build-tests true
 ```
 
 Windows PowerShell Release 构建：
@@ -118,6 +125,28 @@ Get-Process -Id $PID |
 
 服务账号、交互式 PowerShell 和 CI runner 可能拥有不同权限与 CPU 限制。不要只在管理员终端验证后就认为 Windows Service 环境等价。
 
+## Android：部署前状态检查
+
+在与最终 APK/AAR 相同的设备或模拟器上执行：
+
+```bash
+PATH=/path/to/platform-tools:$PATH ANDROID_SERIAL=<serial> \
+  scripts/capture_android_device_info.sh \
+  --test-dir build-android/arm64-v8a/static/tests \
+  --soak-seconds 600
+```
+
+脚本会输出设备型号、Android API、内核、ABI、CPU 信息，并运行 standalone smoke 与
+MPSC soak。解释时注意：
+
+- 普通 App 拿不到 `CAP_SYS_NICE` / `CAP_IPC_LOCK`；priority、affinity、memory lock
+  为 false 是预期降级，不是注册失败。
+- 默认线程池在 Android 上最多 4 个 worker；自动 affinity 只从 cgroup 允许 cpuset 选择。
+- 短周期实时线程不会自动申请 `SCHED_FIFO`。确有权限时应显式设置 `thread_priority`，
+  再检查 `priority_applied`。
+- Android 一期不启用 CUDA/OpenCL；GPU API 返回 `BackendUnavailable`。
+- big.LITTLE 真机在发布前为强制验证 gate；仅模拟器或同构 ARM64 runner 结果不能替代。
+
 ## 用运行状态确认请求是否生效
 
 平台命令说明“可能具备能力”，Executor 状态才说明这次运行的申请结果。启动实时任务后，输出一次结构化核对记录：
@@ -150,6 +179,7 @@ std::cout
 | Linux 需要实时调度 | `priority_applied=true`，同时在目标负载下验证尾延迟和 jitter。 |
 | Linux 需要防分页抖动 | 显式设定 `enable_process_memory_lock=true`，要求 `process_memory_lock_applied=true`，并验证整个进程内存峰值不会突破部署预算。 |
 | Windows 短周期控制 | `is_running=true`、周期统计达标；不要求 Linux 专属的 memory/timer-slack 状态。 |
+| Android CPU-only 服务 | 基础 smoke、通信与关闭通过；调优字段 false 时已在业务健康检查中显式接受该降级。 |
 
 调优字段为 false 时，库会安全继续运行并记录 tuning fallback。是否允许继续接流量必须由业务需求决定：后台刷新可以降级，硬性控制预算则应让健康检查失败。
 
@@ -174,7 +204,7 @@ GPU 问题分三层记录，缺一不可：
 2. **运行层**：驱动、运行时和设备是否对最终服务账号可见。
 3. **Executor 层**：`register_gpu_executor_ex()` 的 `error_code`/`message`，以及注册后的 `GpuExecutorStatus::last_error_message`。
 
-Linux 常用设备工具和 Windows 厂商工具只能证明驱动视角；最终仍要运行一次真实 kernel，并消费 `submit_gpu()` 返回的 future。无 GPU 路径应单独验证 CPU 回退结果正确。
+Linux 常用设备工具和 Windows 厂商工具只能证明驱动视角；最终仍要运行一次真实 kernel，并消费 `submit_gpu()` 返回的 future。无 GPU 路径应单独验证 CPU 回退结果正确。Android 一期为 CPU-only，不把设备 GPU 能力纳入验收。
 
 ## 部署验收记录
 

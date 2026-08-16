@@ -7,6 +7,8 @@ description: Decide what Executor solves, what it does not guarantee, and where 
 
 Executor is a C++20 task execution and thread-management library. Its public Facade brings together where work runs, how callers receive results, and how a runtime shuts down. Dedicated paths remain available for periodic control loops, cross-thread communication, and optional GPU work.
 
+Platform support covers Linux and Windows, plus Android CPU-only builds through the NDK. On Android, priority, affinity, `mlockall`, and timer slack are best-effort, and GPU backends are not enabled in this stage.
+
 Start with the workload, not the thread-pool implementation:
 
 1. Is this one background calculation, soft periodic maintenance, or periodic control with a jitter budget?

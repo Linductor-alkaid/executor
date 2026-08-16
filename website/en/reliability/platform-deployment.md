@@ -1,9 +1,9 @@
 ---
-title: Linux and Windows Deployment
-description: Verify build artifacts, CPU availability, real-time scheduling, memory locking, timers, and runtime status to distinguish expected platform differences from deployment failure.
+title: Linux, Windows, and Android Deployment
+description: Verify Linux, Windows, and Android build artifacts, CPU availability, real-time scheduling, memory locking, timers, and runtime status to distinguish expected platform differences from deployment failure.
 ---
 
-# Linux and Windows Deployment
+# Linux, Windows, and Android Deployment
 
 ## Define deployment success first
 
@@ -17,16 +17,16 @@ For an ordinary thread pool, the first layer is usually enough. Do not request r
 
 ## Build and runtime differences
 
-| Item | Linux | Windows |
-| --- | --- | --- |
-| Toolchain | CMake 3.16+, GCC/Clang, C++20 | CMake 3.16+, Visual Studio 2019+/MSVC, C++20 |
-| Thread implementation | pthread | Windows thread API |
-| CMake generator | Usually single-config | Visual Studio usually multi-config; build/CTest specify `Release` |
-| Real-time priority | `SCHED_FIFO` 1–99 with authorization | `SetThreadPriority` level; not equivalent to `SCHED_FIFO` |
-| CPU affinity | Select within current allowed cpuset | `SetThreadAffinityMask`; current implementation uses one 64-bit mask |
-| Memory locking | Explicit opt-in `mlockall(MCL_CURRENT | MCL_FUTURE)` for the whole process and future mappings | No equivalent; `process_memory_lock_applied` is expected false |
-| Timer slack | `PR_SET_TIMERSLACK` | No per-thread equivalent; `timer_slack_applied` expected false |
-| Short-period timing | Monotonic clock and timer slack | Requests 1 ms timer period for thread lifetime when period <20 ms |
+| Item | Linux | Windows | Android |
+| --- | --- | --- | --- |
+| Toolchain | CMake 3.16+, GCC/Clang, C++20 | CMake 3.16+, Visual Studio 2019+/MSVC, C++20 | NDK r26c/r28b + CMake; CPU-only in this stage |
+| Thread implementation | pthread | Windows thread API | bionic pthread |
+| CMake generator | Usually single-config | Visual Studio usually multi-config; build/CTest specify `Release` | NDK toolchain with Ninja/Make; driven by `scripts/build_android.sh` |
+| Real-time priority | `SCHED_FIFO` 1–99 with authorization | `SetThreadPriority` level; not equivalent to `SCHED_FIFO` | Does not auto-request `SCHED_FIFO`; explicit settings remain best-effort and usually report false |
+| CPU affinity | Select within current allowed cpuset | `SetThreadAffinityMask`; current implementation uses one 64-bit mask | `sched_setaffinity` within allowed cpuset; cgroup/SELinux may reject, non-fatally |
+| Memory locking | Explicit opt-in `mlockall(MCL_CURRENT | MCL_FUTURE)` for the whole process and future mappings | No equivalent; `process_memory_lock_applied` is expected false | `mlockall` exists but ordinary apps lack permission; `process_memory_lock_applied` expected false |
+| Timer slack | `PR_SET_TIMERSLACK` | No per-thread equivalent; `timer_slack_applied` expected false | `prctl(PR_SET_TIMERSLACK)` exists; vendor kernels may ignore it—trust status fields |
+| Short-period timing | Monotonic clock and timer slack | Requests 1 ms timer period for thread lifetime when period <20 ms | `steady_clock` soft periods; no hard real-time guarantee |
 
 Linux Release build:
 
@@ -37,6 +37,13 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DEXECUTOR_ENABLE_GPU=OFF
 cmake --build build -j
 ctest --test-dir build -L tutorial --output-on-failure
+```
+
+Android CPU-only Release build:
+
+```bash
+export ANDROID_NDK_HOME=/path/to/android-ndk-r26c
+scripts/build_android.sh --abi arm64-v8a,x86_64 --api 21 --build-tests true
 ```
 
 Windows PowerShell Release build:
@@ -86,6 +93,30 @@ Get-Process -Id $PID |
 
 These record environment but do not replace thread-level Executor state. Windows priority semantics differ from Linux; one 64-bit affinity mask does not cover all processor-group cases on hosts above 64 logical CPUs; false `process_memory_lock_applied` and `timer_slack_applied` are expected in this implementation; short-period threads request 1 ms timer precision (with power cost) during life; thread naming requires Windows 10 1607+ and is diagnostic only. A service account, interactive shell, and CI runner can have different limits.
 
+## Android: check the final device or emulator
+
+Run on the final device or emulator:
+
+```bash
+PATH=/path/to/platform-tools:$PATH ANDROID_SERIAL=<serial> \
+  scripts/capture_android_device_info.sh \
+  --test-dir build-android/arm64-v8a/static/tests \
+  --soak-seconds 600
+```
+
+The script records model, Android API, kernel, ABI, CPU topology, and standalone tests.
+Interpretation notes:
+
+- Ordinary apps lack `CAP_SYS_NICE` / `CAP_IPC_LOCK`; false priority/affinity/memory-lock
+  fields are expected fallback, not registration failure.
+- The default thread pool is capped at four workers on Android; automatic affinity uses
+  only the cgroup-allowed cpuset.
+- Short-period realtime threads do not auto-request `SCHED_FIFO`. If the device grants
+  permission, set `thread_priority` explicitly and verify `priority_applied`.
+- Android in this stage is CPU-only; GPU APIs return `BackendUnavailable`.
+- big.LITTLE device validation is a mandatory release gate; emulator or homogeneous
+  ARM64 runner results cannot replace it.
+
 ## Confirm requests through runtime status
 
 Platform inspection shows possible capability. Executor status shows this run's result:
@@ -114,6 +145,7 @@ Wait until `cycle_count` grows, then compare status deltas under steady and over
 | Linux real-time scheduling | `priority_applied=true`, plus tail latency/jitter validation under target load |
 | Linux paging-jitter mitigation | Explicitly set `enable_process_memory_lock=true`, then require `process_memory_lock_applied=true` and keep the entire process memory peak inside the deployment budget |
 | Windows short-period control | Running and period statistics meet target; Linux-specific memory/timer-slack fields not required |
+| Android CPU-only service | Basic smoke, communication, and shutdown pass; false tuning fields are explicitly accepted by business health checks |
 
 If tuning falls back, the library runs safely and records it. Business requirements decide whether to keep accepting traffic: background refresh may degrade; hard control budget should fail health checks.
 
@@ -121,7 +153,7 @@ If tuning falls back, the library runs safely and records it. Business requireme
 
 With empty `RealtimeThreadConfig::cpu_affinity`, Executor round-robins among CPUs allowed to the current thread and auto-binds only if at least two are allowed. For explicit affinity: read the final allowed set, reserve capacity for OS/interrupts/ordinary workers, verify `cpu_affinity_applied`, inspect actual affinity with system tools, and measure under full load. Never copy development-machine CPU numbering into another SKU, VM, or container.
 
-For GPU, record three layers: CMake CUDA/OpenCL enablement and headers/libraries; driver/runtime/device visibility to the final account; then `register_gpu_executor_ex()` result and post-registration `GpuExecutorStatus::last_error_message`. A real kernel future is still required; validate CPU fallback independently.
+For GPU, record three layers: CMake CUDA/OpenCL enablement and headers/libraries; driver/runtime/device visibility to the final account; then `register_gpu_executor_ex()` result and post-registration `GpuExecutorStatus::last_error_message`. A real kernel future is still required; validate CPU fallback independently. Android in this stage is CPU-only and does not accept GPU capabilities.
 
 Save build version/commit, OS/architecture, compiler/CMake, service identity/start method, allowed/explicit CPUs, real-time and memlock limits, GPU backend/driver/device, realtime status, smoke tests, steady/overload/shutdown results, and accepted tuning fallbacks. Re-run after base-image, CPU SKU, service-account, or security-policy changes.
 

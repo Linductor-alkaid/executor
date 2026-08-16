@@ -43,7 +43,7 @@ executor.shutdown();
 
 | Item | Current support |
 | --- | --- |
-| Platform | Linux, Windows |
+| Platform | Linux, Windows; Android CPU-only via NDK |
 | Language | C++20 |
 | Build system | CMake 3.16+ |
 | Version | `v0.4.0` |

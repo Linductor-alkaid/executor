@@ -268,4 +268,4 @@ baseline 必须来自相同 runner、相同配置和可追溯 commit。只在变
 
 ## 下一步
 
-评估无锁高级执行器时回到[无锁与性能实验](/zh/advanced/lockfree-and-performance)；把测得的容量转成运行期告警时阅读[容量判断与告警落地](/zh/realtime-and-communication/capacity-and-alerting)，目标平台核对见[Linux 与 Windows 部署核对](/zh/reliability/platform-deployment)。
+评估无锁高级执行器时回到[无锁与性能实验](/zh/advanced/lockfree-and-performance)；把测得的容量转成运行期告警时阅读[容量判断与告警落地](/zh/realtime-and-communication/capacity-and-alerting)，目标平台核对见[Linux、Windows 与 Android 部署核对](/zh/reliability/platform-deployment)。

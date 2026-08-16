@@ -133,4 +133,4 @@ Every rule names data semantics, window/threshold, user impact, automatic action
 
 Run an idle baseline, long target-rate steady state, a short burst, persistent overload, slow/throwing consumer, and shutdown race. Save before/after snapshots, configuration, input distribution, window formula, alert time, automated action, and recovery time. “The process did not crash” is not capacity validation.
 
-For field sources, revisit [communication observability](/en/realtime-and-communication/observability), [troubleshooting](/en/reliability/troubleshooting), and [Linux and Windows deployment](/en/reliability/platform-deployment).
+For field sources, revisit [communication observability](/en/realtime-and-communication/observability), [troubleshooting](/en/reliability/troubleshooting), and [Linux, Windows, and Android deployment](/en/reliability/platform-deployment).

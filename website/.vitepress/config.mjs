@@ -120,7 +120,7 @@ export default defineConfig({
               items: [
                 { text: 'Reliability Overview', link: '/en/reliability/' },
                 { text: 'Troubleshoot by Symptom', link: '/en/reliability/troubleshooting' },
-                { text: 'Linux and Windows Deployment', link: '/en/reliability/platform-deployment' },
+                { text: 'Linux, Windows, and Android Deployment', link: '/en/reliability/platform-deployment' },
                 { text: 'Failure Observability', link: '/en/reliability/failure-observability' },
                 { text: 'Monitoring and Sampling', link: '/en/reliability/monitoring' }
               ]
@@ -270,7 +270,7 @@ export default defineConfig({
           items: [
             { text: '可靠性概览', link: '/zh/reliability/' },
             { text: '按症状排查运行故障', link: '/zh/reliability/troubleshooting' },
-            { text: 'Linux 与 Windows 部署核对', link: '/zh/reliability/platform-deployment' },
+            { text: 'Linux、Windows 与 Android 部署核对', link: '/zh/reliability/platform-deployment' },
             { text: '失败可观察性', link: '/zh/reliability/failure-observability' },
             { text: '监控与采样', link: '/zh/reliability/monitoring' }
           ]

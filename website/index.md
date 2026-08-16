@@ -45,7 +45,7 @@ executor.shutdown();
 
 | 项目 | 当前支持 |
 | --- | --- |
-| 平台 | Linux、Windows |
+| 平台 | Linux、Windows；Android CPU-only（NDK） |
 | 语言 | C++20 |
 | 构建系统 | CMake 3.16+ |
 | 版本 | `v0.4.0` |
