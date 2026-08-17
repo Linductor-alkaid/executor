@@ -7,7 +7,7 @@ description: 以当前实现说明普通与实时任务的调度、执行、状�
 
 ## 学习目标
 
-建立调试和性能分析所需的执行心智模型，同时把当前内部路径与稳定公开 API 明确区分。
+帮助你理解任务如何执行和完成，同时把当前内部路径与稳定公开 API 明确区分。
 
 ## 普通任务路径
 
@@ -167,4 +167,4 @@ flowchart LR
 
 ## 下一步阅读
 
-先用[源码架构与阅读地图](/zh/advanced/source-architecture)定位同步域；需要高频单消费者任务聚合时阅读[无锁与性能实验](/zh/advanced/lockfree-and-performance)。
+先用[源码结构与阅读路线](/zh/advanced/source-architecture)定位同步域；需要高频单消费者任务聚合时阅读[无锁与性能实验](/zh/advanced/lockfree-and-performance)。

@@ -1,9 +1,9 @@
 ---
-title: 传递每一条消息
+title: 选择消息传递方式
 description: 为普通数据流选择 MpscChannel，为实时周期选择有预算的 RealtimeChannel。
 ---
 
-# 传递每一条消息
+# 选择消息传递方式
 
 ## 学习目标
 
@@ -79,4 +79,4 @@ commands.drain_for_cycle([](const ControlCommand& command) {
 
 ## 下一步阅读
 
-只关心最新配置时请使用[传递最新值、快照和阶段](/zh/realtime-and-communication/state-and-phases)，不要用 FIFO 队列模拟覆盖语义。
+只关心最新配置时请使用[最新值、状态快照与阶段同步](/zh/realtime-and-communication/state-and-phases)，不要用 FIFO 队列模拟覆盖语义。

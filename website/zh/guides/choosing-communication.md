@@ -58,4 +58,4 @@ flowchart TD
 
 ## 下一步阅读
 
-先看这些组件如何连接成[完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)，再用[容量判断与告警落地](/zh/realtime-and-communication/capacity-and-alerting)把数据语义转换成窗口指标与过载动作。普通后台任务的选择请看[如何选择提交接口](/zh/guides/choosing-submit-api)。
+先看这些组件如何连接成[完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)，再用[容量评估与告警处理](/zh/realtime-and-communication/capacity-and-alerting)把数据语义转换成窗口指标与过载动作。普通后台任务的选择请看[如何选择提交接口](/zh/guides/choosing-submit-api)。

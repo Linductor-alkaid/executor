@@ -91,4 +91,4 @@ const bool queued = executor.try_push_realtime_task(
 
 ## 下一步阅读
 
-[传递每一条消息](/zh/realtime-and-communication/channels)选择普通数据流或实时周期内有限消费；需要可观察的配置和状态传递，请继续阅读下一章。
+[选择消息传递方式](/zh/realtime-and-communication/channels)选择普通数据流或实时周期内有限消费；需要可观察的配置和状态传递，请继续阅读下一章。

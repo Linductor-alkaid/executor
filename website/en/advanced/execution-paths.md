@@ -7,7 +7,7 @@ description: Explain current ordinary and realtime task scheduling, execution, s
 
 ## Goal
 
-Build a debugging/performance mental model while keeping current internal paths distinct from stable public API.
+Understand how work runs and completes while keeping current internal paths distinct from the stable public API.
 
 ## Ordinary task path
 

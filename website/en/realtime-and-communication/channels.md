@@ -1,9 +1,9 @@
 ---
-title: Deliver Every Message
+title: Choose a Message-Passing Component
 description: Use MpscChannel for ordinary data flow and a budgeted RealtimeChannel for periodic consumption.
 ---
 
-# Deliver Every Message
+# Choose a Message-Passing Component
 
 ## Goal
 

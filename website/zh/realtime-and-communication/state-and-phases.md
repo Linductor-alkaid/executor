@@ -1,9 +1,9 @@
 ---
-title: 传递最新值、快照和阶段
+title: 最新值、状态快照与阶段同步
 description: 为最新配置、完整状态与启动顺序分别选择 LatestMailbox、DoubleBuffer、PhaseGate 和 Sequencer。
 ---
 
-# 传递最新值、快照和阶段
+# 最新值、状态快照与阶段同步
 
 ## 学习目标
 

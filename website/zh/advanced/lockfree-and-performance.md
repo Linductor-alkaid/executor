@@ -199,4 +199,4 @@ consumer pop
 
 ## 下一步阅读
 
-先用[源码架构与阅读地图](/zh/advanced/source-architecture)理解同步域，再使用[性能测量与回归门禁](/zh/advanced/performance-measurement)固定实验环境、指标语义和门禁层级；回到[API 参考](/zh/reference/api)确认公开接口。性能报告和内部优化历史可作为事实来源，但不是用户程序的依赖契约。
+先用[源码结构与阅读路线](/zh/advanced/source-architecture)理解同步域，再使用[性能测量与回归检查](/zh/advanced/performance-measurement)固定实验环境和指标定义；回到[API 参考](/zh/reference/api)确认公开接口。性能报告和内部优化历史可供参考，但不是用户程序可以依赖的契约。

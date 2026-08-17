@@ -1,9 +1,9 @@
 ---
-title: Source Architecture Map
+title: Source Structure and Reading Guide
 description: Follow the public Facade into manager, thread pool, task graph, realtime executor, and lock-free queue to form a source-level debugging model.
 ---
 
-# Source Architecture Map
+# Source Structure and Reading Guide
 
 ## What this page solves
 

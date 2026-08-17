@@ -1,9 +1,9 @@
 ---
-title: 源码架构与阅读地图
-description: 从公开 Facade 追到 Manager、线程池、任务图、实时执行器和无锁队列，建立源码级调试与修改心智模型。
+title: 源码结构与阅读路线
+description: 从公开 Facade 了解 Manager、线程池、任务图、实时执行器和无锁队列，帮助调试和修改源码。
 ---
 
-# 源码架构与阅读地图
+# 源码结构与阅读路线
 
 ## 这页解决什么问题
 
@@ -101,11 +101,11 @@ flowchart LR
 2. 再运行对应局部测试：任务图改动看依赖/Facade 测试，队列改动看 MPSC/实时 overflow，resize 改动看 resize 与并发停止。
 3. 用状态 API 和 failure event 验证用户可见路径，而不只断言内部变量。
 4. 最后运行 TSAN 或压力测试；并发代码“本地单次通过”不能证明没有竞态。
-5. 如果改动性能，按[性能测量与回归门禁](/zh/advanced/performance-measurement)保存环境、原始 JSON 和正确性对账。
+5. 如果改动性能，按[性能测量与回归检查](/zh/advanced/performance-measurement)保存环境、原始 JSON 和正确性对账。
 
 ## 继续阅读
 
 - [任务如何穿过执行器](/zh/advanced/execution-paths)：沿一条普通任务和实时任务追踪具体状态转移。
 - [无锁与性能实验](/zh/advanced/lockfree-and-performance)：理解 MPSC 槽位序列、对象池和“无锁”的真实范围。
 - [接入自定义周期源](/zh/advanced/custom-cycle-manager)：理解外部时钟如何接管实时线程的触发与停止。
-- [性能测量与回归门禁](/zh/advanced/performance-measurement)：把源码修改转成可复现的性能结论。
+- [性能测量与回归检查](/zh/advanced/performance-measurement)：把源码修改转成可复现的性能结论。

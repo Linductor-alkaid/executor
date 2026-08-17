@@ -1,13 +1,13 @@
 ---
 title: Execution Models and Routing Boundaries
-description: Learn when default automatic routing, future completion, bounded admission, and worker lifecycle must be treated separately.
+description: Understand the difference between task completion, queue admission, and worker lifecycle when using automatic routing.
 ---
 
 # Execution Models and Routing Boundaries
 
-Executor's unified Facade lets ordinary developers begin with `submit_auto(lambda)`, but it does not pretend that every backend is the same kind of thread pool. Before taking an expert path, distinguish the result model your caller actually receives.
+Executor provides one Facade so ordinary developers can start with `submit_auto(lambda)`. The backends do not all report the same kind of result, though. Before using a real-time queue or a long-lived worker, decide what the caller actually needs to know.
 
-## Three results, not one success
+## Completion, admission, and worker startup are different
 
 | Model | Entry | What the caller confirms | What it does not confirm |
 | --- | --- | --- | --- |
@@ -15,7 +15,7 @@ Executor's unified Facade lets ordinary developers begin with `submit_auto(lambd
 | Admission | `dispatch_auto()` | The named bounded queue accepted this task | The task ran, no item dropped, or business effect occurred |
 | Lifecycle | `start_worker()` | A worker registered/started, or startup failed | Protocol handshake, device availability, or first input |
 
-This distinction prevents invalid waiting: `wait_for_completion()` waits only for default asynchronous future work, not real-time cycles, lock-free queues, long-lived workers, or GPU activity.
+This keeps callers from waiting on the wrong thing: `wait_for_completion()` waits for ordinary asynchronous futures, not real-time cycles, lock-free queues, long-lived workers, or GPU activity.
 
 ## What default automatic routing does
 

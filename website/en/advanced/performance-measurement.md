@@ -1,9 +1,9 @@
 ---
-title: Performance Measurement and Regression Gates
+title: Performance Measurement and Regression Checks
 description: Measure throughput, tail latency, jitter, and correctness with one protocol, then select PR, nightly, and release gates by environment stability.
 ---
 
-# Performance Measurement and Regression Gates
+# Performance Measurement and Regression Checks
 
 ## Write the question before running a benchmark
 
