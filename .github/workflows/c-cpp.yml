@@ -49,9 +49,13 @@ jobs:
     - name: 安装依赖 (Ubuntu)
       if: runner.os == 'Linux'
       run: |
-        # GitHub runner 的 azure.archive.ubuntu.com 主镜像偶发不可达，
-        # 限制 apt 的单次超时与重试次数，让它快速回退到 archive.ubuntu.com。
+        # GitHub runner 的 azure.archive.ubuntu.com 主镜像偶发不可达，且 apt 的
+        # mirror 探测重试不受 Acquire::Retries 约束；固定镜像并限制超时与重试。
         APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        # azure 主镜像被黑洞时，apt mirror 方法的探测重试不受上面的 Acquire 选项约束，
+        # 直接固定镜像列表为 archive.ubuntu.com，跳过对 azure 镜像的探测。
+        echo "https://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+        sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list || true
         sudo apt-get update $APT_OPTS
         sudo apt-get install -y $APT_OPTS cmake ninja-build
         if [ "${{ matrix.compiler.name }}" = "gcc" ]; then
@@ -112,8 +116,12 @@ jobs:
 
     - name: 安装依赖
       run: |
-        # 同上：限制 apt 超时与重试，避免镜像故障时卡住任务。
+        # 同上：固定镜像为 archive.ubuntu.com，并限制 apt 超时与重试。
         APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        # azure 主镜像被黑洞时，apt mirror 方法的探测重试不受上面的 Acquire 选项约束，
+        # 直接固定镜像列表为 archive.ubuntu.com，跳过对 azure 镜像的探测。
+        echo "https://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+        sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list || true
         sudo apt-get update $APT_OPTS
         sudo apt-get install -y $APT_OPTS cmake ninja-build g++-11 libgtest-dev
 
@@ -145,8 +153,12 @@ jobs:
 
     - name: 安装依赖
       run: |
-        # 同上：限制 apt 超时与重试，避免镜像故障时卡住任务。
+        # 同上：固定镜像为 archive.ubuntu.com，并限制 apt 超时与重试。
         APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        # azure 主镜像被黑洞时，apt mirror 方法的探测重试不受上面的 Acquire 选项约束，
+        # 直接固定镜像列表为 archive.ubuntu.com，跳过对 azure 镜像的探测。
+        echo "https://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+        sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list || true
         sudo apt-get update $APT_OPTS
         sudo apt-get install -y $APT_OPTS cmake ninja-build g++-11 libgtest-dev
 
@@ -196,8 +208,12 @@ jobs:
 
     - name: 安装依赖
       run: |
-        # 同上：限制 apt 超时与重试，避免镜像故障时卡住任务。
+        # 同上：固定镜像为 archive.ubuntu.com，并限制 apt 超时与重试。
         APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        # azure 主镜像被黑洞时，apt mirror 方法的探测重试不受上面的 Acquire 选项约束，
+        # 直接固定镜像列表为 archive.ubuntu.com，跳过对 azure 镜像的探测。
+        echo "https://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+        sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list || true
         sudo apt-get update $APT_OPTS
         sudo apt-get install -y $APT_OPTS cmake ninja-build g++-11 libgtest-dev
 
@@ -234,8 +250,12 @@ jobs:
 
     - name: 安装 GPU 头文件构建依赖
       run: |
-        # 同上：限制 apt 超时与重试，避免镜像故障时卡住任务。
+        # 同上：固定镜像为 archive.ubuntu.com，并限制 apt 超时与重试。
         APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        # azure 主镜像被黑洞时，apt mirror 方法的探测重试不受上面的 Acquire 选项约束，
+        # 直接固定镜像列表为 archive.ubuntu.com，跳过对 azure 镜像的探测。
+        echo "https://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+        sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list || true
         sudo apt-get update $APT_OPTS
         sudo apt-get install -y $APT_OPTS cmake ninja-build g++-11 libgtest-dev opencl-headers ocl-icd-opencl-dev
         mkdir -p "$RUNNER_TEMP/cuda-stub/include"
@@ -305,8 +325,12 @@ jobs:
 
     - name: 安装依赖
       run: |
-        # 同上：限制 apt 超时与重试，避免镜像故障时卡住任务。
+        # 同上：固定镜像为 archive.ubuntu.com，并限制 apt 超时与重试。
         APT_OPTS="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        # azure 主镜像被黑洞时，apt mirror 方法的探测重试不受上面的 Acquire 选项约束，
+        # 直接固定镜像列表为 archive.ubuntu.com，跳过对 azure 镜像的探测。
+        echo "https://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+        sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list || true
         sudo apt-get update $APT_OPTS
         sudo apt-get install -y $APT_OPTS cmake ninja-build g++-11 lcov libgtest-dev
         cd /usr/src/gtest
