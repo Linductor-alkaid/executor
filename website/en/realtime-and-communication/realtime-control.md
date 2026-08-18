@@ -21,7 +21,7 @@ A long-lived blocking wait is neither of these paths. Keep it out of `cycle_call
 
 The tutorial disables memory-lock and timer-slack requests so a non-privileged environment can validate the basic path:
 
-<<< @/../examples/tutorial/07_realtime.cpp{1-39}
+<<< @/../examples/tutorial/07_realtime.cpp{1-45}
 
 ```bash
 ./build/examples/tutorial/tutorial_07_realtime

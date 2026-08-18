@@ -20,8 +20,14 @@ int main() {
     std::atomic<int> health_checks{0};
     const auto task_id = executor.submit_periodic(5, [&] { ++health_checks; });
 
-    std::this_thread::sleep_for(30ms);
-    const auto status = executor.get_periodic_task_status(task_id);
+    // 有界等待第一次健康检查完成：不依赖固定睡眠时长，调度慢的机器上也能等到。
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    auto status = executor.get_periodic_task_status(task_id);
+    while ((!status || status->execution_count == 0) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+        status = executor.get_periodic_task_status(task_id);
+    }
     const bool cancelled = executor.cancel_task(task_id);
 
     std::cout << retry.get() << '\n';

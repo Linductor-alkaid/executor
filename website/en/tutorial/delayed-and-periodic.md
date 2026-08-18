@@ -9,7 +9,7 @@ description: Use delayed and soft-periodic Facade tasks for device retry and bac
 
 Schedule one device retry with `submit_delayed()`, run health checks with `submit_periodic()`, and stop periodic work through status queries and `cancel_task()`.
 
-<<< @/../examples/tutorial/03_delayed_periodic.cpp{1-31}
+<<< @/../examples/tutorial/03_delayed_periodic.cpp{1-36}
 
 ```bash
 ./build/examples/tutorial/tutorial_03_delayed_periodic
@@ -19,7 +19,7 @@ Expected output:
 
 ```text
 retry complete
-health checks=6
+health checks=1
 periodic status=running, cancelled=yes
 ```
 

@@ -29,8 +29,14 @@ int main() {
     }
 
     const bool pushed = executor.try_push_realtime_task("tutorial_rt", [&] { ++commands; });
-    std::this_thread::sleep_for(30ms);
-    const auto status = executor.get_realtime_executor_status("tutorial_rt");
+    // 有界等待首个周期和命令执行完成：不依赖固定睡眠时长，调度慢的机器上也能等到。
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    auto status = executor.get_realtime_executor_status("tutorial_rt");
+    while ((status.cycle_count == 0 || commands.load() == 0) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+        status = executor.get_realtime_executor_status("tutorial_rt");
+    }
     executor.stop_realtime_task("tutorial_rt");
 
     std::cout << "realtime started=yes, command=" << (pushed ? "queued" : "rejected")
