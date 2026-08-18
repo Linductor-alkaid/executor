@@ -17,7 +17,7 @@ description: 用 Facade 的延迟和软周期任务处理设备重试与后台�
 
 这两种工作都使用 `Executor` Facade，而不是直接操作底层线程池：
 
-<<< @/../examples/tutorial/03_delayed_periodic.cpp{1-31}
+<<< @/../examples/tutorial/03_delayed_periodic.cpp{1-36}
 
 完整源码：[`examples/tutorial/03_delayed_periodic.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/tutorial/03_delayed_periodic.cpp)。
 
@@ -29,7 +29,7 @@ description: 用 Facade 的延迟和软周期任务处理设备重试与后台�
 
 ```text
 retry complete
-health checks=6
+health checks=1
 periodic status=running, cancelled=yes
 ```
 
@@ -59,7 +59,7 @@ callback 必须可复制，移动独占的 `unique_ptr` lambda 通常不能直�
 
 ## 运行假设与所有权
 
-示例的延迟只有 `1 ms`，周期为 `5 ms`，运行约 `30 ms`；这些值只是让 smoke test 快速完成，不是设备重试参数。调度时间使用相对时长，表示“最早到期时间”，到期后仍要等待共享线程池可用。
+示例的延迟只有 `1 ms`，周期为 `5 ms`，并以最多 `2 s` 的有界轮询等待第一次健康检查完成，而不是睡眠固定时长后直接断言；这些值只是让 smoke test 快速完成，不是设备重试参数。调度时间使用相对时长，表示“最早到期时间”，到期后仍要等待共享线程池可用。
 
 周期 callback 捕获 `health_checks` 的引用，因此该原子对象必须活到取消任务、停止 timer 并完成在途 callback 之后。长期服务中，task ID 的 owner 通常也是 callback 所依赖状态的生命周期 owner。
 

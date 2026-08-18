@@ -21,7 +21,7 @@ description: 使用 Executor Facade 注册、诊断启动、推送和停止一�
 
 教程示例在非特权环境中主动关闭内存锁和 timer slack 请求，以便验证基本路径：
 
-<<< @/../examples/tutorial/07_realtime.cpp{1-39}
+<<< @/../examples/tutorial/07_realtime.cpp{1-45}
 
 完整源码：[`examples/tutorial/07_realtime.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/tutorial/07_realtime.cpp)。
 
