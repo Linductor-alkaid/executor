@@ -174,7 +174,10 @@ static bool test_get_status_during_resize() {
     std::thread reader([&]() {
         while (!stop.load(std::memory_order_acquire)) {
             (void)pool.get_status();
-            std::this_thread::yield();
+            // 读循环限速：get_status() 每次都持有 mutex_，零间隔循环在慢速
+            // runner（TSan 放大）上会饿死等待同一把锁的 worker/resize 路径，
+            // 曾把本用例拖到 CTest 180s 超时（master run 32096500953）。
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     });
 
