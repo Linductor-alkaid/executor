@@ -1,13 +1,13 @@
 ---
 title: 执行模型与路由边界
-description: 理解默认自动路由、future 完成、有界接收和 worker 生命周期何时应当分开处理。
+description: 了解默认自动路由，以及任务完成、队列接收和 worker 生命周期之间的区别。
 ---
 
 # 执行模型与路由边界
 
-`Executor` 的统一 Facade 让普通开发者可以从 `submit_auto(lambda)` 开始，但它不会把所有后端伪装成同一种线程池。进入专家路径之前，先分清调用方实际得到的结果模型。
+`Executor` 提供统一的 Facade，普通开发者从 `submit_auto(lambda)` 就能开始。不过，不同后端返回的结果并不一样。使用实时队列或长期 worker 之前，先确认调用方到底需要知道什么。
 
-## 三种结果，不是一种成功
+## 任务完成、队列接收和 worker 启动是三回事
 
 | 模型 | 入口 | 调用方确认的事实 | 没有确认的事实 |
 | --- | --- | --- | --- |
@@ -15,7 +15,7 @@ description: 理解默认自动路由、future 完成、有界接收和 worker �
 | admission | `dispatch_auto()` | 指定有界队列接受了本次任务 | 任务已执行、没有 drop 或业务已生效 |
 | lifecycle | `start_worker()` | worker 已注册/启动，或得到启动失败 | 协议已握手、设备可用或首条数据已到达 |
 
-这一区分保护调用方不做错误等待：`wait_for_completion()` 只等待默认异步的 future 型工作；它不等待实时周期、无锁队列或长期 worker。
+这样就不会等错东西：`wait_for_completion()` 只等待默认异步任务的 future，不会等待实时周期、无锁队列或长期 worker。
 
 ## 默认自动路由做什么
 

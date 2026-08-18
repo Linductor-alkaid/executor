@@ -16,4 +16,4 @@ Start with the [complete robot pipeline](/en/tutorial/complete-robot-pipeline), 
 5. [Communication observability](/en/realtime-and-communication/observability): understand `CommStats` and local event callbacks.
 6. [Capacity and alerts](/en/realtime-and-communication/capacity-and-alerting): turn cumulative statistics into window rates, margins, alert levels, and actions.
 
-The complete API is in [`docs/API.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md); the integrated runnable fact source is [`examples/comm_robot_pipeline.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/comm_robot_pipeline.cpp).
+The complete API is in [`docs/API.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md). The integrated runnable example is [`examples/comm_robot_pipeline.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/comm_robot_pipeline.cpp).

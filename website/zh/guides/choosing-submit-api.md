@@ -9,7 +9,7 @@ description: 先区分完成、接收和生命周期结果，再按业务约束�
 
 ## 30 秒选择表
 
-| 业务问题 | 默认接口 | 返回结果表示 | 何时继续下钻 |
+| 业务问题 | 默认接口 | 返回结果表示 | 何时进一步了解 |
 | --- | --- | --- | --- |
 | 一次性后台工作 | `submit_auto(lambda)` | `future` 的完成或异常 | 需要 priority、delay、batch 或 dependency |
 | 独立 CPU/GPU 实现 | `submit_auto(cpu_gpu_task(...))` | 已选路径的 future 完成或异常 | 需要后端注册、GPU 诊断或调参 |
@@ -23,7 +23,7 @@ description: 先区分完成、接收和生命周期结果，再按业务约束�
 
 不确定名称、intent、fallback 与 capability snapshot 如何共同决定目标时，先读[自动路由如何匹配目标](/zh/guides/execution-models-and-routing)，再继续按场景选型。
 
-## 先按结果模型分流
+## 先看调用方要确认什么
 
 ```mermaid
 flowchart TD
@@ -61,7 +61,7 @@ auto decoded = future.get();
 - batch 只适用于相互独立、拥有相同调度语义的工作；
 - `TaskHandle`、`submit_after()` 和 `when_all()` 表达成功依赖，不要用优先级或隐藏的 `future.get()` 模拟。
 
-这些 API 仍返回 future、handle 或 task ID；按各自结果模型观察失败，不要把它们降级成“只是另一种 submit”。
+这些 API 仍返回 future、handle 或 task ID；按各自的语义观察失败，不要把它们当成“只是另一种 submit”。
 
 ## 有界接收：只在约束已知时用 `dispatch_auto`
 
@@ -89,4 +89,4 @@ if (!result.accepted) {
 
 ## 下一步阅读
 
-先阅读[执行模型与路由边界](/zh/guides/execution-models-and-routing)建立三种结果模型；随后按明确需求进入[实时控制](/zh/realtime-and-communication/realtime-control)、[GPU 与降级](/zh/gpu/)或[Blocking I/O worker](/zh/realtime-and-communication/blocking-io-workers)。任务输入所有权见[提交自己的函数与数据](/zh/quick-start/task-inputs-and-ownership)。
+先阅读[执行模型与路由边界](/zh/guides/execution-models-and-routing)，弄清完成、接收和 worker 生命周期的区别；随后按明确需求进入[实时控制](/zh/realtime-and-communication/realtime-control)、[GPU 与降级](/zh/gpu/)或[Blocking I/O worker](/zh/realtime-and-communication/blocking-io-workers)。任务输入所有权见[提交自己的函数与数据](/zh/quick-start/task-inputs-and-ownership)。

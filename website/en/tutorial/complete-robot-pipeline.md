@@ -5,7 +5,7 @@ description: Connect startup dependencies, frames, latest configuration, real-ti
 
 # Complete Robot Pipeline
 
-The preceding tutorials explained submission, dependencies, and passing values across threads. A real system combines those choices and defines ownership, capacity, failure, and shutdown semantics for every edge. This page uses `comm_robot_pipeline` as its fact source.
+The preceding tutorials explained submission, dependencies, and passing values across threads. A real system combines those choices and defines ownership, capacity, failure, and shutdown semantics for every edge. This page follows the repository's `comm_robot_pipeline` example.
 
 ## What we are building
 

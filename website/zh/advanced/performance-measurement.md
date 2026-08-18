@@ -1,9 +1,9 @@
 ---
-title: 性能测量与回归门禁
+title: 性能测量与回归检查
 description: 用统一实验协议分别测量吞吐、尾延迟、jitter 和正确性，并按环境稳定性选择 PR、夜间与发布门禁。
 ---
 
-# 性能测量与回归门禁
+# 性能测量与回归检查
 
 ## 先写问题，再运行 benchmark
 
@@ -90,7 +90,7 @@ Release 与 Debug、裸机与共享 CI runner、不同 CPU SKU 的绝对值不�
 
 ### 5. 保存原始输出
 
-优先保存 JSON、命令、stdout/stderr 和环境记录。报告中的表格是派生视图，不应成为唯一事实源。原始数据使后续能够重新计算百分位、检查样本数和解释门禁变化。
+优先保存 JSON、命令、stdout/stderr 和环境记录。报告中的表格是整理后的结果，不应作为唯一依据。原始数据使后续能够重新计算百分位、检查样本数和解释检查规则的变化。
 
 ## 仓库现有 benchmark 如何使用
 
@@ -268,4 +268,4 @@ baseline 必须来自相同 runner、相同配置和可追溯 commit。只在变
 
 ## 下一步
 
-评估无锁高级执行器时回到[无锁与性能实验](/zh/advanced/lockfree-and-performance)；把测得的容量转成运行期告警时阅读[容量判断与告警落地](/zh/realtime-and-communication/capacity-and-alerting)，目标平台核对见[Linux、Windows 与 Android 部署核对](/zh/reliability/platform-deployment)。
+评估无锁高级执行器时回到[无锁与性能实验](/zh/advanced/lockfree-and-performance)；把测得的容量转成运行期告警时阅读[容量评估与告警处理](/zh/realtime-and-communication/capacity-and-alerting)，目标平台核对见[Linux、Windows 与 Android 部署核对](/zh/reliability/platform-deployment)。

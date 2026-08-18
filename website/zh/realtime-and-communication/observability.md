@@ -44,4 +44,4 @@ if (stats.dropped_count != 0 || stats.timeout_count != 0) {
 
 ## 下一步阅读
 
-继续阅读[容量判断与告警落地](/zh/realtime-and-communication/capacity-and-alerting)，把累计统计转换成窗口速率、余量和处置动作；也可以回到[完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)按故障注入步骤验证背压与退出。
+继续阅读[容量评估与告警处理](/zh/realtime-and-communication/capacity-and-alerting)，把累计统计转换成窗口速率、余量和处置动作；也可以回到[完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)按故障注入步骤验证背压与退出。

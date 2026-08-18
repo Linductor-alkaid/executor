@@ -9,7 +9,7 @@ Do not start with an executor class name. First ask what the caller must confirm
 
 ## 30-second selection table
 
-| Problem | Default API | Result means | When to go deeper |
+| Problem | Default API | Result means | When to read more |
 | --- | --- | --- | --- |
 | One finite background operation | `submit_auto(lambda)` | Future completion or exception | Priority, delay, batch, or dependencies |
 | Independent CPU/GPU implementations | `submit_auto(cpu_gpu_task(...))` | Future completion or exception on selected path | Registration, diagnostics, or GPU tuning |

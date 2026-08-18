@@ -1,9 +1,9 @@
 ---
-title: 容量判断与告警落地
+title: 容量评估与告警处理
 description: 从通信和实时累计统计计算窗口速率、队列占用、消费余量与周期超限，并把告警连接到明确处置动作。
 ---
 
-# 容量判断与告警落地
+# 容量评估与告警处理
 
 本页面向已选择有界通信或实时队列的专家。普通后台任务无需据此选择后端；先从[执行模型与路由边界](/zh/guides/execution-models-and-routing)确认业务需要的是 completion 还是 admission。`dispatch_auto(RealtimeQueue)` 的 `accepted` 是本次入队结果，不能用它替代本页的周期、drop 和容量监控。
 

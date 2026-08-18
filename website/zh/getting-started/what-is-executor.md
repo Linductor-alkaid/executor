@@ -41,7 +41,7 @@ Executor 是一个面向 C++20 应用的进程内并发执行基础设施库。�
 
 ## 先从默认 Facade 开始
 
-| 用户需求 | 默认入口 | 调用方得到什么 | 何时下钻 |
+| 用户需求 | 默认入口 | 调用方得到什么 | 何时进一步了解 |
 | --- | --- | --- | --- |
 | 一次性后台计算 | `submit_auto(lambda)` | `future` 中的返回值或异常 | 需要 priority、delay、batch、dependency 时 |
 | 独立 CPU/GPU 实现 | `cpu_gpu_task()` + `submit_auto()` | 已选路径的 future 完成或异常 | 需要 GPU 注册、诊断或调参时 |
@@ -51,7 +51,7 @@ Executor 是一个面向 C++20 应用的进程内并发执行基础设施库。�
 
 默认 `Auto` 不会为了性能偷偷选择无锁、实时或 GPU 后端。GPU 也不是普通任务变慢后的自动答案：只有业务明确拥有独立 CPU/GPU 实现、数据规模足以覆盖传输与启动成本，且部署环境可诊断时才应进入该路径。
 
-## 最常用的心智模型
+## 用一张图理解执行路径
 
 ```text
 业务请求
@@ -110,6 +110,6 @@ try {
 2. 在真实组件边界确定[初始化与关闭](/zh/quick-start/lifecycle)的 owner。
 3. 先阅读[执行模型与路由边界](/zh/guides/execution-models-and-routing)，再按自然语言需求阅读[如何选择提交接口](/zh/guides/choosing-submit-api)，不要从 API 名称反推设计。
 4. 现有项目先按[从线程代码迁移](/zh/guides/migrating-existing-threads)划清所有权，再用[生产接入检查清单](/zh/guides/production-readiness)补齐有界等待与失败观察。
-5. 只有需求明确时，再进入实时与通信、GPU 或高级逃生口。
+5. 只有需求明确时，再进入实时与通信、GPU 或高级接口。
 
 如果目前只想验证项目能否工作，下一页直接进入[构建与安装](/zh/quick-start/build)。

@@ -1,9 +1,9 @@
 ---
-title: Advanced Escape Hatches
+title: Advanced Interfaces
 description: Leave the Executor Facade cautiously only for genuine resource isolation, executor extension, or GPU resource control.
 ---
 
-# Advanced Escape Hatches
+# Advanced Interfaces
 
 ## Goal
 
