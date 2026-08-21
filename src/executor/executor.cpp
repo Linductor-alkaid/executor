@@ -185,7 +185,22 @@ Executor::Executor()
 // 析构函数
 Executor::~Executor() {
     stop_timer_thread();
-    // owned_manager_ 析构时会自动释放所有执行器（RAII）
+    // 实例模式：池排空必须在 facade 状态成员析构之前完成。成员按声明逆序
+    // 析构时 owned_manager_ 几乎最后销毁，若依赖析构链触发排空，
+    // task_graph_mutex_/task_graph_cv_、failure_mutex_、periodic_tasks_mutex_
+    // 等会先一步被销毁，仍在运行的 wrapper（捕获 this）随即 use-after-free。
+    // shutdown() 幂等：用户已显式 shutdown 时这里基本是空操作。
+    if (owned_manager_) {
+        try {
+            (void)shutdown(true);
+        } catch (...) {
+            // 析构不外泄异常；~ExecutorManager 内部还有 RAII 兜底。
+        }
+        try {
+            owned_manager_.reset();
+        } catch (...) {
+        }
+    }
 }
 
 // 初始化执行器
