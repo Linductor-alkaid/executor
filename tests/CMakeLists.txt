@@ -88,6 +88,18 @@ if(NOT EXECUTOR_OPENCL_ENABLED)
     list(FILTER TEST_SOURCES EXCLUDE REGEX ".*opencl.*")
 endif()
 
+# MSVC 主门禁经 EXECUTOR_FETCH_GTEST 首次纳入 GTest 测试。以下文件存在
+# 既有的 Windows 移植债务（POSIX 专用 API、按直接源码编译的 CUDA 链接
+# 配置、facade record_* 符号在 MSVC 下未解析），补齐前先在 MSVC 排除，
+# 其余 ~110 个测试进入 Windows 门禁（此前只有 6 个 standalone）。
+# 跟踪: 见 PR #174 讨论中的 Windows 测试移植 follow-up。
+if(MSVC)
+    list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_gpu_loader_failure\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_gpu_memory_validation\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_realtime_thread_executor\\.cpp$")
+    list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_executor_facade_submit_batch\\.cpp$")
+endif()
+
 # 如果没有测试文件，创建一个占位符说明
 if(NOT TEST_SOURCES)
     message(STATUS "No test files found. Tests will be added in later stages.")

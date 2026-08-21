@@ -17,6 +17,7 @@
 
 using executor::gpu::GpuBackend;
 using executor::gpu::GpuExecutorConfig;
+using executor::gpu::GpuTaskConfig;
 using executor::gpu::OpenCLExecutor;
 using executor::gpu::OpenCLFunctionPointers;
 using executor::gpu::OpenCLLoader;
