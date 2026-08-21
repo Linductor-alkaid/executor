@@ -38,8 +38,36 @@ endforeach()
 # 查找 Google Test
 find_package(GTest)
 if(NOT GTest_FOUND)
-    message(STATUS "GTest not found. Skipping GTest tests.")
-    return()
+    # 可选兜底：无系统 GTest 时（如未装 libgtest-dev 的 runner），用 FetchContent
+    # 拉取固定版本的 googletest。默认关闭，离线构建不受影响。
+    option(EXECUTOR_FETCH_GTEST
+        "Download googletest via FetchContent when system GTest is not found" OFF)
+    if(EXECUTOR_FETCH_GTEST)
+        include(FetchContent)
+        FetchContent_Declare(googletest
+            URL https://github.com/google/googletest/archive/refs/tags/v1.15.2.zip)
+        set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+        set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(googletest)
+        # googletest 提供 gtest / gtest_main 目标与 GTest::gtest 别名，但没有
+        # find_package 模块模式的 GTest::GTest / GTest::Main 名称；补齐以保持
+        # 测试目标的链接语句不变。
+        if(NOT TARGET GTest::GTest)
+            add_library(GTest::GTest INTERFACE IMPORTED)
+            target_link_libraries(GTest::GTest INTERFACE gtest)
+        endif()
+        if(NOT TARGET GTest::Main)
+            add_library(GTest::Main INTERFACE IMPORTED)
+            target_link_libraries(GTest::Main INTERFACE gtest_main)
+        endif()
+    else()
+        # 用 WARNING 而非 STATUS：静默跳过约 95% 的测试会让 CI 看起来是绿的。
+        message(WARNING
+            "GTest not found: skipping all GTest-based tests; only the standalone "
+            "tests will build and run. Install libgtest-dev (Ubuntu) or set "
+            "-DEXECUTOR_FETCH_GTEST=ON to get the full suite.")
+        return()
+    endif()
 endif()
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_dispatch_task_fallback\\.cpp$")
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_object_pool_double_release_detect\\.cpp$")

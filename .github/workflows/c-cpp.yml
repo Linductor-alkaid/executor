@@ -57,7 +57,9 @@ jobs:
         echo "https://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
         sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list || true
         sudo apt-get update $APT_OPTS
-        sudo apt-get install -y $APT_OPTS cmake ninja-build
+        # libgtest-dev 必须安装：缺失时 CMake 会跳过全部 GTest 测试，
+        # 主门禁就只剩 6 个 standalone 测试，覆盖范围与绿灯结论严重不符。
+        sudo apt-get install -y $APT_OPTS cmake ninja-build libgtest-dev
         if [ "${{ matrix.compiler.name }}" = "gcc" ]; then
           sudo apt-get install -y $APT_OPTS g++-${{ matrix.compiler.version }}
           echo "CC=gcc-${{ matrix.compiler.version }}" >> $GITHUB_ENV
@@ -83,10 +85,24 @@ jobs:
         cmake -B build `
           -DEXECUTOR_BUILD_TESTS=ON `
           -DEXECUTOR_BUILD_EXAMPLES=ON `
-          -DEXECUTOR_ENABLE_COVERAGE=OFF
+          -DEXECUTOR_ENABLE_COVERAGE=OFF `
+          -DEXECUTOR_FETCH_GTEST=ON
 
     - name: 编译
       run: cmake --build build --config ${{ matrix.build_type }} -j
+
+    - name: 校验注册测试数量
+      # 防回归：GTest 缺失时 CMake 会静默跳过约 120 个测试，只剩 6 个
+      # standalone 测试且仍然全绿。断言注册数量下限，让这种退化显式失败。
+      working-directory: build
+      shell: bash
+      run: |
+        COUNT=$(ctest -N -C ${{ matrix.build_type }} | grep -oE 'Total Tests: [0-9]+' | grep -oE '[0-9]+')
+        echo "Registered tests: ${COUNT}"
+        if [ "${COUNT}" -lt 90 ]; then
+          echo "::error::Only ${COUNT} tests registered - GTest-based tests were likely skipped (missing GTest?)."
+          exit 1
+        fi
 
     - name: 运行测试
       working-directory: build
