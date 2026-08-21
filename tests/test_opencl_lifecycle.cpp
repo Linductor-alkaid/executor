@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -179,5 +181,34 @@ TEST(OpenCLExecutorLifecycleTest, ConcurrentStopWithCopyAllocateAndStatus) {
     stopper.join();
     caller.join();
     block_copy.store(false, std::memory_order_release);
+    EXPECT_FALSE(executor.get_status().is_running);
+}
+
+TEST(OpenCLExecutorLifecycleTest, StopFromInsideKernelFinalizesWithoutTerminate) {
+    // 回归：kernel（运行在 worker 线程上）内部调用 stop() 时，
+    // 旧实现 worker_.join() 会 join 自己抛 EDEADLK，异常逃逸后 stopping_
+    // 永久为 true（start 全部失败），且析构时 joinable 的 std::thread 触发
+    // std::terminate。修复后自停只请求停止，join 由后续外部 stop() 兜底。
+    FakeOpenCLLoaderScope fake_loader;
+    OpenCLExecutor executor("opencl_selfstop", make_config());
+    ASSERT_TRUE(executor.start());
+
+    std::atomic<bool> self_stop_returned{false};
+    GpuTaskConfig config;
+    auto future = executor.submit_kernel([&](void*) {
+        executor.stop();
+        self_stop_returned.store(true, std::memory_order_release);
+    }, config);
+
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(10)), std::future_status::ready);
+    future.get();  // 自停本身不应向 kernel future 注入异常
+    EXPECT_TRUE(self_stop_returned.load(std::memory_order_acquire));
+    EXPECT_FALSE(executor.get_status().is_running);
+
+    // 自停后 worker 已退出但仍待 join：外部 stop() 必须完成 finalize，
+    // 且 restart 不被卡死或拒绝。
+    executor.stop();
+    EXPECT_TRUE(executor.start());
+    executor.stop();
     EXPECT_FALSE(executor.get_status().is_running);
 }

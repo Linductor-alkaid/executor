@@ -109,6 +109,12 @@ private:
     mutable std::mutex error_mutex_;
     std::string last_error_message_;
     std::thread worker_;
+    // worker 线程入口注册、stop() 读取、join 完成后重置；写入均持有
+    // lifecycle_mutex_，用于识别"从 kernel 内部调用 stop()"的自停场景。
+    std::thread::id worker_id_;
+    std::atomic<bool> self_stop_requested_{false};
+    // 串行化对 worker_ 的 join/finalize，避免并发 stop() 双重 join。
+    std::mutex worker_join_mutex_;
     std::function<std::thread(OpenCLExecutor*)> worker_thread_factory_for_test_;
     std::queue<QueuedTask> task_queue_;
     mutable std::mutex queue_mutex_;
