@@ -87,6 +87,14 @@ bool test_concurrent_monitor_set_unset() {
     }
 
     pool.wait_for_completion();
+
+    // Windows 等环境下 setter 线程可能直到任务全部完成后才被调度；有界等待
+    // 至少一次迭代，避免"setter 应与任务执行竞争"的断言因纯调度饿死而假失败。
+    for (int spin = 0; spin < 2000 &&
+                      setter_iterations.load(std::memory_order_relaxed) == 0;
+         ++spin) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
     stop_setter.store(true, std::memory_order_release);
     setter.join();
 

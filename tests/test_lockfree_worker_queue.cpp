@@ -243,8 +243,10 @@ bool test_push_move_does_not_copy() {
         return false;
     }
 
-    if (counters->moves.load(std::memory_order_relaxed) != 1) {
-        std::cerr << "FAILED: expected 1 function target move, got "
+    // 精确移动次数是标准库实现细节（libstdc++ 一次，MSVC 的 std::function
+    // 会多次转发移动）。这里断言可移植的语义：目标只被移动、从未被拷贝。
+    if (counters->moves.load(std::memory_order_relaxed) < 1) {
+        std::cerr << "FAILED: expected at least 1 function target move, got "
                   << counters->moves.load(std::memory_order_relaxed)
                   << std::endl;
         return false;

@@ -106,7 +106,9 @@ jobs:
 
     - name: 运行测试
       working-directory: build
-      run: ctest -C ${{ matrix.build_type }} --output-on-failure --verbose
+      # 与 lockfree 专项任务同一策略：2-vCPU runner 上 benchmark/stress 的
+      # 时延断言噪声过大，不适合作为主门禁的 pass/fail 信号，按名排除。
+      run: ctest -C ${{ matrix.build_type }} -E "^benchmark_|^test_(performance|stress)$" --output-on-failure --verbose
 
     - name: 上传构建产物 (Release)
       if: matrix.build_type == 'Release'
