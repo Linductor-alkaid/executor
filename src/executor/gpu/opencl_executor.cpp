@@ -119,6 +119,16 @@ bool OpenCLExecutor::start() {
     }
 
     try {
+        // 收编可能残留的前一代 worker（例如此前只有 worker 自停、无人 join）。
+        // 对 joinable 的 std::thread 赋值会触发 std::terminate，必须先 join。
+        {
+            std::lock_guard<std::mutex> join_lock(worker_join_mutex_);
+            if (worker_.joinable()) {
+                worker_.join();
+            }
+        }
+        worker_id_ = std::thread::id{};
+        self_stop_requested_.store(false, std::memory_order_release);
         if (worker_thread_factory_for_test_) {
             worker_ = worker_thread_factory_for_test_(this);
         } else {
@@ -140,20 +150,33 @@ bool OpenCLExecutor::start() {
 }
 
 void OpenCLExecutor::stop() {
-    std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+    bool self_stop = false;
+    {
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
 
-    if (stopping_) {
-        return;
+        self_stop = std::this_thread::get_id() == worker_id_;
+        if (stopping_ && !self_stop) {
+            // 另一个 stop() 正在收尾（可能是不会 join 的自停路径）。本调用
+            // 不再重复取消/通知，但必须兜底 finalize：join 掉可能残留的
+            // 已退出未 join 的 worker，否则析构路径会析构 joinable 线程。
+            lifecycle_lock.unlock();
+            join_pending_waiters();
+            {
+                std::lock_guard<std::mutex> join_lock(worker_join_mutex_);
+                if (worker_.joinable()) {
+                    worker_.join();
+                }
+            }
+            return;  // stopping_/worker_id_ 由进行中的那个 stop() 复位
+        }
+
+        running_.store(false, std::memory_order_release);
+        stopping_ = true;
+        // 自停（kernel 内调用 stop()）不能 join 自己：join 会抛 EDEADLK，
+        // 异常逃逸后 stopping_ 永久为 true，此后 start() 全部失败，且
+        // ~OpenCLExecutor 会析构一个 joinable 的 std::thread 触发 terminate。
+        // 这里只请求停止并清理队列，join 留给后续外部 stop()/析构完成。
     }
-
-    if (!running_.exchange(false, std::memory_order_acq_rel)) {
-        join_pending_waiters();
-        return;
-    }
-
-    stopping_ = true;
-
-    lifecycle_lock.unlock();
 
     queue_cv_.notify_all();
     queue_not_full_cv_.notify_all();
@@ -189,12 +212,30 @@ void OpenCLExecutor::stop() {
     // releases context_/queues_/streams_ via cleanup().
     join_pending_waiters();
 
-    if (worker_.joinable()) {
-        worker_.join();
-    }
+    if (!self_stop) {
+        // finalize：外部视角收尾 worker。worker_join_mutex_ 串行化并发
+        // stop() 的 join（其中一个真正 join，其余看到 not-joinable 跳过）。
+        // 若此前只有 worker 自停（线程已退出但无人 join），这里补上 join，
+        // 保证 ~OpenCLExecutor 不会析构 joinable 线程。
+        {
+            std::lock_guard<std::mutex> join_lock(worker_join_mutex_);
+            if (worker_.joinable()) {
+                worker_.join();
+            }
+        }
 
-    lifecycle_lock.lock();
-    stopping_ = false;
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+        worker_id_ = std::thread::id{};
+        self_stop_requested_.store(false, std::memory_order_release);
+        stopping_ = false;
+    } else {
+        // 自停：worker 线程在当前 kernel 返回后会看到 running_==false 并
+        // 退出。stopping_ 立即复位，避免阻塞后续外部 stop()（含析构）的
+        // finalize；join 由那条路径完成。
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+        self_stop_requested_.store(true, std::memory_order_release);
+        stopping_ = false;
+    }
 }
 
 void OpenCLExecutor::wait_for_completion() {
@@ -833,6 +874,13 @@ std::future<void> OpenCLExecutor::submit_kernel_impl(
 }
 
 void OpenCLExecutor::worker_thread() {
+    {
+        // 注册 worker 线程身份，供 stop() 识别"从 kernel 内部调用 stop()"
+        // 的自停场景（对齐 CudaExecutor::worker_thread_func 的做法）。
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mutex_);
+        worker_id_ = std::this_thread::get_id();
+    }
+
     while (true) {
         QueuedTask task;
 

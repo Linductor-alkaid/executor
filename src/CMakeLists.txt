@@ -36,6 +36,15 @@ file(GLOB_RECURSE EXECUTOR_HEADERS CONFIGURE_DEPENDS
 
 # 确定库类型
 if(EXECUTOR_BUILD_SHARED)
+    # 库尚未声明任何 dllexport/可见性注解：MSVC 下 DLL 不会导出符号，
+    # 消费者链接必然失败。在配置期显式拒绝，而不是构建出一个不可用的 DLL。
+    if(MSVC)
+        message(FATAL_ERROR
+            "EXECUTOR_BUILD_SHARED=ON is not supported with MSVC: the library does "
+            "not declare dllexport annotations, so the DLL would export no symbols "
+            "and any consumer would fail to link. Use the default static build "
+            "(EXECUTOR_BUILD_SHARED=OFF).")
+    endif()
     set(LIBRARY_TYPE SHARED)
 else()
     set(LIBRARY_TYPE STATIC)
@@ -134,7 +143,12 @@ endif()
 target_compile_features(executor PUBLIC cxx_std_20)
 
 if(EXECUTOR_BUILD_TESTS)
-    target_compile_definitions(executor PUBLIC EXECUTOR_THREAD_POOL_TEST_HOOKS)
+    # 该宏会改变 ThreadPool 的类布局（在类内追加测试钩子成员），库与所有
+    # 直接包含 thread_pool.hpp 的编译单元必须看到同一布局，否则违反 ODR。
+    # 因此对构建树内全部目标保持 PUBLIC；用 BUILD_INTERFACE genexp 保证
+    # 宏不进入安装导出的 executorTargets.cmake，下游不会被注入该定义。
+    target_compile_definitions(executor PUBLIC
+        $<BUILD_INTERFACE:EXECUTOR_THREAD_POOL_TEST_HOOKS>)
 endif()
 
 # MSVC: 设置源文件编码为UTF-8，避免C4819警告

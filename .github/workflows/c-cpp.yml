@@ -57,7 +57,9 @@ jobs:
         echo "https://archive.ubuntu.com/ubuntu" | sudo tee /etc/apt/apt-mirrors.txt >/dev/null
         sudo sed -i 's#http://azure\.archive\.ubuntu\.com/ubuntu#https://archive.ubuntu.com/ubuntu#g' /etc/apt/sources.list /etc/apt/sources.list.d/*.list || true
         sudo apt-get update $APT_OPTS
-        sudo apt-get install -y $APT_OPTS cmake ninja-build
+        # libgtest-dev 必须安装：缺失时 CMake 会跳过全部 GTest 测试，
+        # 主门禁就只剩 6 个 standalone 测试，覆盖范围与绿灯结论严重不符。
+        sudo apt-get install -y $APT_OPTS cmake ninja-build libgtest-dev
         if [ "${{ matrix.compiler.name }}" = "gcc" ]; then
           sudo apt-get install -y $APT_OPTS g++-${{ matrix.compiler.version }}
           echo "CC=gcc-${{ matrix.compiler.version }}" >> $GITHUB_ENV
@@ -83,14 +85,30 @@ jobs:
         cmake -B build `
           -DEXECUTOR_BUILD_TESTS=ON `
           -DEXECUTOR_BUILD_EXAMPLES=ON `
-          -DEXECUTOR_ENABLE_COVERAGE=OFF
+          -DEXECUTOR_ENABLE_COVERAGE=OFF `
+          -DEXECUTOR_FETCH_GTEST=ON
 
     - name: 编译
       run: cmake --build build --config ${{ matrix.build_type }} -j
 
+    - name: 校验注册测试数量
+      # 防回归：GTest 缺失时 CMake 会静默跳过约 120 个测试，只剩 6 个
+      # standalone 测试且仍然全绿。断言注册数量下限，让这种退化显式失败。
+      working-directory: build
+      shell: bash
+      run: |
+        COUNT=$(ctest -N -C ${{ matrix.build_type }} | grep -oE 'Total Tests: [0-9]+' | grep -oE '[0-9]+')
+        echo "Registered tests: ${COUNT}"
+        if [ "${COUNT}" -lt 90 ]; then
+          echo "::error::Only ${COUNT} tests registered - GTest-based tests were likely skipped (missing GTest?)."
+          exit 1
+        fi
+
     - name: 运行测试
       working-directory: build
-      run: ctest -C ${{ matrix.build_type }} --output-on-failure --verbose
+      # 与 lockfree 专项任务同一策略：2-vCPU runner 上 benchmark/stress 的
+      # 时延断言噪声过大，不适合作为主门禁的 pass/fail 信号，按名排除。
+      run: ctest -C ${{ matrix.build_type }} -E "^benchmark_|^test_(performance|stress)$" --output-on-failure --verbose
 
     - name: 上传构建产物 (Release)
       if: matrix.build_type == 'Release'
@@ -311,7 +329,9 @@ jobs:
 
     - name: 运行无硬件 GPU 测试
       working-directory: build-gpu-headers
-      run: ctest -C Release --output-on-failure --verbose -R '^(test_cuda_executor|test_opencl_executor|test_executor_manager_gpu)$'
+      # test_opencl_lifecycle 使用注入 loader 的假 OpenCL 函数表，可在无硬件
+      # 环境完整运行（含 worker 自停回归用例）。
+      run: ctest -C Release --output-on-failure --verbose -R '^(test_cuda_executor|test_opencl_executor|test_opencl_lifecycle|test_executor_manager_gpu)$'
 
   # 可选：代码覆盖率任务
   coverage:

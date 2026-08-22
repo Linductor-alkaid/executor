@@ -742,6 +742,22 @@ private:
                                          const std::string& message,
                                          std::exception_ptr exception = nullptr);
 
+    /**
+     * @brief submit() 的内部实现，额外暴露"提交被拒绝/未送达"观察者。
+     *
+     * 任务图句柄路径必须知道提交是否真正送达执行器：若提交被拒绝（执行器
+     * 已停止、提交路径抛异常等），wrapper 永远不会运行，对应的任务图节点
+     * 会停留在 Pending。没有这个通知，任何依赖该句柄的 submit_after /
+     * when_all 都会在 worker 线程上无限期等待，耗尽线程池并挂死 shutdown。
+     * on_rejected 在设置拒绝异常的同一位置被调用（可能为 null）。
+     */
+    template<typename F, typename... Args>
+    std::future<typename std::invoke_result<F, Args...>::type>
+    submit_with_rejection_observer(
+        std::function<void(std::exception_ptr)> on_rejected,
+        F&& f,
+        Args&&... args);
+
     enum class TaskGraphState {
         Pending,
         Running,
@@ -879,6 +895,16 @@ bool Executor::wait_for_completion_for(
 template<typename F, typename... Args>
 auto Executor::submit(F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
+    return submit_with_rejection_observer(
+        nullptr, std::forward<F>(f), std::forward<Args>(args)...);
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_with_rejection_observer(
+    std::function<void(std::exception_ptr)> on_rejected,
+    F&& f,
+    Args&&... args)
+    -> std::future<typename std::invoke_result<F, Args...>::type> {
     using return_type = typename std::invoke_result<F, Args...>::type;
 
     auto executor = manager_->get_default_async_executor_snapshot();
@@ -889,7 +915,13 @@ auto Executor::submit(F&& f, Args&&... args)
             executor_name,
             task_id,
             "Async executor not initialized. Call initialize() first.");
-        throw std::runtime_error("Async executor not initialized. Call initialize() first.");
+        auto exception = std::make_exception_ptr(std::runtime_error(
+            "Async executor not initialized. Call initialize() first."));
+        if (on_rejected) {
+            on_rejected(exception);
+        }
+        throw std::runtime_error(
+            "Async executor not initialized. Call initialize() first.");
     }
 
     auto promise = std::make_shared<std::promise<return_type>>();
@@ -906,6 +938,9 @@ auto Executor::submit(F&& f, Args&&... args)
                 task_id,
                 "Async executor rejected empty task submission",
                 exception);
+            if (on_rejected) {
+                on_rejected(exception);
+            }
             return future;
         }
     }
@@ -961,6 +996,11 @@ auto Executor::submit(F&& f, Args&&... args)
                 "Async executor rejected task submission",
                 exception);
         }
+        // wrapper 不会运行：通知任务图路径把句柄置为 Failed，避免依赖方
+        // 在 worker 线程上等待一个永不到来的终态。
+        if (on_rejected) {
+            on_rejected(exception);
+        }
     }
 
     return future;
@@ -975,26 +1015,45 @@ auto Executor::submit_with_handle(F&& f, Args&&... args)
     submission.handle = allocate_task_handle();
     auto handle = submission.handle;
 
-    submission.future = submit([this,
-                                handle,
-                                f = std::forward<F>(f),
-                                args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
-        mark_task_graph_running(handle);
-        try {
-            if constexpr (std::is_void_v<return_type>) {
-                std::apply(f, std::move(args_tuple));
-                mark_task_graph_succeeded(handle);
-            } else {
-                auto result = std::apply(f, std::move(args_tuple));
-                mark_task_graph_succeeded(handle);
-                return result;
-            }
-        } catch (...) {
-            auto exception = std::current_exception();
-            mark_task_graph_failed(handle, exception, "TaskHandle task failed");
-            throw;
-        }
-    });
+    // 提交被拒或提交路径抛异常时 wrapper 永不运行，必须把节点置为 Failed，
+    // 否则依赖该句柄的任务会在 worker 线程上等待 Pending 节点直到挂死。
+    auto on_rejected = [this, handle](std::exception_ptr exception) {
+        mark_task_graph_failed(
+            handle,
+            exception,
+            "TaskHandle task submission rejected");
+    };
+
+    try {
+        submission.future = submit_with_rejection_observer(
+            std::move(on_rejected),
+            [this,
+             handle,
+             f = std::forward<F>(f),
+             args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
+                mark_task_graph_running(handle);
+                try {
+                    if constexpr (std::is_void_v<return_type>) {
+                        std::apply(f, std::move(args_tuple));
+                        mark_task_graph_succeeded(handle);
+                    } else {
+                        auto result = std::apply(f, std::move(args_tuple));
+                        mark_task_graph_succeeded(handle);
+                        return result;
+                    }
+                } catch (...) {
+                    auto exception = std::current_exception();
+                    mark_task_graph_failed(handle, exception, "TaskHandle task failed");
+                    throw;
+                }
+            });
+    } catch (...) {
+        // 提交前抛出（未初始化、捕获拷贝构造抛异常等）：future 尚未建立，
+        // 异常按原语义向上传播，但节点必须落终态。
+        auto exception = std::current_exception();
+        mark_task_graph_failed(handle, exception, "TaskHandle task submission failed");
+        throw;
+    }
 
     return submission;
 }
@@ -1045,44 +1104,61 @@ auto Executor::submit_after_with_handle(const std::vector<TaskHandle>& dependenc
     manager_->record_in_flight_task_state(
         handle.id(), TaskLifecycleState::DependencyBlocked);
 
-    submission.future = submit([this,
-                                handle,
-                                dependencies,
-                                f = std::forward<F>(f),
-                                args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
-        std::exception_ptr dependency_exception;
-        {
-            std::unique_lock<std::mutex> lock(task_graph_mutex_);
-            task_graph_cv_.wait(lock, [&] {
-                dependency_exception = dependency_failure_locked(dependencies);
-                return dependency_exception || dependencies_succeeded_locked(dependencies);
+    // 与 submit_with_handle 相同：提交被拒时 wrapper 永不运行，自身的句柄
+    // 节点也必须落 Failed 终态，否则依赖它的后续任务会永久等待。
+    auto on_rejected = [this, handle](std::exception_ptr exception) {
+        mark_task_graph_failed(
+            handle,
+            exception,
+            "Dependent task submission rejected");
+    };
+
+    try {
+        submission.future = submit_with_rejection_observer(
+            std::move(on_rejected),
+            [this,
+             handle,
+             dependencies,
+             f = std::forward<F>(f),
+             args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
+                std::exception_ptr dependency_exception;
+                {
+                    std::unique_lock<std::mutex> lock(task_graph_mutex_);
+                    task_graph_cv_.wait(lock, [&] {
+                        dependency_exception = dependency_failure_locked(dependencies);
+                        return dependency_exception || dependencies_succeeded_locked(dependencies);
+                    });
+                }
+
+                if (dependency_exception) {
+                    mark_task_graph_failed(
+                        handle,
+                        dependency_exception,
+                        "Dependency failed before dependent task execution");
+                    std::rethrow_exception(dependency_exception);
+                }
+
+                mark_task_graph_running(handle);
+                try {
+                    if constexpr (std::is_void_v<return_type>) {
+                        std::apply(f, std::move(args_tuple));
+                        mark_task_graph_succeeded(handle);
+                    } else {
+                        auto result = std::apply(f, std::move(args_tuple));
+                        mark_task_graph_succeeded(handle);
+                        return result;
+                    }
+                } catch (...) {
+                    auto exception = std::current_exception();
+                    mark_task_graph_failed(handle, exception, "Dependent task failed");
+                    throw;
+                }
             });
-        }
-
-        if (dependency_exception) {
-            mark_task_graph_failed(
-                handle,
-                dependency_exception,
-                "Dependency failed before dependent task execution");
-            std::rethrow_exception(dependency_exception);
-        }
-
-        mark_task_graph_running(handle);
-        try {
-            if constexpr (std::is_void_v<return_type>) {
-                std::apply(f, std::move(args_tuple));
-                mark_task_graph_succeeded(handle);
-            } else {
-                auto result = std::apply(f, std::move(args_tuple));
-                mark_task_graph_succeeded(handle);
-                return result;
-            }
-        } catch (...) {
-            auto exception = std::current_exception();
-            mark_task_graph_failed(handle, exception, "Dependent task failed");
-            throw;
-        }
-    });
+    } catch (...) {
+        auto exception = std::current_exception();
+        mark_task_graph_failed(handle, exception, "Dependent task submission failed");
+        throw;
+    }
 
     return submission;
 }

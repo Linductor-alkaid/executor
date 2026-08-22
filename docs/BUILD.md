@@ -60,6 +60,11 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release -DEXECUTOR_BUILD_SHARED=ON
 cmake --build build
 ```
 
+> **Windows (MSVC) 限制**：动态库当前仅支持 GCC/Clang（Linux/Android）。库尚未
+> 声明 `dllexport` 注解，MSVC 下的 DLL 不会导出任何符号，因此配置期会直接
+> 报错（`EXECUTOR_BUILD_SHARED=ON` + MSVC）。Windows 请使用默认静态库，直到
+> 导出宏补齐。
+
 ### 3.4 Android 交叉编译
 
 Android 一期为 CPU-only；GPU 默认关闭。先准备 NDK，再调用专用脚本：
