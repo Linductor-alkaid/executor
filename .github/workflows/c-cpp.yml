@@ -329,7 +329,9 @@ jobs:
 
     - name: 运行无硬件 GPU 测试
       working-directory: build-gpu-headers
-      run: ctest -C Release --output-on-failure --verbose -R '^(test_cuda_executor|test_opencl_executor|test_executor_manager_gpu)$'
+      # test_opencl_lifecycle 使用注入 loader 的假 OpenCL 函数表，可在无硬件
+      # 环境完整运行（含 worker 自停回归用例）。
+      run: ctest -C Release --output-on-failure --verbose -R '^(test_cuda_executor|test_opencl_executor|test_opencl_lifecycle|test_executor_manager_gpu)$'
 
   # 可选：代码覆盖率任务
   coverage:
