@@ -282,6 +282,13 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "unit;concurrency"
             TIMEOUT 30
         )
+    elseif(TEST_NAME STREQUAL "test_worker_local_queue_steal")
+        # yield 自旋的窃取竞态压测：本地多核约 5s，2-vCPU Windows runner
+        # 显著更慢（首次纳入 Windows 门禁时 30s 超时），放宽到并发测试档。
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "unit;concurrency"
+            TIMEOUT 120
+        )
     elseif(TEST_NAME MATCHES "^test_(dispatcher_resize_under_load|thread_pool_resize_uaf|thread_pool_resize_status|concurrent_stop_submit)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             LABELS "integration;concurrency;thread_pool"
