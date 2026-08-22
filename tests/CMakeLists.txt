@@ -370,6 +370,14 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             TIMEOUT 180
         )
     endif()
+
+    # --coverage 插桩对时序敏感的池测试有 2-5 倍减速（与 TSan 放宽同理），
+    # 2-vCPU runner 上偶发超出 30s 默认档；coverage 构建下放宽到 120s。
+    if(EXECUTOR_ENABLE_COVERAGE AND TEST_NAME MATCHES "^test_(thread_pool|thread_pool_integration|monitor_integration)$")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            TIMEOUT 120
+        )
+    endif()
 endforeach()
 
 add_executable(test_dispatch_task_fallback test_dispatch_task_fallback.cpp)
