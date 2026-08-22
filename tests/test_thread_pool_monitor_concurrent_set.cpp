@@ -90,8 +90,10 @@ bool test_concurrent_monitor_set_unset() {
 
     // Windows 等环境下 setter 线程可能直到任务全部完成后才被调度；有界等待
     // 至少一次迭代，避免"setter 应与任务执行竞争"的断言因纯调度饿死而假失败。
+    // 注意用 acquire 加载：relaxed 加载会被 MSVC Release 合法地提升出循环，
+    // 主线程将永远读到缓存的 0（Debug 未优化所以不复现）。
     for (int spin = 0; spin < 2000 &&
-                      setter_iterations.load(std::memory_order_relaxed) == 0;
+                      setter_iterations.load(std::memory_order_acquire) == 0;
          ++spin) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -101,9 +103,9 @@ bool test_concurrent_monitor_set_unset() {
     pool.set_task_monitor(nullptr);
     pool.shutdown();
 
-    TEST_ASSERT(ran.load(std::memory_order_relaxed) == kTaskCount,
+    TEST_ASSERT(ran.load(std::memory_order_acquire) == kTaskCount,
                 "all submitted tasks should run");
-    TEST_ASSERT(setter_iterations.load(std::memory_order_relaxed) > 0,
+    TEST_ASSERT(setter_iterations.load(std::memory_order_acquire) > 0,
                 "setter thread should race with task execution");
 
     std::cout << "  concurrent set_task_monitor set/unset: PASSED"
