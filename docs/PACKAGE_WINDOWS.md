@@ -2,22 +2,27 @@
 
 本文档说明如何在 Windows 平台上将 executor 库打包成静态库和动态库，用于发行。
 
+> **Windows (MSVC) 限制**：动态库当前仅支持 GCC/Clang（Linux/Android）。库尚未
+> 声明 `dllexport` 注解，MSVC 下的 DLL 不会导出任何符号，因此配置期会直接
+> 报错（`EXECUTOR_BUILD_SHARED=ON` + MSVC）。Windows 打包当前仅提供静态库：
+> 使用默认的 Visual Studio（MSVC）生成器时，下文所有打包命令都需要传
+> `-BuildShared:$false` 跳过动态库，直到导出宏补齐。详见 [BUILD.md](BUILD.md)。
+
 ---
 
 ## 快速开始
 
 ### 一键构建和打包
 
-使用提供的 PowerShell 脚本一键完成构建和打包：
+使用提供的 PowerShell 脚本一键完成构建和打包（MSVC 下仅构建静态库，见页首限制）：
 
 ```powershell
-.\scripts\build_and_package_windows.ps1
+.\scripts\build_and_package_windows.ps1 -BuildShared:$false
 ```
 
 这将：
 1. 构建静态库（Release 模式）
-2. 构建动态库（Release 模式）
-3. 打包成发行版本（ZIP 格式）
+2. 打包成发行版本（ZIP 格式）
 
 ### 自定义构建选项
 
@@ -28,7 +33,7 @@
     -Generator "Visual Studio 17 2022" `
     -Architecture "x64" `
     -BuildStatic:$true `
-    -BuildShared:$true
+    -BuildShared:$false
 ```
 
 **参数说明：**
@@ -55,13 +60,10 @@
 使用构建脚本分别构建静态库和动态库：
 
 ```powershell
-# 构建静态库和动态库
-.\scripts\build_windows.ps1 -BuildType Release
-
-# 仅构建静态库
+# 构建静态库（MSVC 下的推荐方式）
 .\scripts\build_windows.ps1 -BuildType Release -BuildShared:$false
 
-# 仅构建动态库
+# 仅构建动态库（MSVC 下配置期直接报错，见页首限制）
 .\scripts\build_windows.ps1 -BuildType Release -BuildStatic:$false
 ```
 
@@ -104,6 +106,11 @@ cmake --install build_static --config Release
 ```
 
 ### 构建动态库
+
+> **Windows (MSVC) 限制**：`EXECUTOR_BUILD_SHARED=ON` + MSVC 会在配置期直接报错
+> （库尚未声明 `dllexport` 注解，DLL 不会导出任何符号），以下命令在当前实现下
+> 无法完成配置。Windows 打包请使用上方静态库流程，直到导出宏补齐；详见页首
+> 限制与 [BUILD.md](BUILD.md)。
 
 ```powershell
 # 配置
@@ -271,7 +278,7 @@ A: 分别运行两次构建：
 在发布前，请确认：
 
 - [ ] 版本号正确（在 `CMakeLists.txt` 和打包脚本中）
-- [ ] 静态库和动态库都已成功构建
+- [ ] 静态库已成功构建（MSVC 下动态库不可用，见页首限制）
 - [ ] 所有头文件都已包含在打包中
 - [ ] CMake 配置文件已正确生成
 - [ ] 文档文件（README.md, LICENSE, CHANGELOG.md）已包含
