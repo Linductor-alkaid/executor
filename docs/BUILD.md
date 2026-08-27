@@ -19,11 +19,14 @@
 |------|--------|------|
 | `EXECUTOR_BUILD_TESTS` | `ON` | 是否构建测试 |
 | `EXECUTOR_BUILD_EXAMPLES` | `OFF` | 是否构建示例 |
-| `EXECUTOR_BUILD_SHARED` | `OFF` | 是否构建动态库（`OFF` 时构建静态库） |
+| `EXECUTOR_BUILD_SHARED` | `OFF` | 是否构建动态库（`OFF` 时构建静态库；MSVC 下配置期报错，见 [§3.3](#33-构建动态库)） |
+| `EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD` | `OFF` | 是否启用 Linux 诊断构建中显式 guard 实时路径的分配跟踪（仅 Linux 生效，其他平台配置时仅告警） |
 | `EXECUTOR_ENABLE_COVERAGE` | `OFF` | 是否启用代码覆盖率（gcov/lcov，见 [COVERAGE.md](COVERAGE.md)） |
-| `EXECUTOR_ENABLE_GPU` | `ON` | 是否启用 GPU 支持 |
-| `EXECUTOR_ENABLE_CUDA` | `ON` | 是否启用 CUDA 支持（需 `EXECUTOR_ENABLE_GPU=ON`） |
+| `EXECUTOR_ENABLE_GPU` | `ON`（Android 默认 `OFF`） | 是否启用 GPU 支持 |
+| `EXECUTOR_ENABLE_CUDA` | `ON`（Android 默认 `OFF`） | 是否启用 CUDA 支持（需 `EXECUTOR_ENABLE_GPU=ON`） |
 | `EXECUTOR_ENABLE_OPENCL` | `OFF` | 是否启用 OpenCL 支持（需 `EXECUTOR_ENABLE_GPU=ON`） |
+| `EXECUTOR_LOCKFREE_QUEUE` | `OFF` | 是否将 worker 本地队列实现替换为 `LockFreeWorkerQueue`（定义 `USE_LOCKFREE_WORKER_QUEUE`） |
+| `EXECUTOR_ENABLE_TSAN` | `OFF` | 是否启用 ThreadSanitizer（`-fsanitize=thread`；仅 GCC/Clang，其他编译器配置时仅告警） |
 
 ---
 
@@ -251,7 +254,7 @@ ctest --test-dir build -L "unit|integration" --output-on-failure
 以当前工程创建源码归档，便于分发或发布：
 
 ```bash
-git archive --format=tar.gz --prefix=executor-0.1.0/ -o executor-0.1.0.tar.gz HEAD
+git archive --format=tar.gz --prefix=executor-0.4.0/ -o executor-0.4.0.tar.gz HEAD
 ```
 
 或仅打包 `include/`、`src/`、`cmake/`、`examples/`、`tests/`、`CMakeLists.txt`、`README.md`、`CHANGELOG.md`、`docs/` 等必要目录与文件（按需调整）。解压后按 [§3](#3-配置与构建) 配置与构建即可。
