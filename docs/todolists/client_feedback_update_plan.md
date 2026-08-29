@@ -55,121 +55,144 @@ V-1（heyaki 自行整改）不属于本计划范围。
 ### 任务
 
 - [x] 新增设计稿 `docs/design/task_cancellation_and_timers.md`，已完成先行评审；第 11.2 节
-  待决项冻结前不启动 C1/T1 实现。
-- [ ] 定义 token 注入协议：提交路径识别可接收 `executor::StopToken` 的 callable，注入方式与
+  待决项已于 2026-08-29 全部冻结并回写设计稿，C1/T1 可以启动实现。
+- [x] 定义 token 注入协议：提交路径识别可接收 `executor::StopToken` 的 callable，注入方式与
   `detail::JThread`、`IBlockingIoWorker::run(stop_token)` 一致；不接收 token 的任务只享受
-  排队取消。
-- [ ] 明确 API 选择：优先提供显式 `submit_cancellable*`/`submit_*_with_handle` overload；若
+  排队取消。（设计稿 §6.2：token 固定为 callable 首参数，由 executor 注入）
+- [x] 明确 API 选择：优先提供显式 `submit_cancellable*`/`submit_*_with_handle` overload；若
   采用自动 token 检测，必须定义首/末参数位置、泛型 lambda 冲突时的优先级、返回类型推导和
   编译期拒绝规则，禁止悄然改变既有 `submit()` 调用的调用形式。
-- [ ] 设计共享 cancellation state：任务在 scheduler、本地队列、steal 和执行包装之间只携带
+  （设计稿 §6.2 + §11.2 冻结项 4：显式 overload，无自动检测）
+- [x] 设计共享 cancellation state：任务在 scheduler、本地队列、steal 和执行包装之间只携带
   可共享的 state/StopSource，不依赖 `Task::cancelled` 的按值复制；定义 handle 到 state 的
   并发索引、终态清理、保留上限和 cancel/开始执行/完成之间的线性化点。
-- [ ] 定义两类取消语义：排队中取消（任务不开跑，future 以规定方式满足）与运行中取消
-  （协作请求，不抢占、不强制中断）。
-- [ ] 定义取消后的 future 满足方式（如 broken promise 语义或显式空值/异常），不留未定义等待。
-- [ ] 取消事件归类（已定，2026-08-29）：采用独立 lifecycle 计数，不进入 failure 体系——
+  （设计稿 §4.1/§4.2/§9.1 + §11.2 冻结项 1/2）
+- [x] 定义两类取消语义：排队中取消（任务不开跑，future 以规定方式满足）与运行中取消
+  （协作请求，不抢占、不强制中断）。（设计稿 §5.1/§5.2）
+- [x] 定义取消后的 future 满足方式（如 broken promise 语义或显式空值/异常），不留未定义等待。
+  （设计稿 §6.1：统一 `TaskCancelled` 异常 + reason）
+- [x] 取消事件归类（已定，2026-08-29）：采用独立 lifecycle 计数，不进入 failure 体系——
   取消是正常生命周期而非失败，不向 `FailureKind` 添加取消类别、不触发 failure callback；
   设计稿需定义计数字段归属（如 `CompletionStatus` 扩展或独立 `CancellationStatus`）与查询入口。
-- [ ] 定义 timer 句柄生命周期与所有权：cancel/reschedule、shutdown 交互、periodic task_id
+  （设计稿 §6.3：独立 `CancellationStatus` 快照与 `get_cancellation_status()`）
+- [x] 定义 timer 句柄生命周期与所有权：cancel/reschedule、shutdown 交互、periodic task_id
   与新句柄的统一程度；普通 `TimerHandle` 为可复制控制句柄，析构不取消，新增的
   `ScopedTimerHandle`（或等价命名）才采用唯一所有权和析构请求取消，避免临时对象和 future-only
-  用法被意外取消。
-- [ ] 明确 `deadline` 与取消的关系保持正交：deadline 仍为 advisory，取消必须显式请求。
+  用法被意外取消。（设计稿 §7.2/§7.3 + §11.2 冻结项 7）
+- [x] 明确 `deadline` 与取消的关系保持正交：deadline 仍为 advisory，取消必须显式请求。
+  （设计稿 §5.3）
 
 ### 验收
 
-- [ ] 设计稿不承诺任何抢占式中断；阻塞在无 wakeup 机制操作上的任务不被承诺打断。
-- [ ] Android fallback StopToken 语义与桌面 `std::stop_token` 行为一致的设计说明。
-- [ ] C1/T1 的公开 API 草案（签名、错误码、状态字段）随设计稿一并评审。
+- [x] 设计稿不承诺任何抢占式中断；阻塞在无 wakeup 机制操作上的任务不被承诺打断。
+  （设计稿 §1.1/§2.2）
+- [x] Android fallback StopToken 语义与桌面 `std::stop_token` 行为一致的设计说明。
+  （设计稿 §8 + §11.2 冻结项 5：一期只承诺 polling）
+- [x] C1/T1 的公开 API 草案（签名、错误码、状态字段）随设计稿一并评审。
+  （设计稿 §6/§7）
 
 ---
 
-## 阶段 C1：任务级协作取消（P1-3）
+## 阶段 C1：任务级协作取消（P1-3）✅ 已完成
 
 ### 任务
 
-- [ ] 为每个纳管任务创建独立 StopSource；其 cancellation state 在句柄、registry 和各队列副本间
+- [x] 为每个纳管任务创建独立 StopSource；其 cancellation state 在句柄、registry 和各队列副本间
   共享传播，并按 C0 确定的显式 overload（或已审定的自动检测规则）向可接收 `StopToken` 的
-  callable 注入。
-- [ ] 新增取消入口（如 `Executor::request_task_cancel(const TaskHandle&)`，或扩展 TaskHandle），
+  callable 注入。（`TaskCancellationState`：`include/executor/task_cancellation.hpp`，
+  单原子 phase 提供线性化点；提交边界采用 facade wrapper + 终态 CAS 仲裁实现，
+  见设计稿 §11.2 冻结项 2。）
+- [x] 新增取消入口（如 `Executor::request_task_cancel(const TaskHandle&)`，或扩展 TaskHandle），
   覆盖一期范围内的 async、priority、delayed、依赖图任务；与 periodic 保持语义文档统一，但
-  不强行把 realtime/GPU/Blocking I/O 纳入同一取消协议。
-- [ ] 排队中取消：任务不执行，future 按 C0 定义满足，计入取消计数。
-- [ ] 运行中取消：仅协作式置位 token；任务通过 `stop_requested()` 轮询或 stop callback 响应。
-- [ ] 状态可观测：取消计数以独立 lifecycle 字段进入 status 快照（不作为 failure 事件、
+  不强行把 realtime/GPU/Blocking I/O 纳入同一取消协议。（delayed 经 `TimerHandle::cancel`
+  覆盖；periodic 句柄化变体同协议。）
+- [x] 排队中取消：任务不执行，future 按 C0 定义满足，计入取消计数。
+- [x] 运行中取消：仅协作式置位 token；任务通过 `stop_requested()` 轮询或 stop callback 响应。
+- [x] 状态可观测：取消计数以独立 lifecycle 字段进入 status 快照（不作为 failure 事件、
   不计入 `ExecutorFailureStatus`），可通过对应状态查询接口观察到。
-- [ ] Android fallback 路径同步支持，`EXECUTOR_STOP_TOKEN_FORCE_FALLBACK` 编译实例化验证。
+  （`CancellationStatus` + `get_cancellation_status()` + `ExecutorSnapshot.cancellation`。）
+- [x] Android fallback 路径同步支持，`EXECUTOR_STOP_TOKEN_FORCE_FALLBACK` 编译实例化验证。
+  （`tests/test_task_cancellation_fallback.cpp` 整库 forced-fallback 编译，CTest 注册。）
 
 ### 验收
 
-- [ ] 取消语义边界文档化：取消是请求不是中断。
-- [ ] future 在取消后的行为被测试锁定，不出现无定义的永久等待。
-- [ ] 与既有 queued soft timeout（`task_timeout_ms`）、依赖图、periodic 的交互均有定义行为。
-- [ ] 明确取消 API 的幂等性和旧行为兼容：成功取消不产生 failure event；重复/过期句柄返回
+- [x] 取消语义边界文档化：取消是请求不是中断。（`docs/API.md` §3.9、README、网站页。）
+- [x] future 在取消后的行为被测试锁定，不出现无定义的永久等待。
+- [x] 与既有 queued soft timeout（`task_timeout_ms`）、依赖图、periodic 的交互均有定义行为。
+- [x] 明确取消 API 的幂等性和旧行为兼容：成功取消不产生 failure event；重复/过期句柄返回
   明确的 `AlreadyCompleted`/`NotFound` 等结果（或文档化幂等成功），并决定是否保留旧
   `cancel_task` 对无效 periodic id 记录 `SubmitRejected` 的行为；若改变，必须补迁移说明。
-- [ ] 既有 `submit`/`submit_with_handle` 返回类型与行为不变（回归锁定）。
+  （决定：保留旧行为；见 `docs/MIGRATION.md` 与回归测试。）
+- [x] 既有 `submit`/`submit_with_handle` 返回类型与行为不变（回归锁定）。
 
 ### 测试
 
-- [ ] 新增 `test_task_cancellation.cpp`：排队取消、运行中协作退出、重复取消、句柄过期、
+- [x] 新增 `test_task_cancellation.cpp`：排队取消、运行中协作退出、重复取消、句柄过期、
   取消与执行并发。
-- [ ] 取消计数断言（独立 lifecycle 字段，非 `ExecutorFailureStatus`）；TSAN 覆盖取消置位
-  与任务执行的竞争。
-- [ ] fallback 实例化的取消语义测试。
+- [x] 取消计数断言（独立 lifecycle 字段，非 `ExecutorFailureStatus`）；TSAN 覆盖取消置位
+  与任务执行的竞争。（TSAN 全量跑通 `test_task_cancellation`，无报告。）
+- [x] fallback 实例化的取消语义测试。
 
 ---
 
-## 阶段 T1：可绑定生命周期的定时句柄（P1-2）
+## 阶段 T1：可绑定生命周期的定时句柄（P1-2）✅ 已完成
 
 ### 任务
 
-- [ ] 新增公开 `TimerHandle`（delayed/periodic 统一）：`cancel()`、`reschedule()`/expires
+- [x] 新增公开 `TimerHandle`（delayed/periodic 统一）：`cancel()`、`reschedule()`/expires
   语义、状态查询；普通句柄析构不取消，RAII 取消使用单独的 `ScopedTimerHandle`（或等价类型）。
-- [ ] 新增 `submit_delayed_with_handle`（命名与 `submit_with_handle` 对齐）；periodic 侧按
+- [x] 新增 `submit_delayed_with_handle`（命名与 `submit_with_handle` 对齐）；periodic 侧按
   C0 结论提供句柄化变体，保持既有返回类型兼容。
-- [ ] 提供 RAII 绑定模式（`ScopedTimerHandle` 或文档化包装）：唯一拥有者销毁即请求取消，
+- [x] 提供 RAII 绑定模式（`ScopedTimerHandle` 或文档化包装）：唯一拥有者销毁即请求取消，
   但不宣称这等同于“与外部 strand 同上下文销毁”；该绑定语义留给 T2/S2。
-- [ ] timer 任务可接收 `StopToken`（与 C1 组合），并可选指定执行 executor/priority；
-  是否绑定序列化上下文留给 S2。
-- [ ] 监控：pending/executed/cancelled 定时任务计数进入 status 快照。
-- [ ] shutdown 语义：timer thread 停止时所有 pending timer 明确取消并按 C0 定义满足 future。
+- [x] timer 任务可接收 `StopToken`（与 C1 组合），并可选指定执行 executor/priority；
+  是否绑定序列化上下文留给 S2。（`*_cancellable_*` 变体注入 token；priority 绑定随
+  到期派发走默认池，序列化上下文绑定明确留给 S2。）
+- [x] 监控：pending/executed/cancelled 定时任务计数进入 status 快照。
+- [x] shutdown 语义：timer thread 停止时所有 pending timer 明确取消并按 C0 定义满足 future。
+
+（实现：`include/executor/timer.hpp` 的 `detail::TimerScheduler`（registry + generation
+heap + cv 唤醒 + stale 压缩）；终态 record 只保留有界元数据。）
 
 ### 验收
 
-- [ ] cancel/reschedule 与到期执行的竞争下无 use-after-free、无双执行。
-- [ ] 既有 `submit_delayed`/`submit_periodic` 行为与返回类型不变。
-- [ ] 句柄与普通会话对象共存销毁的示例成立，且核心库不引入 asio 依赖；需要 strand 所有权
-  的 asio 场景必须明确标注为 T2/S2 前不可迁移。
+- [x] cancel/reschedule 与到期执行的竞争下无 use-after-free、无双执行。
+- [x] 既有 `submit_delayed`/`submit_periodic` 行为与返回类型不变。
+- [x] 句柄与普通会话对象共存销毁的示例成立，且核心库不引入 asio 依赖；需要 strand 所有权
+  的 asio 场景必须明确标注为 T2/S2 前不可迁移。（见 S1 指南 §5 与 MIGRATION。）
 
 ### 测试
 
-- [ ] 新增 `test_timer_handle.cpp`：cancel/reschedule 竞争、RAII 析构取消、shutdown 收敛、
-  计数断言。
-- [ ] `benchmark_timer_precision` 回归，确认大量句柄下 timer thread 单线程瓶颈可接受。
-- [ ] 新增编译/烟测教程 `examples/tutorial/13_cancellation_and_timers.cpp`，演示协作取消与
+- [x] 新增 `test_timer_handle.cpp`：cancel/reschedule 竞争、RAII 析构取消、shutdown 收敛、
+  计数断言。（TSAN 全量跑通，无报告。）
+- [x] `benchmark_timer_precision` 回归，确认大量句柄下 timer thread 单线程瓶颈可接受。
+  （5ms delayed 基线平均到期误差约 5.5ms（10ms 轮询），新实现约 0.9ms。）
+- [x] 新增编译/烟测教程 `examples/tutorial/13_cancellation_and_timers.cpp`，演示协作取消与
   定时句柄，注册 CTest。
 
 ---
 
-## 阶段 S1：外部事件循环互操作指南（P1-1 第一步，仅文档）
+## 阶段 S1：外部事件循环互操作指南（P1-1 第一步，仅文档）✅ 已完成
 
 ### 任务
 
-- [ ] 新增 `docs/` 指南《外部事件循环互操作》（asio strand/io_context 为主要案例）：
-  - [ ] 现行合规模式：io_context 作为 blocking worker 托管、`PhaseGate` 收尾（heyaki
+- [x] 新增 `docs/` 指南《外部事件循环互操作》（asio strand/io_context 为主要案例）：
+  - [x] 现行合规模式：io_context 作为 blocking worker 托管、`PhaseGate` 收尾（heyaki
     `AsioWorker` 路线）。
-  - [ ] 明确 post 级派发的不可见盲区：`asio::post(strand, ...)` 不进入 admission/统计/失败
+  - [x] 明确 post 级派发的不可见盲区：`asio::post(strand, ...)` 不进入 admission/统计/失败
     事件的现状与边界。
-  - [ ] 在盲区内的推荐纪律与替代模式，直到 S2（若落地）提供纳管 API。
-- [ ] 明确 executor 核心库不依赖 asio；指南只描述互操作。
-- [ ] README 与 `docs/API.md` 链接该指南，修正能力边界的过度宣称。
+  - [x] 在盲区内的推荐纪律与替代模式，直到 S2（若落地）提供纳管 API。
+- [x] 明确 executor 核心库不依赖 asio；指南只描述互操作。
+- [x] README 与 `docs/API.md` 链接该指南，修正能力边界的过度宣称。
+
+（指南：`docs/external_event_loop_interop.md`；可编译伴随示例
+`examples/event_loop_interop.cpp`（MiniEventLoop 等价复现 strand 语义，无第三方
+SDK 依赖，注册 CTest smoke `event_loop_interop_example`）。）
 
 ### 验收
 
-- [ ] 指南不承诺任何未实现 API；所有建议模式可编译复现（示例进 `examples/`）。
-- [ ] 覆盖台账 P1-1 描述的场景：strand 延续派发、io_context 托管收尾。
+- [x] 指南不承诺任何未实现 API；所有建议模式可编译复现（示例进 `examples/`）。
+- [x] 覆盖台账 P1-1 描述的场景：strand 延续派发、io_context 托管收尾。
 
 ---
 
@@ -208,45 +231,53 @@ V-1（heyaki 自行整改）不属于本计划范围。
 - [ ] 触发条件：heyaki M6/M7 消息与文件传输真实压测完成后，按台账 P2-1/P2-2 重估：
   同上下文 signal/slot（带统计的 observer 原语）、多优先级/加权/双限额 channel 变体或
   公共骨架。
-- [ ] 延后期间仅落地轻量文档项：comm 使用指引中明确"何时允许裸 `std::function` 回调"
-  （台账 P2-1 的次选建议），随 D1 交付。
+- [x] 延后期间仅落地轻量文档项：comm 使用指引中明确"何时允许裸 `std::function` 回调"
+  （台账 P2-1 的次选建议），随 D1 交付。（中英文"如何选择通信组件"指南新增
+  "什么时候允许裸回调"一节。）
+- [ ] 重估本身仍由 heyaki M6/M7 外部进度触发，未开始。
 - [ ] 重估结论（做/不做/再延后）回写台账与本计划，避免过早抽象。
 
 ---
 
-## 阶段 D1：API 与迁移文档（随 C1/T1 公开 API 同步）
+## 阶段 D1：API 与迁移文档（随 C1/T1 公开 API 同步）✅ 已完成
 
 ### 任务
 
-- [ ] `docs/API.md`：取消协议（token 注入、排队/运行中语义、future 满足）、`TimerHandle`
-  完整签名与状态字段、S1 指南入口。
-- [ ] `docs/MIGRATION.md`：只说明不依赖外部 strand 所有权的自建定时如何迁移到
+- [x] `docs/API.md`：取消协议（token 注入、排队/运行中语义、future 满足）、`TimerHandle`
+  完整签名与状态字段、S1 指南入口。（§3.8 定时句柄、§3.9 任务协作取消、§6 监控计数、
+  schema 3 说明。）
+- [x] `docs/MIGRATION.md`：只说明不依赖外部 strand 所有权的自建定时如何迁移到
   `TimerHandle`，并列出 T2/S2 前不得迁移的 asio timer；说明从私有 deadline 取消迁移到
   `StopToken` 协作取消的适用边界。
-- [ ] README.md / README_zh.md 能力边界更新（取消与定时的新能力、不承诺抢占中断）。
-- [ ] 文档一致性测试沿用 `test_api_doc_*` 模式，锁定文档宣称与实际字段一致。
+- [x] README.md / README_zh.md 能力边界更新（取消与定时的新能力、不承诺抢占中断）。
+- [x] 文档一致性测试沿用 `test_api_doc_*` 模式，锁定文档宣称与实际字段一致。
+  （`tests/test_api_doc_cancellation_fields.cpp`。）
 
 ### 验收
 
-- [ ] 签名、默认值、错误码与测试一致；取消与定时的语义边界无歧义。
+- [x] 签名、默认值、错误码与测试一致；取消与定时的语义边界无歧义。
 
 ---
 
-## 阶段 D2：使用手册与网站更新（跟随公开 API 与编译示例之后）
+## 阶段 D2：使用手册与网站更新（跟随公开 API 与编译示例之后）✅ 已完成
 
 ### 任务
 
-- [ ] 中英文页面新增"取消与定时"主题（归入现有 realtime-and-communication 专题或按信息
-  架构评审归属），双语同源。
-- [ ] 以 VitePress `<<< @` 嵌入 `examples/tutorial/13_cancellation_and_timers.cpp` 编译示例。
-- [ ] 更新两个 locale sidebar、专题 index 与 `website/translation-status.md`。
-- [ ] S1 互操作指南如上网站，同样双语同源、不引入第三方 SDK 依赖。
-- [ ] 运行网站构建与链接检查（base `/executor/`），确认新路由、语言切换与交叉链接有效。
+- [x] 中英文页面新增"取消与定时"主题（归入现有 realtime-and-communication 专题或按信息
+  架构评审归属），双语同源。（`/realtime-and-communication/cancellation-and-timers`。）
+- [x] 以 VitePress `<<< @` 嵌入 `examples/tutorial/13_cancellation_and_timers.cpp` 编译示例。
+- [x] 更新两个 locale sidebar、专题 index 与 `website/translation-status.md`。
+- [x] S1 互操作指南如上网站，同样双语同源、不引入第三方 SDK 依赖。
+  （`/guides/event-loop-interop`，示例为无 SDK 依赖的 MiniEventLoop。）
+- [x] 运行网站构建与链接检查（base `/executor/`），确认新路由、语言切换与交叉链接有效。
+  （`npm run docs:check` 105 文件通过；`docs:build` 双语路由与交叉链接验证。）
 
 ### 验收
 
-- [ ] 用户能判断"排队超时、deadline 路由提示、显式取消请求"三者的区别与各自的承诺。
-- [ ] 用户不会从手册推导出"取消会抢占阻塞调用"或未承诺的 timer 精度。
+- [x] 用户能判断"排队超时、deadline 路由提示、显式取消请求"三者的区别与各自的承诺。
+  （页面首个表格即三者对比。）
+- [x] 用户不会从手册推导出"取消会抢占阻塞调用"或未承诺的 timer 精度。
+  （"不承诺的事"小节显式列出。）
 
 ---
 
@@ -270,12 +301,17 @@ V-1（heyaki 自行整改）不属于本计划范围。
   C1/T1/T2 各阶段验收只统计实际可迁移项，不以类型已发布代替业务收益。
 - [ ] C1 合入前给出 cancellation state/registry 的单任务内存增量、并发取消吞吐和提交延迟回归；
   明确 registry 容量及终态保留策略，容量耗尽必须可观察且不得无界增长。
-- [ ] T1 使用 `benchmark_timer_precision` 记录句柄数量、取消/重排吞吐和到期抖动；超过既定预算时
+- [x] T1 使用 `benchmark_timer_precision` 记录句柄数量、取消/重排吞吐和到期抖动；超过既定预算时
   先保留兼容 API 并停止推广，不在同阶段无门槛扩展 timer thread 架构。
+  （已记录基线对比：5ms delayed 平均到期误差旧实现约 5.5ms（10ms 轮询），registry +
+  generation heap + cv 唤醒后约 0.9ms；单 timer thread 架构未扩展。）
 - [ ] S2/T2 以 heyaki node/relay 参照用例统计纳入 admission/监控的 post 派发比例，以及可安全
   替换的 strand timer 数量；若收益不足以覆盖 adapter 复杂度，允许关闭 T2。
 
 ## 风险与待决项
+
+> 2026-08-29 状态：以下前 8 项已由 C0 冻结决策解决（见设计稿 §11.2）并在 C1/T1
+> 实现；其余为 S2/T2/G1 门控项，维持待决。
 
 - [ ] 排队取消后 future 的满足方式（C0 决）。
 - [ ] 取消计数的字段归属（`CompletionStatus` 扩展还是独立 `CancellationStatus`）与是否需要

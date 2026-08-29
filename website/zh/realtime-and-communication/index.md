@@ -15,5 +15,6 @@ description: 按数据语义选择专用实时线程和跨线程通信组件。
 4. [最新值、状态快照与阶段同步](/zh/realtime-and-communication/state-and-phases)：配置、完整状态与启动顺序。
 5. [通信可观察性](/zh/realtime-and-communication/observability)：统一理解 `CommStats` 与本地事件 callback。
 6. [容量评估与告警处理](/zh/realtime-and-communication/capacity-and-alerting)：把累计统计转换成窗口速率、消费余量、告警级别和处置动作。
+7. [取消与定时](/zh/realtime-and-communication/cancellation-and-timers)：基于 `StopToken` 的协作取消与可取消、可重排的定时句柄——以及取消从不承诺的事。
 
 完整 API 见 [`docs/API.md`](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md)；综合示例的可运行代码是 [`examples/comm_robot_pipeline.cpp`](https://github.com/Linductor-alkaid/executor/blob/master/examples/comm_robot_pipeline.cpp)。
