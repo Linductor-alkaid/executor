@@ -886,6 +886,15 @@ private:
         Args&&... args)
         -> TaskSubmission<typename tracked_invoke_result<kInjectToken, F, Args...>::type>;
 
+    template <bool kInjectToken, typename F, typename... Args>
+    auto submit_tracked_with_hook(
+        std::optional<int> priority,
+        std::shared_ptr<const std::vector<TaskHandle>> dependencies,
+        std::function<void()> terminal_hook,
+        F&& f,
+        Args&&... args)
+        -> TaskSubmission<typename tracked_invoke_result<kInjectToken, F, Args...>::type>;
+
     /**
      * @brief 取消状态传播核心（排队取消 / 运行中协作请求 / 终态判定）。
      *
@@ -1045,36 +1054,53 @@ template<typename F, typename... Args>
 auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Args&&... args)
     -> TaskSubmission<typename std::invoke_result<F, Args...>::type> {
     using return_type = typename std::invoke_result<F, Args...>::type;
-    auto bound = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
-        std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-    auto gate = std::make_shared<std::promise<return_type>>();
-    auto gate_future = std::make_shared<std::future<return_type>>(gate->get_future());
-    auto wrapper = [&context, bound, gate, gate_future]() mutable -> return_type {
-        std::mutex mutex;
-        std::condition_variable cv;
-        bool finished = false;
-        bool accepted = context.post([bound, gate, &mutex, &cv, &finished]() mutable {
-            try {
-                if constexpr (std::is_void_v<return_type>) {
-                    std::invoke(*bound);
-                    gate->set_value();
-                } else {
-                    gate->set_value(std::invoke(*bound));
+    TaskSubmission<return_type> stopped_submission;
+    auto ticket = context.reserve();
+    if (!ticket) {
+        auto promise = std::make_shared<std::promise<return_type>>();
+        stopped_submission.future = promise->get_future();
+        promise->set_exception(std::make_exception_ptr(
+            ExecutorStopping("Serial execution context is stopped")));
+        return stopped_submission;
+    }
+    try {
+        auto bound = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
+            std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+        auto gate = std::make_shared<std::promise<return_type>>();
+        auto gate_future = std::make_shared<std::future<return_type>>(gate->get_future());
+        auto wrapper = [&context, ticket = *ticket, bound, gate, gate_future]() mutable -> return_type {
+            std::mutex mutex;
+            std::condition_variable cv;
+            bool finished = false;
+            bool accepted = context.post_reserved(ticket, [bound, gate, &mutex, &cv, &finished]() mutable {
+                try {
+                    if constexpr (std::is_void_v<return_type>) {
+                        std::invoke(*bound);
+                        gate->set_value();
+                    } else {
+                        gate->set_value(std::invoke(*bound));
+                    }
+                } catch (...) {
+                    try { gate->set_exception(std::current_exception()); } catch (...) {}
                 }
-            } catch (...) {
-                try { gate->set_exception(std::current_exception()); } catch (...) {}
+                { std::lock_guard<std::mutex> lock(mutex); finished = true; }
+                cv.notify_one();
+            });
+            if (!accepted) {
+                throw ExecutorStopping("Serial execution context is stopped");
             }
-            { std::lock_guard<std::mutex> lock(mutex); finished = true; }
-            cv.notify_one();
-        });
-        if (!accepted) {
-            throw ExecutorStopping("Serial execution context is stopped");
-        }
-        std::unique_lock<std::mutex> lock(mutex);
-        cv.wait(lock, [&finished] { return finished; });
-        return gate_future->get();
-    };
-    return submit_with_handle(std::move(wrapper));
+            std::unique_lock<std::mutex> lock(mutex);
+            cv.wait(lock, [&finished] { return finished; });
+            return gate_future->get();
+        };
+        return submit_tracked_with_hook<false>(
+            std::nullopt, nullptr,
+            [&context, ticket = *ticket] { context.abandon(ticket); },
+            std::move(wrapper));
+    } catch (...) {
+        context.abandon(*ticket);
+        throw;
+    }
 }
 
 template<typename F, typename... Args>
@@ -1275,8 +1301,32 @@ auto Executor::submit_tracked(
     F&& f,
     Args&&... args)
     -> TaskSubmission<typename tracked_invoke_result<kInjectToken, F, Args...>::type> {
+    return submit_tracked_with_hook<kInjectToken>(
+        priority, std::move(dependencies), nullptr,
+        std::forward<F>(f), std::forward<Args>(args)...);
+}
+
+template <bool kInjectToken, typename F, typename... Args>
+auto Executor::submit_tracked_with_hook(
+    std::optional<int> priority,
+    std::shared_ptr<const std::vector<TaskHandle>> dependencies,
+    std::function<void()> terminal_hook,
+    F&& f,
+    Args&&... args)
+    -> TaskSubmission<typename tracked_invoke_result<kInjectToken, F, Args...>::type> {
     using return_type =
         typename tracked_invoke_result<kInjectToken, F, Args...>::type;
+
+    auto terminal_called = std::make_shared<std::atomic_bool>(false);
+    auto complete_terminal = [terminal_hook = std::move(terminal_hook), terminal_called]() mutable {
+        if (!terminal_hook) return;
+        bool expected = false;
+        if (terminal_called->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            try { terminal_hook(); } catch (...) {}
+        }
+    };
 
     TaskSubmission<return_type> submission;
     submission.handle = allocate_task_handle();
@@ -1294,6 +1344,7 @@ auto Executor::submit_tracked(
             submission.future = promise->get_future();
             promise->set_exception(exception);
             record_submit_rejected("default", handle.id(), validation_error, exception);
+            complete_terminal();
             return submission;
         }
         manager_->record_in_flight_task_state(
@@ -1306,13 +1357,14 @@ auto Executor::submit_tracked(
 
     auto state = std::make_shared<TaskCancellationState>();
     state->set_completion_sink(
-        [promise, promise_ready](std::exception_ptr exception) {
+        [promise, promise_ready, complete_terminal](std::exception_ptr exception) mutable {
             bool expected = false;
             if (promise_ready->compare_exchange_strong(
                     expected, true, std::memory_order_acq_rel,
                     std::memory_order_acquire)) {
                 promise->set_exception(exception);
             }
+            complete_terminal();
         });
 
     // registry admission：容量耗尽按提交拒绝处理，不静默失去取消能力。
@@ -1330,6 +1382,7 @@ auto Executor::submit_tracked(
         record_submit_rejected(
             "default", handle.id(),
             "Cancellation registry capacity exhausted for tracked task", exception);
+        complete_terminal();
         return submission;
     }
 
@@ -1348,13 +1401,14 @@ auto Executor::submit_tracked(
         mark_task_graph_failed(handle, exception, message);
         record_submit_rejected(executor_name, handle.id(), message, exception);
         cancellation_registry_->finalize(handle.id());
+        complete_terminal();
         throw std::runtime_error(message);
     }
 
     // 提交被拒时 wrapper 永不运行：节点必须落 Failed，否则依赖它的后续
     // 任务会在 worker 线程上等待 Pending 节点直到挂死。
-    auto on_rejected = [this, handle, state, promise, promise_ready](
-                           std::exception_ptr exception) {
+    auto on_rejected = [this, handle, state, promise, promise_ready, complete_terminal](
+                           std::exception_ptr exception) mutable {
         state->try_reject();
         bool expected = false;
         if (promise_ready->compare_exchange_strong(
@@ -1364,11 +1418,12 @@ auto Executor::submit_tracked(
         }
         mark_task_graph_failed(handle, exception, "Tracked task submission rejected");
         cancellation_registry_->finalize(handle.id());
+        complete_terminal();
     };
 
     // queued soft timeout：与取消经同一 phase CAS 仲裁，只赢一次。
-    auto on_timeout = [this, handle, state, executor_name, promise, promise_ready](
-                          std::exception_ptr exception) {
+    auto on_timeout = [this, handle, state, executor_name, promise, promise_ready,
+                       complete_terminal](std::exception_ptr exception) mutable {
         if (!state->try_timeout_before_start()) {
             return;  // 取消已赢或已开始执行
         }
@@ -1384,6 +1439,7 @@ auto Executor::submit_tracked(
         mark_task_graph_failed(
             handle, exception, "Tracked async task timed out before execution");
         cancellation_registry_->finalize(handle.id());
+        complete_terminal();
     };
 
     auto invoke_user_callable =
@@ -1409,6 +1465,7 @@ auto Executor::submit_tracked(
                          dependencies,
                          promise,
                          promise_ready,
+                         complete_terminal,
                          invoke = std::move(invoke_user_callable)]() mutable {
         // 依赖图变体：依赖未满足前保持 Pending/Queued，取消可赢排队仲裁。
         if (dependencies && !dependencies->empty()) {
@@ -1446,6 +1503,7 @@ auto Executor::submit_tracked(
                     }
                 }
                 cancellation_registry_->finalize(handle.id());
+                complete_terminal();
                 std::rethrow_exception(dependency_exception);
             }
 
@@ -1485,6 +1543,7 @@ auto Executor::submit_tracked(
             }
             promise_ready->store(true, std::memory_order_release);
             cancellation_registry_->finalize(handle.id());
+            complete_terminal();
         } catch (...) {
             auto exception = std::current_exception();
             // 判定是否为"已请求取消后的协作退出"：只有 stop state 已被请求
@@ -1514,6 +1573,7 @@ auto Executor::submit_tracked(
                 manager_->record_in_flight_task_state(
                     handle.id(), TaskLifecycleState::Cancelled);
                 cancellation_registry_->finalize(handle.id());
+                complete_terminal();
                 return;
             }
 
@@ -1529,6 +1589,7 @@ auto Executor::submit_tracked(
                 cancellation_registry_->on_completed_after_request();
             }
             cancellation_registry_->finalize(handle.id());
+            complete_terminal();
             record_task_exception(
                 executor_name, handle.id(),
                 "Tracked async task threw an exception", exception);
@@ -1557,6 +1618,7 @@ auto Executor::submit_tracked(
         auto exception = std::current_exception();
         mark_task_graph_failed(handle, exception, "Tracked task submission failed");
         cancellation_registry_->finalize(handle.id());
+        complete_terminal();
         throw;
     }
 
