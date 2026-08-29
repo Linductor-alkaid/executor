@@ -609,8 +609,10 @@ TEST(TaskCancellationTest, ConcurrentCancelVersusExecutionAllFuturesResolve) {
 }
 
 TEST(TaskCancellationTest, SnapshotCarriesCancellationLifecycleFields) {
+    // 单线程 + 占位：保证被取消任务处于排队态（多线程下第二个 worker
+    // 可能先执行完任务，取消只能观察到 AlreadyCompleted）。
     Executor executor;
-    ASSERT_TRUE(executor.initialize(small_config()));
+    ASSERT_TRUE(executor.initialize(one_thread_config()));
 
     OccupiedPool occupied(executor);
     auto submission = executor.submit_with_handle([]() noexcept { return 1; });

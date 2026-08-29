@@ -52,6 +52,15 @@ foreach(STANDALONE_TEST_SOURCE
         endif()
         target_compile_definitions(${STANDALONE_TEST_NAME} PRIVATE
             EXECUTOR_STOP_TOKEN_FORCE_FALLBACK)
+        # 镜像 executor 库目标的平台链接（Windows 的 timer_period_guard
+        # 需要 winmm；Linux 需要 pthread/atomic/rt）。find_package(Threads)
+        # 已由 src/CMakeLists.txt 完成。
+        if(WIN32)
+            target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE winmm)
+        elseif(UNIX AND NOT APPLE AND NOT ANDROID)
+            target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE
+                Threads::Threads atomic rt)
+        endif()
     else()
         target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE executor)
     endif()
