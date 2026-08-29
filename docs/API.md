@@ -66,6 +66,22 @@ CompletionStatus get_completion_status() const;
 
 ## 3. 任务提交 API（线程池）
 
+### 3.0 串行上下文派发（S2）
+
+```cpp
+#include <executor/executor.hpp>
+
+executor::SerialExecutionContext context;
+auto future = ex.submit_on(context, [] { return 42; });
+auto tracked = ex.submit_on_with_handle(context, [] { /* FIFO */ });
+```
+
+`SerialExecutionContext` 使用单线程 FIFO 执行回调；任务仍先进入 facade admission，
+因此提交拒绝、异常和取消可在 executor 状态中观察。`submit_on_with_handle` 返回的
+句柄可用于 `request_task_cancel()`。上下文关闭后新提交会以 `ExecutorStopping` 完成。
+该类型不依赖或适配 asio，也不保证与外部 strand 绑定；strand 所有权定时器迁移仍
+等待 T2。
+
 ### 3.1 基本提交
 
 ```cpp

@@ -40,6 +40,13 @@ Rule of thumb: the timeout is a pool policy, the deadline is a label, and cancel
 - Destruction does **not** cancel. Wrap the handle in a move-only `ScopedTimerHandle` when you want destructor-cancels.
 - On shutdown, pending delayed timers resolve their futures with `TaskCancelled(Shutdown)`; counts are visible in `get_timer_status_summary()`.
 
+## Serialized context dispatch
+
+Use `SerialExecutionContext` with `submit_on(context, fn)` when FIFO work should remain
+visible to Executor admission and monitoring. Shutdown rejects new submissions and drains
+accepted work. This adapter does not bind to an asio strand; objects that require strand-
+affine execution and destruction remain application-managed.
+
 ## What is not promised
 
 - **No preemption**: a task blocked in a syscall or library call without a wakeup mechanism is not interrupted. Cancellation cannot force it to stop.

@@ -6,6 +6,7 @@
 #include "task_router.hpp"
 #include "task_cancellation.hpp"
 #include "timer.hpp"
+#include "serial_execution_context.hpp"
 #include "interfaces.hpp"
 #include "executor_manager.hpp"
 #include "blocking_io.hpp"
@@ -123,6 +124,15 @@ public:
 
     template<typename F, typename... Args>
     auto submit_with_handle(F&& f, Args&&... args)
+        -> TaskSubmission<typename std::invoke_result<F, Args...>::type>;
+
+    /** Submit a task through a FIFO serialized context while retaining facade admission. */
+    template<typename F, typename... Args>
+    auto submit_on(SerialExecutionContext& context, F&& f, Args&&... args)
+        -> std::future<typename std::invoke_result<F, Args...>::type>;
+
+    template<typename F, typename... Args>
+    auto submit_on_with_handle(SerialExecutionContext& context, F&& f, Args&&... args)
         -> TaskSubmission<typename std::invoke_result<F, Args...>::type>;
 
     template<typename F, typename... Args>
@@ -1023,6 +1033,48 @@ auto Executor::submit(F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
     return submit_with_rejection_observer(
         nullptr, std::forward<F>(f), std::forward<Args>(args)...);
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_on(SerialExecutionContext& context, F&& f, Args&&... args)
+    -> std::future<typename std::invoke_result<F, Args...>::type> {
+    return submit_on_with_handle(context, std::forward<F>(f), std::forward<Args>(args)...).future;
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, Args...>::type> {
+    using return_type = typename std::invoke_result<F, Args...>::type;
+    auto bound = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
+        std::bind(std::forward<F>(f), std::forward<Args>(args)...));
+    auto gate = std::make_shared<std::promise<return_type>>();
+    auto gate_future = std::make_shared<std::future<return_type>>(gate->get_future());
+    auto wrapper = [&context, bound, gate, gate_future]() mutable -> return_type {
+        std::mutex mutex;
+        std::condition_variable cv;
+        bool finished = false;
+        bool accepted = context.post([bound, gate, &mutex, &cv, &finished]() mutable {
+            try {
+                if constexpr (std::is_void_v<return_type>) {
+                    std::invoke(*bound);
+                    gate->set_value();
+                } else {
+                    gate->set_value(std::invoke(*bound));
+                }
+            } catch (...) {
+                try { gate->set_exception(std::current_exception()); } catch (...) {}
+            }
+            { std::lock_guard<std::mutex> lock(mutex); finished = true; }
+            cv.notify_one();
+        });
+        if (!accepted) {
+            throw ExecutorStopping("Serial execution context is stopped");
+        }
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [&finished] { return finished; });
+        return gate_future->get();
+    };
+    return submit_with_handle(std::move(wrapper));
 }
 
 template<typename F, typename... Args>

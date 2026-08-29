@@ -196,24 +196,24 @@ SDK 依赖，注册 CTest smoke `event_loop_interop_example`）。）
 
 ---
 
-## 阶段 S2：序列化执行上下文 API（P1-1 第二步，门控于 S1）
+## 阶段 S2：序列化执行上下文 API（P1-1 第二步，门控于 S1）✅ 已完成
 
 ### 任务
 
-- [ ] 依据 S1 使用反馈决定 API 形态：executor 托管的 `SerialExecutionContext`（专用串行
+- [x] 依据 S1 使用反馈决定 API 形态：executor 托管的 `SerialExecutionContext`（专用串行
   worker）与/或外部 strand adapter 的 `submit_on(context, task)` 纳管。
-- [ ] 纳管目标对齐台账 P1-1：post 级派发进入 admission、统计与失败事件体系。
-- [ ] 设计稿先行（`docs/design/`），评审通过后再实现；本阶段在 S1 合并前不启动。
-- [ ] 条件项：若结论为"指南已足够、API 收益不成立"，记录结论并关闭该线，不强制落地。
+- [x] 纳管目标对齐台账 P1-1：post 级派发进入 admission、统计与失败事件体系。
+- [x] 设计稿先行（`docs/design/serial_execution_context.md`），评审通过后实现。
+- [x] 条件项不触发：S1 使用反馈支持纳管收益，已选择并实现 `SerialExecutionContext` API。
 
 ### 验收
 
-- [ ] 不向核心库引入 asio 依赖；包装外部上下文不改变其线程/序列化语义。
-- [ ] 以台账中 heyaki node/relay strand 派发场景作为验收参照用例。
+- [x] 不向核心库引入 asio 依赖；包装外部上下文不改变其线程/序列化语义。
+- [x] 以台账中 heyaki node/relay strand 派发场景作为验收参照用例（FIFO context smoke）。
 
 ### 测试
 
-- [ ] 设计定稿后补全：context 派发顺序、shutdown 收敛、监控可见性、跨 context 取消组合。
+- [x] 设计定稿后补全：context 派发顺序、shutdown 收敛、监控可见性、跨 context 取消组合。
 
 ---
 
