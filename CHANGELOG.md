@@ -26,7 +26,9 @@ failure 体系。
   `submit_delayed_with_handle` / `submit_delayed_cancellable_with_handle` /
   `submit_periodic_with_handle` / `submit_periodic_cancellable_with_handle`
   提供取消、重排与状态查询；内部定时器改为 registry + generation heap，
-  变更即时唤醒调度线程（5ms 延迟任务的平均到期误差从约 5.5ms 降至约 0.9ms），
+  变更 1ms 内可见的 steady 时钟分片等待（5ms 延迟任务的平均到期误差从约 5.5ms
+  降至约 0.9ms；不用 condition_variable 定时等待，规避 gcc-11 libtsan 对
+  pthread_cond_clockwait 未拦截导致的 double-lock 误报），
   stale entry 有界压缩；终态 record 只保留有界元数据。
 - **定时器互操作指南（S1）**：新增 `docs/external_event_loop_interop.md` 与可编译
   示例 `examples/event_loop_interop.cpp`（托管事件循环、strand 延续盲区纪律、

@@ -4,9 +4,9 @@
 #include "task_cancellation.hpp"
 #include "interfaces.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -244,8 +244,6 @@ public:
             }
             thread_to_join = std::move(thread_);
             generation_.reset();
-            wake_epoch_.fetch_add(1, std::memory_order_release);
-            cv_.notify_all();
         }
 
         if (thread_to_join.joinable()) {
@@ -312,8 +310,6 @@ public:
         heap_.push(TimerHeapEntry{
             records_[timer_id]->next_execute_time, timer_id, 0});
         ++summary_.pending_count;
-        wake_epoch_.fetch_add(1, std::memory_order_release);
-        cv_.notify_all();
         return timer_id;
     }
 
@@ -344,8 +340,6 @@ public:
         heap_.push(TimerHeapEntry{
             records_[timer_id]->next_execute_time, timer_id, 0});
         ++summary_.pending_count;
-        wake_epoch_.fetch_add(1, std::memory_order_release);
-        cv_.notify_all();
         return timer_id;
     }
 
@@ -463,8 +457,6 @@ public:
                 record.periodic_status.next_execute_time =
                     record.next_execute_time;
             }
-            wake_epoch_.fetch_add(1, std::memory_order_release);
-            cv_.notify_all();
             return TimerOperationResult::Rescheduled;
         } catch (...) {
             return TimerOperationResult::NotFound;
@@ -652,33 +644,15 @@ private:
         using clock = std::chrono::steady_clock;
 
         while (!generation->stop_requested.load(std::memory_order_acquire)) {
+            const auto now = clock::now();
+            auto wake_at = now + std::chrono::milliseconds(kIdleWaitMs);
+
             std::vector<std::function<void()>> due_dispatches;
-            std::vector<TimerTickPlan> due_ticks;
             std::vector<std::string> due_tick_timer_ids;
 
             {
-                std::unique_lock<std::mutex> lock(mutex_);
-                const uint64_t observed_epoch =
-                    wake_epoch_.load(std::memory_order_acquire);
-                auto wait_deadline =
-                    clock::now() + std::chrono::milliseconds(kIdleWaitMs);
-                if (!heap_.empty()) {
-                    wait_deadline = heap_.top().deadline;
-                }
-                cv_.wait_until(
-                    lock, wait_deadline,
-                    [&generation, observed_epoch, this]() {
-                        return generation->stop_requested.load(
-                                   std::memory_order_acquire) ||
-                               wake_epoch_.load(std::memory_order_acquire) !=
-                                   observed_epoch;
-                    });
+                std::lock_guard<std::mutex> lock(mutex_);
 
-                if (generation->stop_requested.load(std::memory_order_acquire)) {
-                    break;
-                }
-
-                const auto now = clock::now();
                 while (!heap_.empty() && heap_.top().deadline <= now) {
                     TimerHeapEntry entry = heap_.top();
                     heap_.pop();
@@ -702,8 +676,7 @@ private:
                                                   record.generation});
                         record.periodic_status.next_execute_time =
                             record.next_execute_time;
-                        // tick 构建延后到锁外列表，统一在与状态检查原子的
-                        // 第二阶段完成。
+                        // tick 构建延后到第二阶段，与状态检查原子完成。
                         due_tick_timer_ids.push_back(entry.timer_id);
                     } else {
                         record.state = TimerState::Completed;
@@ -717,6 +690,10 @@ private:
                         terminal_order_.push_back(entry.timer_id);
                         trim_terminal_locked();
                     }
+                }
+
+                if (!heap_.empty() && heap_.top().deadline < wake_at) {
+                    wake_at = heap_.top().deadline;
                 }
             }
 
@@ -750,16 +727,29 @@ private:
                 }
                 plan.dispatch();
             }
+
+            // 到期等待：单次最多睡 kWakeSlice（且不超过 heap 顶 deadline），
+            // 之后回到外层循环重新加锁检查 heap——新登记的更早到期、取消、
+            // 重排、停止都在 ≤1ms 内可见；最后一个分片精确睡到 heap 顶
+            // deadline，到期精度不受影响。
+            //
+            // 刻意不使用 std::condition_variable：libstdc++ 把
+            // wait_until(steady_clock) 映射到 pthread_cond_clockwait，而
+            // gcc-11 时代的 libtsan 未拦截该原语，会把等待期间的解锁从影子
+            // 状态里漏掉，醒来重锁时误报 "double lock of a mutex"
+            // （gcc PR101978 / google/sanitizers#1259）。分片休眠期间不持锁，
+            // 对 TSAN/MSVC 全环境行为可预测。
+            std::this_thread::sleep_until(
+                std::min(wake_at, clock::now() + kWakeSlice));
         }
     }
 
     static constexpr int kIdleWaitMs = 100;
+    static constexpr std::chrono::milliseconds kWakeSlice{1};
     static constexpr size_t kHeapCompactThreshold = 128;
 
     mutable std::mutex mutex_;
-    std::condition_variable cv_;
     std::atomic<bool> running_{false};
-    std::atomic<uint64_t> wake_epoch_{0};
     std::shared_ptr<GenerationState> generation_;  // guarded by mutex_
     std::thread thread_;                           // guarded by mutex_
     std::function<std::thread(std::function<void()>)> thread_factory_for_test_;

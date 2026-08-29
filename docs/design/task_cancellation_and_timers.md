@@ -401,8 +401,13 @@ struct TimerHeapEntry {
   视为 stale 并丢弃；
 - cancel 从 registry 移除 callable/业务捕获，heap 中的 stale entry 不再拥有 callable；
 - 重复重排产生的 stale entry 必须有压缩阈值或容量上限，不能长期重排导致 heap 无界增长；
-- 新增更早到期、重排或 shutdown 都必须唤醒 timer thread 重新计算等待时间，不能只依赖
-  当前最多 10 ms 的 polling 间隔。
+- timer thread 的等待采用 steady 时钟 1ms 分片休眠：每次醒来重新加锁检查 heap 顶，
+  新增更早到期、重排或 shutdown 的可见性上界为 1ms，远优于旧实现固定的 10ms 轮询；
+  到期精度不受影响——最后一个分片精确睡到 heap 顶 deadline。
+  实现上刻意不使用 `std::condition_variable` 做定时等待：libstdc++ 把
+  `wait_until(steady_clock)` 映射到 `pthread_cond_clockwait`，gcc-11 时代的 libtsan
+  未拦截该原语，会在醒来重锁时误报 "double lock of a mutex"（gcc PR101978 /
+  google/sanitizers#1259）；分片休眠对 TSAN 与 MSVC 全环境行为可预测。
 
 句柄的控制锚点与包含 callable 的 `TimerRecord` 分离。句柄可在 Executor 销毁后安全失效，
 但不得延长 callable 或业务对象的生命周期。

@@ -152,7 +152,7 @@ V-1（heyaki 自行整改）不属于本计划范围。
 - [x] shutdown 语义：timer thread 停止时所有 pending timer 明确取消并按 C0 定义满足 future。
 
 （实现：`include/executor/timer.hpp` 的 `detail::TimerScheduler`（registry + generation
-heap + cv 唤醒 + stale 压缩）；终态 record 只保留有界元数据。）
+heap + 1ms 分片等待 + stale 压缩）；终态 record 只保留有界元数据。）
 
 ### 验收
 
@@ -304,7 +304,7 @@ SDK 依赖，注册 CTest smoke `event_loop_interop_example`）。）
 - [x] T1 使用 `benchmark_timer_precision` 记录句柄数量、取消/重排吞吐和到期抖动；超过既定预算时
   先保留兼容 API 并停止推广，不在同阶段无门槛扩展 timer thread 架构。
   （已记录基线对比：5ms delayed 平均到期误差旧实现约 5.5ms（10ms 轮询），registry +
-  generation heap + cv 唤醒后约 0.9ms；单 timer thread 架构未扩展。）
+  generation heap + 1ms 分片等待后约 0.9ms；单 timer thread 架构未扩展。）
 - [ ] S2/T2 以 heyaki node/relay 参照用例统计纳入 admission/监控的 post 派发比例，以及可安全
   替换的 strand timer 数量；若收益不足以覆盖 adapter 复杂度，允许关闭 T2。
 
