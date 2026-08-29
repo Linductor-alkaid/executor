@@ -109,7 +109,7 @@ bool test_snapshot_text_is_stable_and_complete() {
 
     TEST_ASSERT(text.rfind("executor_snapshot\n", 0) == 0,
                 "snapshot text must have a stable format marker");
-    TEST_ASSERT(text.find("schema_version=2\n") != std::string::npos,
+    TEST_ASSERT(text.find("schema_version=3\n") != std::string::npos,
                 "snapshot text must include schema version");
     TEST_ASSERT(text.find("state_epoch=") != std::string::npos,
                 "snapshot text must include the consistency epoch");

@@ -23,14 +23,18 @@ ExecutorMonitor::ExecutorMonitor(
     FailureStatusProvider failure_status_provider,
     RecentFailuresProvider recent_failures_provider,
     TaskStatisticsProvider task_statistics_provider,
-    InFlightTaskDiagnosticsProvider in_flight_task_diagnostics_provider)
+    InFlightTaskDiagnosticsProvider in_flight_task_diagnostics_provider,
+    CancellationStatusProvider cancellation_status_provider,
+    TimerStatusProvider timer_status_provider)
     : manager_(manager)
     , lifecycle_(lifecycle)
     , completion_provider_(std::move(completion_provider))
     , failure_status_provider_(std::move(failure_status_provider))
     , recent_failures_provider_(std::move(recent_failures_provider))
     , task_statistics_provider_(std::move(task_statistics_provider))
-    , in_flight_task_diagnostics_provider_(std::move(in_flight_task_diagnostics_provider)) {
+    , in_flight_task_diagnostics_provider_(std::move(in_flight_task_diagnostics_provider))
+    , cancellation_status_provider_(std::move(cancellation_status_provider))
+    , timer_status_provider_(std::move(timer_status_provider)) {
 }
 
 ExecutorSnapshot ExecutorMonitor::collect() const {
@@ -102,6 +106,20 @@ ExecutorSnapshot ExecutorMonitor::collect() const {
             }
         } catch (...) {
             mark_partial(snapshot, "in_flight_tasks");
+        }
+    }
+    if (cancellation_status_provider_) {
+        try {
+            snapshot.cancellation = cancellation_status_provider_();
+        } catch (...) {
+            mark_partial(snapshot, "cancellation");
+        }
+    }
+    if (timer_status_provider_) {
+        try {
+            snapshot.timers = timer_status_provider_();
+        } catch (...) {
+            mark_partial(snapshot, "timers");
         }
     }
 

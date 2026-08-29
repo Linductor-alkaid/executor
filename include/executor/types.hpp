@@ -1,5 +1,7 @@
 #pragma once
 
+#include "task_cancellation.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <chrono>
@@ -227,6 +229,13 @@ struct PeriodicTaskStatus {
 };
 
 using ExecutorFailureCallback = std::function<void(const ExecutorFailureEvent&)>;
+
+/**
+ * @brief 生成全局唯一任务 ID（原子计数器实现）。
+ *
+ * facade 句柄、定时器 id 与线程池内部任务 id 共用同一计数器空间。
+ */
+std::string generate_task_id();
 
 /**
  * @brief 任务结构体
@@ -469,6 +478,19 @@ struct GpuTaskConfig {
 } // namespace gpu
 
 /**
+ * @brief Executor facade 定时任务计数快照（独立于 failure 体系）。
+ *
+ * pending_count 为当前 Scheduled 的 delayed/periodic timer 数；
+ * executed_count 为已派发的一次性 timer 与已发出的周期 tick 数；
+ * cancelled_count 为显式取消与 shutdown 清理的 timer 数。
+ */
+struct TimerStatusSummary {
+    uint64_t pending_count = 0;
+    uint64_t executed_count = 0;
+    uint64_t cancelled_count = 0;
+};
+
+/**
  * @brief Executor 的低频诊断快照。
  *
  * 每个字段由其 provider 在各自的同步域内复制；跨 provider 的组合为
@@ -477,7 +499,7 @@ struct GpuTaskConfig {
  * 也不应在实时周期或任务热路径中调用。
  */
 struct ExecutorSnapshot {
-    uint32_t schema_version = 2;                  // 快照 schema 版本
+    uint32_t schema_version = 3;                  // 快照 schema 版本
     uint64_t snapshot_sequence = 0;               // 同一 Monitor 内严格单调递增
     uint64_t state_epoch = 0;                     // 最后观测到的 Manager 状态 epoch
     std::chrono::steady_clock::time_point captured_at{}; // 采集开始时间
@@ -495,6 +517,11 @@ struct ExecutorSnapshot {
     ExecutorFailureStatus failures;
     std::vector<ExecutorFailureEvent> recent_failures;
     std::map<std::string, TaskStatistics> task_statistics;
+
+    // 取消与定时生命周期计数：独立于 failure 体系，不并入
+    // ExecutorFailureStatus::total_count（schema 3 新增）。
+    CancellationStatus cancellation;
+    TimerStatusSummary timers;
 
     // Bounded, sampled diagnostics. A full table means some sampled tasks
     // were omitted; aggregate statistics remain independent and complete.

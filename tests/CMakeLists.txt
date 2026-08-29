@@ -11,16 +11,36 @@ foreach(STANDALONE_TEST_SOURCE
         test_executor_manager_android_defaults.cpp
         test_android_lockfree_queue_core.cpp
         test_multithread_mpsc.cpp
-        test_lockfree_worker_queue_concurrent_steal.cpp)
+        test_lockfree_worker_queue_concurrent_steal.cpp
+        test_task_cancellation_fallback.cpp)
     list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/${STANDALONE_TEST_SOURCE}$")
     get_filename_component(STANDALONE_TEST_NAME ${STANDALONE_TEST_SOURCE} NAME_WE)
     add_executable(${STANDALONE_TEST_NAME} ${STANDALONE_TEST_SOURCE})
-    target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE executor)
     target_include_directories(${STANDALONE_TEST_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
     )
     if(MSVC)
         target_compile_options(${STANDALONE_TEST_NAME} PRIVATE /utf-8)
+    endif()
+    if(STANDALONE_TEST_NAME STREQUAL "test_task_cancellation_fallback")
+        # 整库 + 测试一起强制 fallback：StopToken 类型必须跨 TU 一致（ODR），
+        # 因此该目标不链接常规 executor 库（避免符号重复），只剔除 GPU 源。
+        set(FALLBACK_LIB_SOURCES "${EXECUTOR_LIB_SOURCES}")
+        list(FILTER FALLBACK_LIB_SOURCES EXCLUDE REGEX ".*/gpu/.*")
+        # 门面无 GPU 后端也依赖调度器与优化器（与 src/CMakeLists.txt 保持一致）。
+        list(APPEND FALLBACK_LIB_SOURCES
+            "${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/gpu_scheduler.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/kernel_launch_optimizer.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/transfer_optimizer.cpp"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/task_scheduler_optimizer.cpp")
+        target_sources(${STANDALONE_TEST_NAME} PRIVATE ${FALLBACK_LIB_SOURCES})
+        target_include_directories(${STANDALONE_TEST_NAME} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        )
+        target_compile_definitions(${STANDALONE_TEST_NAME} PRIVATE
+            EXECUTOR_STOP_TOKEN_FORCE_FALLBACK)
+    else()
+        target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE executor)
     endif()
     add_test(NAME ${STANDALONE_TEST_NAME} COMMAND ${STANDALONE_TEST_NAME})
     if(STANDALONE_TEST_NAME STREQUAL "android_smoke")
@@ -70,6 +90,8 @@ if(NOT GTest_FOUND)
     endif()
 endif()
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_dispatch_task_fallback\\.cpp$")
+# test_task_cancellation_fallback 由上方 standalone 循环以 forced-fallback 整库编译。
+list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_task_cancellation_fallback\\.cpp$")
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_object_pool_double_release_detect\\.cpp$")
 
 if(NOT (EXECUTOR_CUDA_ENABLED OR EXECUTOR_OPENCL_ENABLED))

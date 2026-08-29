@@ -200,17 +200,30 @@ bool test_shutdown_marks_pending_delayed_task_failed() {
     TEST_ASSERT(future.wait_for(std::chrono::seconds(0)) == std::future_status::ready,
                 "pending delayed future should be completed on shutdown");
 
-    bool future_threw = false;
+    // C1/T1 设计契约：shutdown 清理未到期 delayed 任务是生命周期事件，
+    // 不再记 SubmitRejected failure，改以 TaskCancelled(Shutdown) 终态
+    // future + 定时任务取消计数可观察。
+    bool cancelled_by_shutdown = false;
     try {
         (void)future.get();
+    } catch (const TaskCancelled& cancelled) {
+        cancelled_by_shutdown =
+            cancelled.reason() == TaskCancellationReason::Shutdown;
     } catch (const std::exception&) {
-        future_threw = true;
+        cancelled_by_shutdown = false;
     }
-    TEST_ASSERT(future_threw, "pending delayed future should receive shutdown exception");
+    TEST_ASSERT(cancelled_by_shutdown,
+                "pending delayed future should be cancelled with "
+                "TaskCancelled(Shutdown)");
 
     auto failure_status = executor.get_failure_status();
-    TEST_ASSERT(failure_status.submit_rejected_count >= 1,
-                "shutdown of pending delayed task should be observable");
+    TEST_ASSERT(failure_status.submit_rejected_count == 0,
+                "shutdown cancellation must not produce failure events");
+
+    const auto timers = executor.get_timer_status_summary();
+    TEST_ASSERT(timers.cancelled_count >= 1,
+                "shutdown of pending delayed task should be observable in "
+                "timer summary counters");
 
     std::cout << "  Pending delayed shutdown visibility: PASSED" << std::endl;
     return true;
