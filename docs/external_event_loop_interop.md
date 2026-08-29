@@ -5,8 +5,9 @@
 在"看不见"的边界内应当遵守什么纪律。
 
 - executor 核心库**不依赖 asio** 或任何第三方事件循环；本文只描述互操作模式。
-- 本文不承诺任何未实现的 API。将 post 级派发纳入 admission/统计/失败事件的能力
-  （`SerialExecutionContext` / `submit_on`）属于后续 S2 阶段，目前**不存在**。
+- 本文不承诺任何未实现的 API。executor 自带的 `SerialExecutionContext` /
+  `submit_on` 已在 S2 提供，用于不依赖第三方事件循环的 FIFO 派发纳管；直接调用
+  `asio::post(strand, ...)` 仍处于 executor 的可见性盲区。
 - 本文所有建议模式都可编译复现：`examples/event_loop_interop.cpp` 是最小可运行
   伴随示例（用互斥量 + 条件变量实现的串行循环等价复现 strand 语义，注册于 CTest）。
 
@@ -84,7 +85,7 @@ strand 上访问。
 
 ## 3. 盲区内的纪律
 
-在 S2（若落地）提供纳管 API 之前，按以下纪律使用 post 级派发：
+对于直接调用 `asio::post(strand, ...)` 的盲区派发，按以下纪律使用：
 
 1. **状态所有权显式移交**：跨界状态用 `shared_ptr` 拥有；post 出去的延续捕获该
    `shared_ptr`，原线程在 post 之后不再读写该状态。
@@ -129,14 +130,15 @@ C1/T1 已提供的能力（`submit_cancellable*`、`TimerHandle`、`ScopedTimerH
 **不得迁移**的是必须在同一 strand 上执行与销毁的 asio timer（如 node/relay 中
 `asio::steady_timer` 绑定 strand 访问对象的场景）：executor 的 facade 定时器把
 到期工作派发到默认异步线程池，不保证与任何外部 strand 同上下文执行或销毁。
-该类 timer 在 T2/S2 通过验收前继续由应用侧管理；届时本指南会更新迁移指引。
+该类 timer 在 T2 通过验收前继续由应用侧管理；`SerialExecutionContext` 只负责 FIFO
+任务派发，不改变 facade timer 的到期线程或外部对象销毁上下文。
 
-## 6. 后续：S2 门控
+## 6. 后续：T2 门控
 
-台账 P1-1 的完整解法（`SerialExecutionContext` / `submit_on(context, task)` 把
-post 级派发纳入 admission、统计与失败事件）属于 S2 阶段，且以本指南的实际使用
-反馈为门控输入：如果"托管 + 纪律 + PhaseGate"已被证明足够，S2 可能得出
-"不需要进核心库"的结论。在此之前，本文描述的就是全部现实边界。
+S2 已交付 `SerialExecutionContext` / `submit_on(context, task)`，将自建 FIFO
+派发纳入 admission、统计、失败事件和句柄取消。它不适配 asio strand，也不改变
+外部事件循环的线程或销毁语义。T2 仍是后续门控：只有在外部 context adapter 的
+到期、取消、重排和销毁位置得到验证后，才会更新 asio timer 的迁移指引。
 
 ## 附：示例索引
 

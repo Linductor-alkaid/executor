@@ -409,7 +409,7 @@ TimerHandle submit_periodic_cancellable_with_handle(int64_t period_ms,
 
 **能力边界**：facade 定时器把到期工作派发到默认异步线程池，不绑定 asio strand
 等外部序列化上下文，不承诺与外部 strand 同上下文执行或销毁。需要在同一 strand
-上执行与销毁的 timer 在 S2/T2 验收前继续由应用侧管理（见
+上执行与销毁的 timer 在 T2 验收前继续由应用侧管理（见
 [外部事件循环互操作指南](external_event_loop_interop.md)）。
 
 #### 集成契约：普通周期任务不是实时线程

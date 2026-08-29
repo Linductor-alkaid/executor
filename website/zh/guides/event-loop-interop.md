@@ -53,8 +53,9 @@ executor 核心库不依赖 asio 或任何第三方事件循环；本指南描�
   `submit_delayed_with_handle()` / `submit_periodic_with_handle()`（见
   [取消与定时](/zh/realtime-and-communication/cancellation-and-timers)与
   `docs/MIGRATION.md`）。
-- 回调与销毁必须发生在同一 strand 上的 timer，在序列化上下文 API 通过评审
-  （设计阶段 S2/T2）之前继续由应用侧管理。此类 timer 暂不要迁移到 facade 句柄。
+- 回调与销毁必须发生在同一 strand 上的 timer，在外部上下文定时器绑定通过评审
+  （T2）之前继续由应用侧管理。`SerialExecutionContext` 只提供 FIFO 任务纳管，
+  不改变 facade 定时器的执行或销毁上下文。此类 timer 暂不要迁移到 facade 句柄。
 
 ## 延伸阅读
 
