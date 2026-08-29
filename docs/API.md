@@ -347,15 +347,113 @@ std::string submit_periodic(int64_t period_ms, std::function<void()> task);
 bool cancel_task(const std::string& task_id);
 ```
 
-- `submit_delayed`：延迟 `delay_ms` 毫秒后执行，返回 `future`。
+- `submit_delayed`：延迟 `delay_ms` 毫秒后执行，返回 `future`。调度线程停止
+  （`shutdown`）时，未到期任务以 `TaskCancelled(Shutdown)` 异常就绪，不记
+  failure 事件。
 - `submit_periodic`：按 `period_ms` 周期重复执行，返回任务 ID。
-- `cancel_task`：取消对应周期性任务。
+- `cancel_task`：取消对应周期性任务；对不存在的 ID 保持旧行为（记
+  `SubmitRejected` 诊断并返回 false）。
+
+#### 定时句柄（TimerHandle / ScopedTimerHandle）
+
+在旧接口之上提供可取消、可重排的句柄化变体（详见
+[docs/design/task_cancellation_and_timers.md](design/task_cancellation_and_timers.md)）：
+
+```cpp
+template<typename F, typename... Args>
+auto submit_delayed_with_handle(int64_t delay_ms, F&& f, Args&&... args)
+    -> TimerSubmission<typename std::invoke_result<F, Args...>::type>;
+
+template<typename F, typename... Args>
+auto submit_delayed_cancellable_with_handle(int64_t delay_ms, F&& f, Args&&... args)
+    -> TimerSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+
+TimerHandle submit_periodic_with_handle(int64_t period_ms, std::function<void()> task);
+TimerHandle submit_periodic_cancellable_with_handle(int64_t period_ms,
+                                                    std::function<void(StopToken)> task);
+```
+
+`TimerHandle` 语义：
+
+- 可复制控制句柄，**析构不取消**；复制共享同一控制锚点。需要 RAII 取消时使用
+  move-only 的 `ScopedTimerHandle`（析构请求一次非阻塞取消，不等待在途回调）。
+- `cancel()`：到期前返回 `CancelledBeforeDispatch`（任务不执行，future 以
+  `TaskCancelled(Explicit)` 就绪）；到期派发后返回
+  `CancellationRequestedAfterDispatch`，继续向排队/运行中的任务传播取消；
+  重复取消幂等（`AlreadyCancelled`）；句柄过期或 Executor 已销毁返回 `NotFound`。
+  取消是生命周期事件，**不产生 failure 事件**。
+- `reschedule_after(delay_ms)`：仅对 `Scheduled` 状态生效；一次性 timer 重排
+  下一次到期，周期 timer 只改下一次到期时间、不改 `period_ms`。`delay_ms <= 0`
+  返回 `InvalidDuration`。
+- `status()`：返回 `TimerStatus`（`timer_id`、`state`、`periodic`、
+  `execution_count`、`active_callback_count`、`cancellation_count`、
+  `next_execute_time`）的 best-effort 快照，不作为同步原语。
+- 句柄只持有可失效锚点，不持有裸 `Executor*`；Executor 析构后操作安全返回
+  `NotFound`。句柄不延长 callable 或业务对象的生命周期。
+
+**能力边界**：facade 定时器把到期工作派发到默认异步线程池，不绑定 asio strand
+等外部序列化上下文，不承诺与外部 strand 同上下文执行或销毁。需要在同一 strand
+上执行与销毁的 timer 在 S2/T2 验收前继续由应用侧管理（见
+[外部事件循环互操作指南](external_event_loop_interop.md)）。
 
 #### 集成契约：普通周期任务不是实时线程
 
 `submit_periodic()` 只负责在 Facade 的定时器到期后，将回调提交给**普通异步线程池**。它不创建专用线程，也不承诺实时调度策略、CPU 亲和性、内存锁定、确定性唤醒或不被其他异步任务延迟。回调运行时间超过周期，或线程池拥堵时，后续一次提交可以与前一次回调重叠；因此同一个有状态对象不能被周期回调并发访问，除非应用自行串行化。
 
 `submit_periodic()` 提供允许抖动的遥测、健康检查和后台刷新能力。固定控制周期、单线程状态所有权和实时调度尝试由第 4 节的专用实时线程提供。
+
+### 3.9 任务协作取消
+
+取消是**请求不是中断**：排队中的任务会被安全跳过；运行中的任务通过协作停止
+令牌（`executor::StopToken`）自行决定何时退出。阻塞在无 wakeup 机制调用上的任务
+不会被强制打断。`TaskOptions::deadline` 保持 advisory 语义，不会自动触发取消。
+
+```cpp
+// 显式可取消提交：token 由 executor 注入为 callable 首参数。
+template<typename F, typename... Args>
+auto submit_cancellable(F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+template<typename F, typename... Args>
+auto submit_cancellable_priority(int priority, F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+template<typename F, typename... Args>
+auto submit_cancellable_after(const std::vector<TaskHandle>& dependencies,
+                              F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+
+// 取消入口与独立计数。
+TaskCancellationResponse request_task_cancel(const TaskHandle& handle) noexcept;
+CancellationStatus get_cancellation_status() const;
+void set_cancellation_registry_capacity(size_t capacity);
+```
+
+语义：
+
+- **排队取消**（任务未开始，含依赖未满足）：任务不执行，future 以
+  `TaskCancelled(Explicit)` 就绪；依赖该任务的任务以
+  `TaskCancelled(DependencyCancelled)` 终止，`when_all` 聚合同样传播。
+- **运行中取消**：只置位任务的 `StopToken`（`RequestedRunning`）；任务轮询
+  `stop_requested()` 后正常返回则保留业务结果，抛出 `TaskCancelled` 则任务记为
+  已取消。无取消请求时任务主动抛出的 `TaskCancelled` 仍按任务异常计入 failure，
+  防止绕过统计。
+- **幂等与过期**：重复运行中取消返回 `AlreadyRequested`；终态句柄返回
+  `AlreadyCompleted`；未知/失效句柄返回 `NotFound`。成功取消不产生
+  `ExecutorFailureEvent`，也不计入 `ExecutorFailureStatus`。
+- **既有 API 不变**：`submit()` / `submit_priority()` 无句柄、不可取消；
+  `submit_with_handle()` / `submit_after_with_handle()` 建立共享取消状态，
+  天然支持排队取消（callable 不接收 token 时运行中取消只记录"已请求"）。
+- **registry 容量**：按句柄取消索引默认容量 65536（active 与终态 tombstone
+  各自上限），`set_cancellation_registry_capacity()` 可调；容量耗尽时新的可取消
+  提交被明确拒绝（future 立即异常 + `SubmitRejected` 诊断），不会静默失去
+  取消能力。
+
+`TaskCancelled` / `TaskCancellationReason` / `TaskCancellationResponse` /
+`CancellationStatus` 定义在 `include/executor/task_cancellation.hpp`；
+`TimerHandle` 等定时句柄类型定义在 `include/executor/timer.hpp`。取消跨平台契约
+只承诺 `stop_requested()` 轮询（Android fallback 同语义）。
+
+与外部事件循环（asio strand 等）的取消/定时边界见
+[外部事件循环互操作指南](external_event_loop_interop.md)。
 
 ---
 
@@ -1019,6 +1117,8 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 - `set_snapshot_diagnostic_callback`：设置超时及 facade 初始化、注册、启动失败时的低频现场回调。回调接收独立的 `ExecutorSnapshot` 值，并在触发操作的调用线程执行；异常被隔离，不能放入实时周期或任务热路径。
 - `format_executor_snapshot_with_metrics`：位于 `executor::monitor`，用于性能基线；返回文本、`formatting_duration`（纳秒）和 `formatting_allocation_count`。分配次数只统计 formatter 的流缓冲与最终输出字符串，不统计 snapshot 采集或调用方 logger 的分配；常规业务日志仍使用 `get_snapshot_text()`。
 - `get_task_statistics` / `get_all_task_statistics`：按 `task_type` 或全部的成功/失败/超时次数及执行时间统计。
+- `get_cancellation_status`：取消生命周期独立计数（`request_count`、`queued_cancelled_count`、`running_request_count`、`completed_after_request_count`），不并入 `ExecutorFailureStatus`。
+- `get_timer_status_summary`：定时任务计数（`pending_count`、`executed_count`、`cancelled_count`），同样独立于 failure 体系。
 
 ### 6.1 完整生命周期快照
 
@@ -1048,11 +1148,14 @@ if (wait.timed_out && wait.diagnostic_snapshot) {
 }
 ```
 
-`ExecutorSnapshot` 固定包含 `schema_version`、单实例内单调递增的
+`ExecutorSnapshot` 固定包含 `schema_version`（当前为 **3**）、单实例内单调递增的
 `snapshot_sequence`、采集开始时间 `captured_at`、采集耗时 `collection_duration`（纳秒）、生命周期状态、`partial` /
 `consistency_note` 和采集前后校验的 `state_epoch`、`completion`、`async`、`realtime`、`blocking_io`、`gpu`、
 `failures`、`recent_failures`、`task_statistics`、有限采样的 `in_flight_tasks` 及其计数，
-以及运行/停止后端数、活跃/排队/失败/丢弃工作数。
+以及运行/停止后端数、活跃/排队/失败/丢弃工作数。schema 3 新增独立生命周期计数
+`cancellation`（`CancellationStatus`）与 `timers`（`TimerStatusSummary`）；
+取消与定时取消不并入 `failures` 计数。快照文本对应行前缀为 `cancellation.*`
+与 `timers.*`。
 
 在途诊断目前覆盖默认异步线程池和 facade 任务图。普通任务被接受后依次可见为 `Queued` 和 `Running`；`TaskHandle` 在依赖未满足时可见为 `Pending` / `DependencyBlocked`。终态即从表中移除；`in_flight_count`、`in_flight_state_counts` 和 `oldest_in_flight_age` 用于定位队列积压、依赖阻塞和慢任务。`in_flight_tasks` 不含 callable、payload、异常对象或依赖列表。它是有界采样结果，`in_flight_diagnostics_incomplete=true` 或 snapshot `partial=true` 时不得视为完整任务清单。实时、GPU、Blocking I/O 使用各自 backend-specific 状态：realtime 的运行/容量/drop/rejection，GPU 的 active/queued/completed/failed kernel，以及 Blocking I/O 的 running/ready/stop reason/error；它们未伪装成普通 future 任务。
 
