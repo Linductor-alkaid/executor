@@ -13,6 +13,9 @@
 **有条件通过 C0；在共享 cancellation state、future 终态、token overload 和句柄所有权
 四项决策冻结前，不启动 C1/T1 的代码实现。**
 
+2026-08-29 更新：第 11.2 节全部待决项已冻结（结论见该节），C0 完成，C1/T1 进入
+实现阶段。
+
 本设计不承诺抢占式中断。它只提供排队任务的安全取消，以及运行中任务可观察、可协作的
 停止请求。阻塞在没有 wakeup 机制的第三方调用上，仍必须由调用方解除阻塞。
 
@@ -518,22 +521,53 @@ C1/T1 合入前必须提供：
 | 中 | handle 可能晚于 Executor 析构 | 句柄只持有可失效控制锚点，不持有裸 Executor 指针或延长 callable 生命周期 |
 | 中 | timer 到期后已派发不等于 callback 已执行 | 返回 `CancellationRequestedAfterDispatch`，继续请求排队或运行中取消 |
 
-### 11.2 仍需冻结的决策
+### 11.2 冻结决策（2026-08-29）
 
-以下项目没有明确结论前，C0 不算完成：
+以下决策已冻结，C1/T1 按此实现：
 
-- `TaskCancellationState` 的具体原子状态/锁和 registry 容量；
-- `TaskCancelled` 是否作为公共异常及其 reason 枚举；
-- explicit cancellable overload 的最终命名，尤其是依赖图 overload；
-- Android fallback 是否在 C1 同期提供 stop callback，或一期只承诺 polling；
-- 旧 `cancel_task` 无效 id 的 failure 兼容策略；
-- `TimerHandle` 的最终状态枚举、reschedule 边界和 scoped 类型命名；
-- `CancellationStatus` 在 `ExecutorSnapshot` 中的字段位置和 schema 版本策略。
+1. **`TaskCancellationState` 具体形态**：按第 4.1 节形态落在公共头
+   `include/executor/task_cancellation.hpp`（因 facade 模板与 wrapper 需要完整类型），
+   由 `std::atomic<TaskControlPhase>` 单原子提供线性化点，不额外加锁；completion
+   sink 在 state 发布前一次性设置，发布后只读。registry 由 facade 持有，active
+   entry 默认容量 65536（`set_cancellation_registry_capacity()` 可调），终态
+   tombstone 与 active 同容量、FIFO 淘汰；容量耗尽时新的可取消提交按提交拒绝路径
+   处理（future 立即异常 + `SubmitRejected` 诊断），不静默降级。
+2. **提交边界实现形态**：第 4.4 节的 controlled submission envelope 目标（统一
+   task id、soft timeout 与 worker 终态仲裁）由 "facade wrapper + 终态 phase CAS"
+   达成：wrapper 与 `on_timeout` 处理器共享同一 `TaskCancellationState`，
+   cancel/timeout/开始执行都通过同一 CAS 仲裁，任务在 scheduler/本地队列/steal
+   的副本经由闭包内的 `shared_ptr` 共享同一 state。不再新增
+   `IAsyncExecutor` 受控提交虚方法，`Task` 公共结构不变。
+3. **`TaskCancelled` 公共异常**：是公共异常（`executor::TaskCancelled :
+   std::runtime_error`），携带 `TaskCancellationReason{Explicit, Shutdown,
+   DependencyCancelled}`；所有取消 future 以它就绪。
+4. **explicit cancellable overload 命名**：`submit_cancellable` /
+   `submit_cancellable_priority` / `submit_cancellable_after`（含单句柄与句柄向量
+   两个 overload），token 一律作为 callable 首参数注入，全部返回
+   `TaskSubmission<T>`。不对既有 `submit()` 做自动 token 检测。
+5. **Android fallback stop callback**：一期跨平台契约只承诺
+   `stop_requested()` polling；fallback 实现（含 forced-fallback 编译实例化测试）
+   不新增 callback 注册接口。公开 stop callback 前必须先补 fallback 与测试。
+6. **旧 `cancel_task` 兼容**：保留旧行为——只作用于周期任务；对不存在的 id 依旧
+   记录 `SubmitRejected` failure 事件并返回 false。新取消入口
+   （`request_task_cancel` / `TimerHandle::cancel`）对无效/过期句柄只返回结果
+   枚举，不写 failure。
+7. **TimerHandle 最终形态**：状态枚举、操作结果枚举与 `TimerStatus` 字段按
+   第 7.3 节；`reschedule_after()` 仅对 `Scheduled` 状态生效（一次性 timer 重排
+   下一次到期；周期 timer 只改下一次到期不改 period），`delay_ms <= 0` 返回
+   `InvalidDuration`；RAII 类型命名为 `ScopedTimerHandle`（move-only，析构请求
+   一次非阻塞 cancel）。
+8. **`CancellationStatus` 与 schema**：`CancellationStatus` 为独立快照结构（字段
+   按第 6.3 节），经 `Executor::get_cancellation_status()` 暴露，并作为
+   `ExecutorSnapshot` 的独立成员 `cancellation`；同批新增 `TimerStatusSummary`
+   （pending/executed/cancelled 定时任务计数）成员。`ExecutorSnapshot::
+   schema_version` 由 2 升至 3（纯新增字段，快照文本格式同步扩展）。
 
 ## 12. 实施门禁
 
-C0 评审者应逐项确认第 11.2 节，并把结论回写本文。冻结后，C1/T1 分别以独立、可回滚
-提交实现；公开 API、编译示例和测试通过后，才能更新 API/MIGRATION 文档及网站。
+C0 评审者应逐项确认第 11.2 节，并把结论回写本文。第 11.2 节已于 2026-08-29
+全部冻结；C1/T1 分别以独立、可回滚提交实现；公开 API、编译示例和测试通过后，
+才能更新 API/MIGRATION 文档及网站。
 
 S1 可以与 C0 并行。S2 必须由 S1 使用反馈门控，T2 又必须由稳定的 S2 context adapter
 门控；不能因为 T1 已提供句柄就扩大对外部 strand timer 的能力声明。
