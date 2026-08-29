@@ -24,21 +24,17 @@ foreach(STANDALONE_TEST_SOURCE
     endif()
     if(STANDALONE_TEST_NAME STREQUAL "test_task_cancellation_fallback")
         # 整库 + 测试一起强制 fallback：StopToken 类型必须跨 TU 一致（ODR），
-        # 因此该目标不链接常规 executor 库（避免符号重复），只剔除 GPU 源。
-        set(FALLBACK_LIB_SOURCES "${EXECUTOR_LIB_SOURCES}")
-        list(FILTER FALLBACK_LIB_SOURCES EXCLUDE REGEX ".*/gpu/.*")
-        # 门面无 GPU 后端也依赖调度器与优化器（与 src/CMakeLists.txt 保持一致）。
-        list(APPEND FALLBACK_LIB_SOURCES
-            "${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/gpu_scheduler.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/kernel_launch_optimizer.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/transfer_optimizer.cpp"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../src/executor/gpu/task_scheduler_optimizer.cpp")
-        target_sources(${STANDALONE_TEST_NAME} PRIVATE ${FALLBACK_LIB_SOURCES})
+        # 因此该目标不链接常规 executor 库（避免符号重复）。源列表直接复用
+        # executor 库目标的 EXECUTOR_LIB_SOURCES（GPU 启用时含 cuda/opencl
+        # 源——根 CMakeLists 的 add_definitions 已全局开启对应宏，过滤掉它们
+        # 会在链接期缺 CudaExecutor/OpenCLExecutor 符号；非 GPU 配置下四个
+        # 常编调度器/优化器源已由 src/CMakeLists.txt 追加到列表中）。
+        target_sources(${STANDALONE_TEST_NAME} PRIVATE ${EXECUTOR_LIB_SOURCES})
         target_include_directories(${STANDALONE_TEST_NAME} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../include
         )
-        # 与 executor 库目标一致：CUDA 启用时补头文件目录（GPU headers stub
-        # 编译路径用），OpenCL 启用时补 OpenCL 头并传宏。
+        # 与 executor 库目标一致：CUDA/OpenCL 启用时补头文件目录（GPU
+        # headers stub 编译路径使用）。
         if(EXECUTOR_CUDA_ENABLED)
             if(CUDA_INCLUDE_DIRS)
                 target_include_directories(${STANDALONE_TEST_NAME} SYSTEM PRIVATE
@@ -53,8 +49,6 @@ foreach(STANDALONE_TEST_SOURCE
                 target_include_directories(${STANDALONE_TEST_NAME} SYSTEM PRIVATE
                     ${OpenCL_INCLUDE_DIRS})
             endif()
-            target_compile_definitions(${STANDALONE_TEST_NAME} PRIVATE
-                EXECUTOR_ENABLE_OPENCL)
         endif()
         target_compile_definitions(${STANDALONE_TEST_NAME} PRIVATE
             EXECUTOR_STOP_TOKEN_FORCE_FALLBACK)
