@@ -32,6 +32,16 @@ if(TARGET lifecycle_snapshot AND BUILD_TESTING)
     )
 endif()
 
+# 事件循环互操作示例：外部事件循环（asio strand 等）互操作指南的可编译
+# 伴随示例（docs/external_event_loop_interop.md），作为指南模式的回归 smoke。
+if(TARGET event_loop_interop AND BUILD_TESTING)
+    add_test(NAME event_loop_interop_example COMMAND event_loop_interop)
+    set_tests_properties(event_loop_interop_example PROPERTIES
+        LABELS "example;interop;smoke"
+        TIMEOUT 15
+    )
+endif()
+
 add_subdirectory(tutorial)
 if(TARGET topic_subscriptions AND BUILD_TESTING)
     add_test(NAME topic_subscriptions_example COMMAND topic_subscriptions)

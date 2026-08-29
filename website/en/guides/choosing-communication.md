@@ -56,4 +56,8 @@ For a phase-bound single value, explicitly call `bind_to_phase_gate()` on `Doubl
 
 `Topic` still uses a mutex and dynamic allocation for its subscription registry and the snapshot created by every publish fan-out; copying and fan-out time also grow with subscriber count. The whole Topic path, including `publish()`, is an in-process, no-replay, best-effort event primitive, not a hard-real-time path or a network broker with persistence, acknowledgement, and reconnect. Use `Topic<std::shared_ptr<const T>>` explicitly for large immutable payloads.
 
+## When a raw callback is acceptable
+
+The communication components deliberately do not ship a signal/slot or observer primitive. A raw `std::function` callback (or `CommEventCallback`) is acceptable when all of the following hold: the wiring happens once during setup, invocation frequency is low (control-plane diagnostics, not a data path), the callback body cannot block or re-enter the component, and exceptions thrown by the callback can be isolated by the caller. When those conditions do not hold, express the dependency with a component instead: fan-out belongs to `Topic<T>`, latest-value notification to `LatestMailbox<T>`, and "do X after Y completes" to a task-graph handle (`submit_after`) rather than a completion callback. A cross-thread observer primitive with statistics is a possible future addition; until then, raw callbacks stay a setup-time control-plane tool, not a runtime event bus.
+
 See the [complete robot pipeline](/en/tutorial/complete-robot-pipeline) for a connected example. For capacity and alerting, read [Capacity and Alerts](/en/realtime-and-communication/capacity-and-alerting); ordinary background-work selection is covered by [Choose a Submission API](/en/guides/choosing-submit-api).

@@ -11,6 +11,7 @@ set(TUTORIAL_SOURCES
     10_service_data_import.cpp
     11_task_inputs.cpp
     12_blocking_io_worker.cpp
+    13_cancellation_and_timers.cpp
 )
 
 set(TUTORIAL_TARGETS)

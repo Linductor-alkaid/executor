@@ -175,3 +175,16 @@
 - [ ] 完成 Android best-effort 调度语义和线程数 / cpuset 自适应
 - [ ] 完成 arm64 设备 smoke test、Blocking I/O 与 MPSC 弱内存序压力验证
 - [ ] 完成 Android 打包与集成文档（NDK CMake / AGP / Prefab / `c++_shared`）
+
+---
+
+## 阶段 18：客户端反馈缺口收敛（协作取消、定时句柄、序列化上下文）
+
+输入来源：heyaki 反馈台账（2026-08-29 盘点）P1-1/P1-2/P1-3；P2-1/P2-2 延后重估。
+
+- [ ] 执行 [客户端反馈缺口收敛更新计划](client_feedback_update_plan.md)
+- [ ] 完成任务级协作取消令牌（P1-3）：排队/运行中取消语义、取消可观测
+- [ ] 完成可绑定生命周期的定时句柄（P1-2）：cancel/reschedule、Scoped 句柄销毁即取消、
+  纳入监控（外部 strand 绑定由 T2/S2 门控）
+- [ ] 完成外部事件循环互操作指南（P1-1 第一步），并依据评审结论决定序列化上下文 API 是否落地
+- [ ] P2-1/P2-2 重估门：待 heyaki M6/M7 消息与文件传输压测后定形

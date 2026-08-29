@@ -94,6 +94,7 @@ export default defineConfig({
                 { text: 'Execution Models and Routing Boundaries', link: '/en/guides/execution-models-and-routing' },
                 { text: 'Choose a Submission API', link: '/en/guides/choosing-submit-api' },
                 { text: 'Choose a Communication Component', link: '/en/guides/choosing-communication' },
+                { text: 'Interoperate with an External Event Loop', link: '/en/guides/event-loop-interop' },
                 { text: 'Migrate Existing Thread Code', link: '/en/guides/migrating-existing-threads' },
                 { text: 'Concurrency Architecture Antipatterns', link: '/en/guides/concurrency-antipatterns' },
                 { text: 'Production Readiness Checklist', link: '/en/guides/production-readiness' }
@@ -110,7 +111,8 @@ export default defineConfig({
                 { text: 'Deliver Every Message', link: '/en/realtime-and-communication/channels' },
                 { text: 'Latest Values, Snapshots, and Phases', link: '/en/realtime-and-communication/state-and-phases' },
                 { text: 'Communication Observability', link: '/en/realtime-and-communication/observability' },
-                { text: 'Capacity and Alerts', link: '/en/realtime-and-communication/capacity-and-alerting' }
+                { text: 'Capacity and Alerts', link: '/en/realtime-and-communication/capacity-and-alerting' },
+                { text: 'Cancellation and Timers', link: '/en/realtime-and-communication/cancellation-and-timers' }
               ]
             }
           ],
@@ -242,6 +244,7 @@ export default defineConfig({
             { text: '执行模型与路由边界', link: '/zh/guides/execution-models-and-routing' },
             { text: '如何选择提交接口', link: '/zh/guides/choosing-submit-api' },
             { text: '如何选择通信组件', link: '/zh/guides/choosing-communication' },
+            { text: '与外部事件循环互操作', link: '/zh/guides/event-loop-interop' },
             { text: '从现有线程代码迁移', link: '/zh/guides/migrating-existing-threads' },
             { text: '并发架构反模式', link: '/zh/guides/concurrency-antipatterns' },
             { text: '生产接入检查清单', link: '/zh/guides/production-readiness' }
@@ -286,7 +289,8 @@ export default defineConfig({
             { text: '传递每一条消息', link: '/zh/realtime-and-communication/channels' },
             { text: '传递最新值、快照和阶段', link: '/zh/realtime-and-communication/state-and-phases' },
             { text: '通信可观察性', link: '/zh/realtime-and-communication/observability' },
-            { text: '容量判断与告警落地', link: '/zh/realtime-and-communication/capacity-and-alerting' }
+            { text: '容量判断与告警落地', link: '/zh/realtime-and-communication/capacity-and-alerting' },
+            { text: '取消与定时', link: '/zh/realtime-and-communication/cancellation-and-timers' }
           ]
         }
       ],

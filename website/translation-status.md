@@ -24,6 +24,8 @@ English pages use the same repository examples and commands as Chinese pages; no
 | `/zh/guides/` | `/en/guides/` | Published | Public Facade/communication APIs, tutorials, and production guidance |
 | `/zh/realtime-and-communication/` | `/en/realtime-and-communication/` | Published | Realtime, communication, and blocking-I/O public APIs; tutorial examples `07`–`08`, `12` |
 | `/zh/realtime-and-communication/blocking-io-workers` | `/en/realtime-and-communication/blocking-io-workers` | Published | `IBlockingIoWorker`, Facade lifecycle API, and tutorial example `12` |
+| `/zh/realtime-and-communication/cancellation-and-timers` | `/en/realtime-and-communication/cancellation-and-timers` | Published | Cancellation/timer public APIs and tutorial example `13` |
+| `/zh/guides/event-loop-interop` | `/en/guides/event-loop-interop` | Published | `docs/external_event_loop_interop.md` and `examples/event_loop_interop.cpp` |
 | `/zh/reliability/` | `/en/reliability/` | Published | Failure/status APIs, monitoring, deployment checks, and tutorial example `06` |
 | `/zh/advanced/` | `/en/advanced/` | Published | Public advanced APIs, current source architecture, and benchmark protocol |
 | `/zh/gpu/` | `/en/gpu/` | Published | GPU public APIs, backend diagnostics, and tutorial example `09` |

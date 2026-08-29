@@ -56,6 +56,10 @@ flowchart TD
 
 `Topic` 仍使用 mutex，并为订阅 registry 和每次 publish fan-out 的订阅快照动态分配；复制与 fan-out 时间也随订阅数增长。整个 Topic 路径（包括 `publish()`）只提供进程内、无重放的 best-effort 事件分发，不用于硬实时周期，也不替代提供持久化、确认和重连的网络消息系统。大型不可变负载可显式选择 `Topic<std::shared_ptr<const T>>`。
 
+## 什么时候允许裸回调
+
+通信组件刻意不提供 signal/slot 或 observer 原语。裸 `std::function` 回调（或 `CommEventCallback`）只在同时满足以下条件时可用：接线只发生在初始化阶段、调用频率低（控制面诊断，不是数据路径）、回调体不会阻塞也不会重入组件、回调抛出的异常能被调用方隔离。条件不满足时，改用组件表达依赖：扇出用 `Topic<T>`，最新值通知用 `LatestMailbox<T>`，"Y 完成后做 X"用任务图句柄（`submit_after`）而不是完成回调。带统计的跨线程 observer 原语是将来可能的重估项（见客户端反馈台账 P2-1）；在那之前，裸回调只是初始化期的控制面工具，不是运行时事件总线。
+
 ## 下一步阅读
 
 先看这些组件如何连接成[完整机器人数据流水线](/zh/tutorial/complete-robot-pipeline)，再用[容量评估与告警处理](/zh/realtime-and-communication/capacity-and-alerting)把数据语义转换成窗口指标与过载动作。普通后台任务的选择请看[如何选择提交接口](/zh/guides/choosing-submit-api)。

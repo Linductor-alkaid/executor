@@ -4,6 +4,65 @@
 
 ---
 
+## 升级到当前版本：任务协作取消与定时句柄
+
+本版本在 facade 上新增任务级协作取消（C1）与定时句柄（T1），并调整了两处可观察
+行为。既有 `submit()` / `submit_priority()` / `submit_with_handle()` /
+`submit_delayed()` / `submit_periodic()` / `cancel_task()` 的签名与返回类型不变。
+
+### 迁移到 TimerHandle：哪些自建定时可以迁移
+
+满足以下全部条件的自建延迟/周期工作可以迁移到
+`submit_delayed_with_handle()` / `submit_periodic_with_handle()`（或带
+`cancellable` 的 token 变体）：
+
+- 回调不要求在某个外部序列化上下文（asio strand 等）上执行与销毁；
+- 状态所有权可以在回调与提交方之间用 `shared_ptr` 显式移交；
+- 需要"析构即取消"时用 `ScopedTimerHandle` 包装句柄。
+
+典型可迁移项：应用侧 `sleep_until` + 标志位手写的延迟重试、健康检查刷新、
+超时降级等后台循环。
+
+**T2/S2 验收前不得迁移**的定时器：`asio::steady_timer`（或任何外部事件循环的
+定时器）中"到期回调与 timer 对象销毁必须在同一 strand 上发生"的场景——facade
+定时器把到期工作派发到默认异步线程池，不提供 strand 所有权或同上下文销毁保证
+（见 [外部事件循环互操作指南](external_event_loop_interop.md) §5）。
+
+### 从私有 deadline 轮询迁移到 StopToken 协作取消
+
+原来在任务体内手写"检查 deadline / 检查取消标志 / 提前 return"的模式，可以迁移到：
+
+```cpp
+auto submission = executor.submit_cancellable(
+    [](executor::StopToken token) {
+        while (!token.stop_requested() /* && 还有工作 */) {
+            // 每步工作之间轮询 token
+        }
+        return result;
+    });
+// 需要停止时：executor.request_task_cancel(submission.handle);
+```
+
+适用边界：任务自身能在工作步之间主动检查停止状态。阻塞在无 wakeup 机制调用上
+（如不可中断的同步 I/O）的任务不会被取消打断，这类工作应使用 Blocking I/O
+worker 的 `run(StopToken)` + `wakeup()` 契约，或让阻塞调用本身可超时。
+
+### 可观察行为变化
+
+1. **shutdown 清理未到期 delayed 任务**：future 异常由
+   `std::runtime_error("Timer stopped before delayed task execution")` +
+   `SubmitRejected` failure 事件，改为 `TaskCancelled(Shutdown)` 且**不记
+   failure 事件**；可观察性转移到 `get_timer_status_summary().cancelled_count`。
+   依赖旧 SubmitRejected 诊断的监控需改盯新计数或异常类型。
+2. **`ExecutorSnapshot::schema_version` 2 → 3**：新增 `cancellation`
+   （`CancellationStatus`）与 `timers`（`TimerStatusSummary`）字段，快照文本新增
+   `cancellation.*` 与 `timers.*` 行；解析 schema 版本的下游工具需按 3 更新。
+3. 取消本身（成功取消、协作取消退出）不进入 `ExecutorFailureStatus`，改由
+   `get_cancellation_status()` 独立计数。旧 `cancel_task()` 对无效周期任务 id 记
+   `SubmitRejected` 的行为**保持不变**。
+
+---
+
 ## 从 0.3.1 升级到 0.4.0：通信同步核心无锁化
 
 0.4.0 保持既有通信类型与主要调用方式兼容，同时将通信同步核心改为构造期固定存储和原子状态，并新增 Topic、LET 阶段契约、实时分配诊断、通信延迟分位数、任务图句柄保留上限和真实 worker 扩缩容。升级后应复查以下同步与实时使用边界：

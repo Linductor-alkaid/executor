@@ -142,6 +142,16 @@ void write_executor_snapshot(Output& output, const ExecutorSnapshot& snapshot) {
     output << "aggregate.queued_task_count=" << snapshot.queued_task_count << '\n';
     output << "aggregate.failed_task_count=" << snapshot.failed_task_count << '\n';
     output << "aggregate.dropped_work_count=" << snapshot.dropped_work_count << '\n';
+    output << "cancellation.request_count=" << snapshot.cancellation.request_count << '\n';
+    output << "cancellation.queued_cancelled_count="
+           << snapshot.cancellation.queued_cancelled_count << '\n';
+    output << "cancellation.running_request_count="
+           << snapshot.cancellation.running_request_count << '\n';
+    output << "cancellation.completed_after_request_count="
+           << snapshot.cancellation.completed_after_request_count << '\n';
+    output << "timers.pending_count=" << snapshot.timers.pending_count << '\n';
+    output << "timers.executed_count=" << snapshot.timers.executed_count << '\n';
+    output << "timers.cancelled_count=" << snapshot.timers.cancelled_count << '\n';
     output << "in_flight.count=" << snapshot.in_flight_count << '\n';
     output << "in_flight.oldest_age_ns=" << snapshot.oldest_in_flight_age.count() << '\n';
     output << "in_flight.dropped_count=" << snapshot.in_flight_dropped_count << '\n';

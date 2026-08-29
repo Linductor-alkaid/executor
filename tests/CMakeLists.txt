@@ -11,16 +11,59 @@ foreach(STANDALONE_TEST_SOURCE
         test_executor_manager_android_defaults.cpp
         test_android_lockfree_queue_core.cpp
         test_multithread_mpsc.cpp
-        test_lockfree_worker_queue_concurrent_steal.cpp)
+        test_lockfree_worker_queue_concurrent_steal.cpp
+        test_task_cancellation_fallback.cpp)
     list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/${STANDALONE_TEST_SOURCE}$")
     get_filename_component(STANDALONE_TEST_NAME ${STANDALONE_TEST_SOURCE} NAME_WE)
     add_executable(${STANDALONE_TEST_NAME} ${STANDALONE_TEST_SOURCE})
-    target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE executor)
     target_include_directories(${STANDALONE_TEST_NAME} PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
     )
     if(MSVC)
         target_compile_options(${STANDALONE_TEST_NAME} PRIVATE /utf-8)
+    endif()
+    if(STANDALONE_TEST_NAME STREQUAL "test_task_cancellation_fallback")
+        # 整库 + 测试一起强制 fallback：StopToken 类型必须跨 TU 一致（ODR），
+        # 因此该目标不链接常规 executor 库（避免符号重复）。源列表直接复用
+        # executor 库目标的 EXECUTOR_LIB_SOURCES（GPU 启用时含 cuda/opencl
+        # 源——根 CMakeLists 的 add_definitions 已全局开启对应宏，过滤掉它们
+        # 会在链接期缺 CudaExecutor/OpenCLExecutor 符号；非 GPU 配置下四个
+        # 常编调度器/优化器源已由 src/CMakeLists.txt 追加到列表中）。
+        target_sources(${STANDALONE_TEST_NAME} PRIVATE ${EXECUTOR_LIB_SOURCES})
+        target_include_directories(${STANDALONE_TEST_NAME} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../include
+        )
+        # 与 executor 库目标一致：CUDA/OpenCL 启用时补头文件目录（GPU
+        # headers stub 编译路径使用）。
+        if(EXECUTOR_CUDA_ENABLED)
+            if(CUDA_INCLUDE_DIRS)
+                target_include_directories(${STANDALONE_TEST_NAME} SYSTEM PRIVATE
+                    ${CUDA_INCLUDE_DIRS})
+            elseif(CUDAToolkit_INCLUDE_DIRS)
+                target_include_directories(${STANDALONE_TEST_NAME} SYSTEM PRIVATE
+                    ${CUDAToolkit_INCLUDE_DIRS})
+            endif()
+        endif()
+        if(EXECUTOR_OPENCL_ENABLED)
+            if(OpenCL_INCLUDE_DIRS)
+                target_include_directories(${STANDALONE_TEST_NAME} SYSTEM PRIVATE
+                    ${OpenCL_INCLUDE_DIRS})
+            endif()
+        endif()
+        target_compile_definitions(${STANDALONE_TEST_NAME} PRIVATE
+            EXECUTOR_STOP_TOKEN_FORCE_FALLBACK)
+        # 镜像 executor 库目标的平台链接（Windows 的 timer_period_guard
+        # 需要 winmm；Linux 需要 pthread/atomic/rt）。注意用普通库名而非
+        # Threads::Threads——IMPORTED 目标的目录作用域只在 src/ 内可见，
+        # tests/ 直接引用会在 generate 期报 "target was not found"。
+        if(WIN32)
+            target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE winmm)
+        elseif(UNIX AND NOT APPLE AND NOT ANDROID)
+            target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE
+                pthread atomic rt)
+        endif()
+    else()
+        target_link_libraries(${STANDALONE_TEST_NAME} PRIVATE executor)
     endif()
     add_test(NAME ${STANDALONE_TEST_NAME} COMMAND ${STANDALONE_TEST_NAME})
     if(STANDALONE_TEST_NAME STREQUAL "android_smoke")
@@ -70,6 +113,8 @@ if(NOT GTest_FOUND)
     endif()
 endif()
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_dispatch_task_fallback\\.cpp$")
+# test_task_cancellation_fallback 由上方 standalone 循环以 forced-fallback 整库编译。
+list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_task_cancellation_fallback\\.cpp$")
 list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/test_object_pool_double_release_detect\\.cpp$")
 
 if(NOT (EXECUTOR_CUDA_ENABLED OR EXECUTOR_OPENCL_ENABLED))

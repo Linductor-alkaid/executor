@@ -24,6 +24,8 @@ public:
     using RecentFailuresProvider = std::function<std::vector<ExecutorFailureEvent>()>;
     using TaskStatisticsProvider = std::function<std::map<std::string, TaskStatistics>()>;
     using InFlightTaskDiagnosticsProvider = std::function<InFlightTaskDiagnostics()>;
+    using CancellationStatusProvider = std::function<CancellationStatus()>;
+    using TimerStatusProvider = std::function<TimerStatusSummary()>;
 
     ExecutorMonitor(const ExecutorManager& manager,
                     const std::atomic<ExecutorLifecycleState>& lifecycle,
@@ -31,7 +33,9 @@ public:
                     FailureStatusProvider failure_status_provider,
                     RecentFailuresProvider recent_failures_provider,
                     TaskStatisticsProvider task_statistics_provider,
-                    InFlightTaskDiagnosticsProvider in_flight_task_diagnostics_provider = {});
+                    InFlightTaskDiagnosticsProvider in_flight_task_diagnostics_provider = {},
+                    CancellationStatusProvider cancellation_status_provider = {},
+                    TimerStatusProvider timer_status_provider = {});
 
     ExecutorSnapshot collect() const;
 
@@ -43,6 +47,8 @@ private:
     RecentFailuresProvider recent_failures_provider_;
     TaskStatisticsProvider task_statistics_provider_;
     InFlightTaskDiagnosticsProvider in_flight_task_diagnostics_provider_;
+    CancellationStatusProvider cancellation_status_provider_;
+    TimerStatusProvider timer_status_provider_;
     mutable std::atomic<uint64_t> next_sequence_{0};
 };
 

@@ -6,6 +6,56 @@
 
 ## [Unreleased]
 
+任务协作取消与定时句柄（客户端反馈台账 P1-2/P1-3 收敛，设计见
+`docs/design/task_cancellation_and_timers.md`）：facade 新增任务级协作取消与可取消、
+可重排的定时句柄；取消是协作请求而非抢占，取消计数进入独立生命周期字段而非
+failure 体系。
+
+### 新增
+
+- **任务级协作取消（C1）**：新增 `include/executor/task_cancellation.hpp`
+  （`TaskCancelled` / `TaskCancellationReason` / `TaskCancellationResponse` /
+  `CancellationStatus`）。`submit_cancellable` / `submit_cancellable_priority` /
+  `submit_cancellable_after` 把 `StopToken` 注入为 callable 首参数；
+  `request_task_cancel(const TaskHandle&)` 提供排队取消与运行中协作请求，
+  幂等且不写 failure 事件；`submit_with_handle` / `submit_after_with_handle`
+  天然获得排队取消能力；取消 registry 有界（默认 65536，
+  `set_cancellation_registry_capacity()` 可调），容量耗尽明确拒绝。
+- **定时句柄（T1）**：新增 `include/executor/timer.hpp`（`TimerHandle` /
+  `ScopedTimerHandle` / `TimerStatus` / `TimerOperationResult`）。
+  `submit_delayed_with_handle` / `submit_delayed_cancellable_with_handle` /
+  `submit_periodic_with_handle` / `submit_periodic_cancellable_with_handle`
+  提供取消、重排与状态查询；内部定时器改为 registry + generation heap，
+  变更 1ms 内可见的 steady 时钟分片等待（5ms 延迟任务的平均到期误差从约 5.5ms
+  降至约 0.9ms；不用 condition_variable 定时等待，规避 gcc-11 libtsan 对
+  pthread_cond_clockwait 未拦截导致的 double-lock 误报），
+  stale entry 有界压缩；终态 record 只保留有界元数据。
+- **定时器互操作指南（S1）**：新增 `docs/external_event_loop_interop.md` 与可编译
+  示例 `examples/event_loop_interop.cpp`（托管事件循环、strand 延续盲区纪律、
+  PhaseGate 批次收尾）；中英文网站同步上线指南页。
+- **监控扩展**：`ExecutorSnapshot` schema 2 → 3，新增 `cancellation`
+  （`CancellationStatus`）与 `timers`（`TimerStatusSummary`）独立字段与快照文本行；
+  `Executor::get_cancellation_status()` / `get_timer_status_summary()` 查询入口。
+- **教程与测试**：新增教程 `examples/tutorial/13_cancellation_and_timers.cpp`、
+  `tests/test_task_cancellation.cpp`、`tests/test_timer_handle.cpp`、文档一致性测试
+  `tests/test_api_doc_cancellation_fields.cpp`，以及整库
+  `EXECUTOR_STOP_TOKEN_FORCE_FALLBACK` 强制实例化的
+  `tests/test_task_cancellation_fallback.cpp`。
+- **comm 指引（G1 轻量项）**：中英文"如何选择通信组件"指南新增
+  "什么时候允许裸回调"一节，明确裸 `std::function` 回调的适用边界。
+
+### 变更
+
+- shutdown 清理未到期 delayed 任务：future 异常由
+  `std::runtime_error("Timer stopped...")` + `SubmitRejected` 事件改为
+  `TaskCancelled(Shutdown)`，不再记录 failure 事件；可观察性转移到定时计数。
+- `ExecutorSnapshot::schema_version` 2 → 3（纯新增字段）；解析快照文本的下游
+  工具需按新 schema 更新（迁移说明见 `docs/MIGRATION.md`）。
+
+---
+
+## Android 适配一期
+
 Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉编译为静态库/共享库，
 并纳入官方模拟器与真实 ARM64 runner 的验证流程。Android 上的线程优先级、CPU 亲和性、
 `mlockall` 与 timer slack 均保持 best-effort，不承诺硬实时；CUDA/OpenCL 不进入一期。

@@ -34,6 +34,10 @@ file(GLOB_RECURSE EXECUTOR_HEADERS CONFIGURE_DEPENDS
     "executor/*.h"
 )
 
+# 供 tests/ 的 EXECUTOR_STOP_TOKEN_FORCE_FALLBACK 实例化目标复用同一份
+# 源列表（fallback 必须整库重编，避免 StopToken 类型跨 TU 的 ODR 冲突）。
+set(EXECUTOR_LIB_SOURCES "${EXECUTOR_SOURCES}" CACHE INTERNAL "executor library sources")
+
 # 确定库类型
 if(EXECUTOR_BUILD_SHARED)
     # 库尚未声明任何 dllexport/可见性注解：MSVC 下 DLL 不会导出符号，

@@ -4,6 +4,8 @@
 #include "types.hpp"
 #include "task_options.hpp"
 #include "task_router.hpp"
+#include "task_cancellation.hpp"
+#include "timer.hpp"
 #include "interfaces.hpp"
 #include "executor_manager.hpp"
 #include "blocking_io.hpp"
@@ -201,6 +203,118 @@ public:
      * @return 是否取消成功
      */
     bool cancel_task(const std::string& task_id);
+
+    // ------------------------------------------------------------------
+    // 任务级协作取消（C1）
+    // ------------------------------------------------------------------
+
+    /**
+     * @brief 请求取消一个带句柄的任务（排队取消或运行中协作请求）。
+     *
+     * - 排队中（未开始执行，含依赖未满足）：任务不再执行，future 以
+     *   TaskCancelled(Explicit) 就绪，不产生 failure 事件；
+     * - 运行中：只置位任务的协作停止 token（不抢占、不中断）；任务通过
+     *   submit_cancellable* 收到的 StopToken 轮询退出；
+     * - 重复/过期句柄幂等：返回 AlreadyRequested / AlreadyCompleted /
+     *   NotFound，不写 failure。
+     *
+     * @param handle submit_with_handle/submit_after_with_handle/
+     *               submit_cancellable* 返回的句柄
+     * @return 取消请求结果
+     */
+    TaskCancellationResponse request_task_cancel(const TaskHandle& handle) noexcept;
+
+    /**
+     * @brief 获取取消生命周期独立计数（不并入 ExecutorFailureStatus）。
+     */
+    CancellationStatus get_cancellation_status() const;
+
+    /**
+     * @brief 设置按句柄取消 registry 的容量（active 与 tombstone 各自上限）。
+     *
+     * 容量耗尽时新的可取消提交被明确拒绝（SubmitRejected 诊断），
+     * 不会退化成"提交成功但无法取消"。
+     */
+    void set_cancellation_registry_capacity(size_t capacity);
+
+    size_t cancellation_registry_capacity() const;
+
+    /**
+     * @brief 提交可协作取消的任务；executor 注入 StopToken 作为首参数。
+     *
+     * token 是任务与 executor 之间唯一的协作取消通道：request_task_cancel()
+     * 在任务运行中只置位 token，任务负责轮询 stop_requested() 并自行退出。
+     * 阻塞在无 wakeup 机制的调用上时，取消不会打断该调用。
+     *
+     * @return 句柄 + future；句柄可用于 request_task_cancel()
+     */
+    template<typename F, typename... Args>
+    auto submit_cancellable(F&& f, Args&&... args)
+        -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+
+    /** @brief submit_cancellable 的优先级版本。 */
+    template<typename F, typename... Args>
+    auto submit_cancellable_priority(int priority, F&& f, Args&&... args)
+        -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+
+    /** @brief submit_cancellable 的依赖图版本（单个依赖句柄）。 */
+    template<typename F, typename... Args>
+    auto submit_cancellable_after(const TaskHandle& dependency, F&& f, Args&&... args)
+        -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+
+    /** @brief submit_cancellable 的依赖图版本（等待全部依赖）。 */
+    template<typename F, typename... Args>
+    auto submit_cancellable_after(const std::vector<TaskHandle>& dependencies,
+                                  F&& f, Args&&... args)
+        -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+
+    // ------------------------------------------------------------------
+    // 定时句柄（T1）
+    // ------------------------------------------------------------------
+
+    /**
+     * @brief 提交带句柄的延迟任务。
+     *
+     * 与 submit_delayed() 的 future 语义一致，额外返回可取消/可重排的
+     * TimerHandle（析构不取消）。调度线程停止（shutdown）时未到期任务以
+     * TaskCancelled(Shutdown) 就绪，不产生 failure 事件。
+     */
+    template<typename F, typename... Args>
+    auto submit_delayed_with_handle(int64_t delay_ms, F&& f, Args&&... args)
+        -> TimerSubmission<typename std::invoke_result<F, Args...>::type>;
+
+    /**
+     * @brief 提交带句柄、可协作取消的延迟任务（StopToken 作为首参数注入）。
+     *
+     * 取消在到期前生效时任务不执行；到期派发后取消继续向排队/运行中的
+     * 任务传播（CancellationRequestedAfterDispatch）。
+     */
+    template<typename F, typename... Args>
+    auto submit_delayed_cancellable_with_handle(int64_t delay_ms, F&& f, Args&&... args)
+        -> TimerSubmission<typename std::invoke_result<F, StopToken, Args...>::type>;
+
+    /**
+     * @brief 提交带句柄的周期任务。
+     *
+     * 与 submit_periodic() 的诊断语义一致（tick 异常进入 failure 体系与
+     * PeriodicTaskStatus），额外返回 TimerHandle：cancel 阻止后续 tick，
+     * reschedule_after 只改下一次到期时间、不改周期。
+     */
+    TimerHandle submit_periodic_with_handle(int64_t period_ms,
+                                            std::function<void()> task);
+
+    /**
+     * @brief 提交带句柄、可协作取消的周期任务（StopToken 作为首参数注入）。
+     *
+     * 每个 tick 独立注入 token；cancel 原子阻止后续 tick 并对在途 tick
+     * 请求排队/协作取消，但不撤回已取得执行权的 callback，也不等待完成。
+     */
+    TimerHandle submit_periodic_cancellable_with_handle(
+        int64_t period_ms, std::function<void(StopToken)> task);
+
+    /** @brief 定时任务计数快照（pending/executed/cancelled）。 */
+    TimerStatusSummary get_timer_status_summary() const;
+
 
     /**
      * @brief 查询单个周期任务状态
@@ -664,36 +778,10 @@ public:
     gpu::GpuScheduler::Config get_scheduler_config() const;
 
 private:
-    // 每代定时器线程的独立停止标志（定义见下方成员区）。
-    // P-260816-002: 停止只对本代置位，并发重启产生的新一代不会复活旧线程，
-    // 保证 stop_timer_thread() 中的 join 必定返回。
-    struct TimerThreadState;
-
-    /**
-     * @brief 单例模式构造函数（私有）
-     *
-     * @param manager ExecutorManager 单例引用
-     */
+    // 定时器调度器（registry + generation heap + 调度线程）以 shared_ptr
+    // 持有：TimerHandle 只持有 weak 锚点，Executor 析构后句柄安全失效。
+    // 线程启停/代际管理封装在 detail::TimerScheduler 内。
     Executor(ExecutorManager& manager);
-
-    /**
-     * @brief 定时器线程函数
-     *
-     * 处理延迟任务和周期性任务。
-     *
-     * @param state 本代线程的停止标志
-     */
-    void timer_thread_func(std::shared_ptr<TimerThreadState> state);
-
-    /**
-     * @brief 启动定时器线程
-     */
-    void start_timer_thread();
-
-    /**
-     * @brief 停止定时器线程
-     */
-    void stop_timer_thread();
 
     /**
      * @brief 记录 facade 失败事件
@@ -730,8 +818,6 @@ private:
                               const std::string& message,
                               std::exception_ptr exception = nullptr);
 
-    void record_periodic_task_success(const std::string& task_id);
-
     void record_periodic_task_exception(const std::string& executor_name,
                                         const std::string& task_id,
                                         const std::string& message,
@@ -757,6 +843,85 @@ private:
         std::function<void(std::exception_ptr)> on_rejected,
         F&& f,
         Args&&... args);
+
+    // ------------------------------------------------------------------
+    // 协作取消内部管道（C1）
+    // ------------------------------------------------------------------
+
+    // 推导带/不带 token 注入的 tracked 任务返回类型。
+    template <bool kInjectToken, typename F, typename... Args>
+    struct tracked_invoke_result
+        : std::conditional_t<
+              kInjectToken,
+              std::invoke_result<F, StopToken, Args...>,
+              std::invoke_result<F, Args...>> {};
+
+    /**
+     * @brief 带句柄 + 共享取消状态的统一提交路径。
+     *
+     * 覆盖 submit_with_handle / submit_after_with_handle / submit_cancellable*
+     * 的公共语义：句柄与取消 state 一一对应，排队取消、运行中协作取消、
+     * queued soft timeout、提交拒绝与 worker 完成通过同一 phase CAS 仲裁，
+     * promise 恰好满足一次。
+     *
+     * @param priority 优先级；nullopt 走普通队列
+     * @param dependencies 依赖句柄；空指针表示无依赖
+     * @param kInjectToken 是否向 callable 首位注入 StopToken
+     */
+    template <bool kInjectToken, typename F, typename... Args>
+    auto submit_tracked(
+        std::optional<int> priority,
+        std::shared_ptr<const std::vector<TaskHandle>> dependencies,
+        F&& f,
+        Args&&... args)
+        -> TaskSubmission<typename tracked_invoke_result<kInjectToken, F, Args...>::type>;
+
+    /**
+     * @brief 取消状态传播核心（排队取消 / 运行中协作请求 / 终态判定）。
+     *
+     * request_task_cancel()（按 registry 句柄）与定时器 cancel 的传播
+     * hook（按已持有 state）共用。graph_handle 非空时同步推进任务图终态
+     * 并唤醒依赖等待者。
+     */
+    TaskCancellationResponse propagate_cancel_state(
+        const std::string& task_id,
+        const std::shared_ptr<TaskCancellationState>& state,
+        const TaskHandle* graph_handle) noexcept;
+
+    /** 定时器 hook：向已派发的 delayed/periodic tick 任务传播取消。 */
+    void propagate_timer_task_cancel(
+        const std::string& task_state_id,
+        const std::shared_ptr<TaskCancellationState>& state) noexcept;
+
+    /** 依赖异常按设计归类：依赖被取消时改写为 DependencyCancelled。 */
+    std::exception_ptr reclassify_dependency_exception(
+        std::exception_ptr exception) const;
+
+    // ------------------------------------------------------------------
+    // 定时器内部管道（T1）
+    // ------------------------------------------------------------------
+
+    /** 懒创建定时器调度器（进程内单实例、稳定地址，供句柄锚定）。 */
+    detail::TimerScheduler& ensure_timers();
+
+    /** 给调度器安装取消传播 hook（构造与防御性重建时调用）。 */
+    void configure_timer_scheduler_hooks();
+
+    /** 确保调度线程已启动；线程创建失败按 legacy 语义向上抛出。 */
+    void start_timer_thread();
+
+    /** 停止调度线程并按 TaskCancelled(Shutdown) 清理未到期任务。 */
+    void stop_timer_thread();
+
+    /**
+     * @brief submit_delayed 系列的统一实现。
+     *
+     * kInjectToken 为 true 时向 callable 首位注入 StopToken。返回句柄 +
+     * future；legacy submit_delayed() 丢弃句柄保持旧返回类型。
+     */
+    template <bool kInjectToken, typename F, typename... Args>
+    auto submit_delayed_impl(int64_t delay_ms, F&& f, Args&&... args)
+        -> TimerSubmission<typename tracked_invoke_result<kInjectToken, F, Args...>::type>;
 
     enum class TaskGraphState {
         Pending,
@@ -810,52 +975,13 @@ private:
     mutable std::mutex snapshot_diagnostic_mutex_;
     ExecutorSnapshotCallback snapshot_diagnostic_callback_;
 
-    // 延迟任务结构（使用类型擦除）
-    struct DelayedTask {
-        std::string task_id;
-        std::chrono::steady_clock::time_point execute_time;
-        std::function<void()> task;
-        std::function<void(std::exception_ptr)> on_timeout;
-        std::function<void(std::exception_ptr)> on_rejected;
-    };
+    // 按句柄取消 registry（active + 有界 tombstone + lifecycle 计数）。
+    std::unique_ptr<TaskCancellationRegistry> cancellation_registry_;
 
-    // 延迟任务比较器（用于 priority_queue，最早执行的在顶部）
-    struct DelayedTaskComparator {
-        bool operator()(const DelayedTask& a, const DelayedTask& b) const {
-            return a.execute_time > b.execute_time;  // 早的在顶部（最小堆）
-        }
-    };
-
-    // 周期性任务结构
-    struct PeriodicTask {
-        PeriodicTaskStatus status;
-        std::function<void()> task;
-        bool cancelled = false;  // 使用普通 bool，由 periodic_tasks_mutex_ 保护
-    };
-
-    // 延迟任务优先级队列（按执行时间排序，最早的在顶部）
-    std::priority_queue<DelayedTask, std::vector<DelayedTask>, DelayedTaskComparator> delayed_tasks_;
-    std::mutex delayed_tasks_mutex_;
-
-    // 周期性任务列表
-    std::unordered_map<std::string, PeriodicTask> periodic_tasks_;
-    mutable std::mutex periodic_tasks_mutex_;
-
-    // 定时器线程
-    // P-260816-002: timer_thread_ 的赋值(start)与 joinable/读取(stop)原先无同步，
-    // 启停竞态下 stop 会读到尚未赋值的成员(数据竞争 UB)并跳过 join，之后成员
-    // 在 joinable 状态下被析构触发 std::terminate。现在三个成员均由
-    // timer_thread_mutex_ 保护；timer_running_ 仍是原子量，仅供提交路径做
-    // 快速提示（权威判断在锁内）。
-    struct TimerThreadState {
-        std::atomic<bool> stop_requested{false};
-    };
-    std::thread timer_thread_;                        // guarded by timer_thread_mutex_
-    std::shared_ptr<TimerThreadState> timer_state_;   // guarded by timer_thread_mutex_
-    mutable std::mutex timer_thread_mutex_;
-    std::atomic<bool> timer_running_{false};
-    // 测试注入用线程工厂，guarded by timer_thread_mutex_
-    std::function<std::thread(std::function<void()>)> timer_thread_factory_for_test_;
+    // 定时器调度器（delayed/periodic registry + generation heap + 线程）。
+    // 懒创建：地址在 Executor 生命周期内稳定，TimerHandle 经 weak_ptr 锚定。
+    std::shared_ptr<detail::TimerScheduler> timers_;
+    mutable std::mutex timers_mutex_;
 
     static constexpr size_t kDefaultRecentFailureCapacity = 128;
     static constexpr size_t kDefaultRecentRoutingCapacity = 128;
@@ -1009,53 +1135,46 @@ auto Executor::submit_with_rejection_observer(
 template<typename F, typename... Args>
 auto Executor::submit_with_handle(F&& f, Args&&... args)
     -> TaskSubmission<typename std::invoke_result<F, Args...>::type> {
-    using return_type = typename std::invoke_result<F, Args...>::type;
+    return submit_tracked<false>(
+        std::nullopt, nullptr, std::forward<F>(f), std::forward<Args>(args)...);
+}
 
-    TaskSubmission<return_type> submission;
-    submission.handle = allocate_task_handle();
-    auto handle = submission.handle;
+template<typename F, typename... Args>
+auto Executor::submit_cancellable(F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type> {
+    return submit_tracked<true>(
+        std::nullopt, nullptr, std::forward<F>(f), std::forward<Args>(args)...);
+}
 
-    // 提交被拒或提交路径抛异常时 wrapper 永不运行，必须把节点置为 Failed，
-    // 否则依赖该句柄的任务会在 worker 线程上等待 Pending 节点直到挂死。
-    auto on_rejected = [this, handle](std::exception_ptr exception) {
-        mark_task_graph_failed(
-            handle,
-            exception,
-            "TaskHandle task submission rejected");
-    };
+template<typename F, typename... Args>
+auto Executor::submit_cancellable_priority(int priority, F&& f, Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type> {
+    return submit_tracked<true>(
+        priority, nullptr, std::forward<F>(f), std::forward<Args>(args)...);
+}
 
-    try {
-        submission.future = submit_with_rejection_observer(
-            std::move(on_rejected),
-            [this,
-             handle,
-             f = std::forward<F>(f),
-             args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
-                mark_task_graph_running(handle);
-                try {
-                    if constexpr (std::is_void_v<return_type>) {
-                        std::apply(f, std::move(args_tuple));
-                        mark_task_graph_succeeded(handle);
-                    } else {
-                        auto result = std::apply(f, std::move(args_tuple));
-                        mark_task_graph_succeeded(handle);
-                        return result;
-                    }
-                } catch (...) {
-                    auto exception = std::current_exception();
-                    mark_task_graph_failed(handle, exception, "TaskHandle task failed");
-                    throw;
-                }
-            });
-    } catch (...) {
-        // 提交前抛出（未初始化、捕获拷贝构造抛异常等）：future 尚未建立，
-        // 异常按原语义向上传播，但节点必须落终态。
-        auto exception = std::current_exception();
-        mark_task_graph_failed(handle, exception, "TaskHandle task submission failed");
-        throw;
-    }
+template<typename F, typename... Args>
+auto Executor::submit_cancellable_after(const TaskHandle& dependency,
+                                        F&& f,
+                                        Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type> {
+    auto dependencies =
+        std::make_shared<const std::vector<TaskHandle>>(std::vector<TaskHandle>{dependency});
+    return submit_tracked<true>(
+        std::nullopt, std::move(dependencies), std::forward<F>(f),
+        std::forward<Args>(args)...);
+}
 
-    return submission;
+template<typename F, typename... Args>
+auto Executor::submit_cancellable_after(const std::vector<TaskHandle>& dependencies,
+                                        F&& f,
+                                        Args&&... args)
+    -> TaskSubmission<typename std::invoke_result<F, StopToken, Args...>::type> {
+    auto dependencies_copy =
+        std::make_shared<const std::vector<TaskHandle>>(dependencies);
+    return submit_tracked<true>(
+        std::nullopt, std::move(dependencies_copy), std::forward<F>(f),
+        std::forward<Args>(args)...);
 }
 
 template<typename F, typename... Args>
@@ -1081,82 +1200,304 @@ auto Executor::submit_after_with_handle(const TaskHandle& dependency, F&& f, Arg
 template<typename F, typename... Args>
 auto Executor::submit_after_with_handle(const std::vector<TaskHandle>& dependencies, F&& f, Args&&... args)
     -> TaskSubmission<typename std::invoke_result<F, Args...>::type> {
-    using return_type = typename std::invoke_result<F, Args...>::type;
+    auto dependencies_copy =
+        std::make_shared<const std::vector<TaskHandle>>(dependencies);
+    return submit_tracked<false>(
+        std::nullopt, std::move(dependencies_copy), std::forward<F>(f),
+        std::forward<Args>(args)...);
+}
+
+// submit_tracked：带句柄 + 共享取消状态的统一提交路径。
+//
+// 取消/超时/开始执行通过 TaskCancellationState 的单一 phase CAS 仲裁：
+// - 取消先赢：任务不调用 callable，future 由 completion sink 立即以
+//   TaskCancelled 就绪，任务图节点由取消方落 Failed 终态并唤醒依赖等待；
+// - 超时先赢（queued soft timeout）：on_timeout 处理器完成 TimedOut 终态，
+//   future 以 TimedOutException 就绪并计入 TaskTimeout 诊断；
+// - worker 先赢（进入 Running）：取消只置位 StopToken（协作），callable
+//   抛出的 TaskCancelled 在已请求取消时按取消归类，不触发 failure。
+template <bool kInjectToken, typename F, typename... Args>
+auto Executor::submit_tracked(
+    std::optional<int> priority,
+    std::shared_ptr<const std::vector<TaskHandle>> dependencies,
+    F&& f,
+    Args&&... args)
+    -> TaskSubmission<typename tracked_invoke_result<kInjectToken, F, Args...>::type> {
+    using return_type =
+        typename tracked_invoke_result<kInjectToken, F, Args...>::type;
 
     TaskSubmission<return_type> submission;
     submission.handle = allocate_task_handle();
-    auto handle = submission.handle;
+    TaskHandle handle = submission.handle;
 
+    // 依赖登记（依赖图变体）。
     std::string validation_error;
-    const bool dependencies_valid =
-        register_task_graph_dependencies(handle, dependencies, validation_error);
+    if (dependencies && !dependencies->empty()) {
+        const bool dependencies_valid =
+            register_task_graph_dependencies(handle, *dependencies, validation_error);
+        if (!dependencies_valid) {
+            auto exception = make_dependency_exception(validation_error);
+            mark_task_graph_failed(handle, exception, validation_error);
+            auto promise = std::make_shared<std::promise<return_type>>();
+            submission.future = promise->get_future();
+            promise->set_exception(exception);
+            record_submit_rejected("default", handle.id(), validation_error, exception);
+            return submission;
+        }
+        manager_->record_in_flight_task_state(
+            handle.id(), TaskLifecycleState::DependencyBlocked);
+    }
 
-    if (!dependencies_valid) {
-        auto exception = make_dependency_exception(validation_error);
-        mark_task_graph_failed(handle, exception, validation_error);
-        auto promise = std::make_shared<std::promise<return_type>>();
-        submission.future = promise->get_future();
-        promise->set_exception(exception);
-        record_submit_rejected("default", handle.id(), validation_error, exception);
+    auto promise = std::make_shared<std::promise<return_type>>();
+    auto promise_ready = std::make_shared<std::atomic_bool>(false);
+    submission.future = promise->get_future();
+
+    auto state = std::make_shared<TaskCancellationState>();
+    state->set_completion_sink(
+        [promise, promise_ready](std::exception_ptr exception) {
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                promise->set_exception(exception);
+            }
+        });
+
+    // registry admission：容量耗尽按提交拒绝处理，不静默失去取消能力。
+    if (!cancellation_registry_->register_state(handle.id(), state)) {
+        auto exception = std::make_exception_ptr(std::runtime_error(
+            "Cancellation registry capacity exhausted; tracked task rejected"));
+        state->try_reject();
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+        mark_task_graph_failed(handle, exception, "Tracked task submission rejected");
+        record_submit_rejected(
+            "default", handle.id(),
+            "Cancellation registry capacity exhausted for tracked task", exception);
         return submission;
     }
 
-    manager_->record_in_flight_task_state(
-        handle.id(), TaskLifecycleState::DependencyBlocked);
+    // 注意：与 submit() 不同，这里不做 empty-std::function 预检。旧语义是
+    // 空 std::function 真正入队、执行时抛 bad_function_call，任务图节点经
+    // 执行异常路径落 Failed（见 test_task_graph_rejected_dependency）。
 
-    // 与 submit_with_handle 相同：提交被拒时 wrapper 永不运行，自身的句柄
-    // 节点也必须落 Failed 终态，否则依赖它的后续任务会永久等待。
-    auto on_rejected = [this, handle](std::exception_ptr exception) {
+    auto executor_snapshot = manager_->get_default_async_executor_snapshot();
+    const std::string executor_name =
+        executor_snapshot ? executor_snapshot->get_name() : "default";
+    if (!executor_snapshot) {
+        const std::string message =
+            "Async executor not initialized. Call initialize() first.";
+        auto exception = std::make_exception_ptr(std::runtime_error(message));
+        state->try_reject();
+        mark_task_graph_failed(handle, exception, message);
+        record_submit_rejected(executor_name, handle.id(), message, exception);
+        cancellation_registry_->finalize(handle.id());
+        throw std::runtime_error(message);
+    }
+
+    // 提交被拒时 wrapper 永不运行：节点必须落 Failed，否则依赖它的后续
+    // 任务会在 worker 线程上等待 Pending 节点直到挂死。
+    auto on_rejected = [this, handle, state, promise, promise_ready](
+                           std::exception_ptr exception) {
+        state->try_reject();
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+        mark_task_graph_failed(handle, exception, "Tracked task submission rejected");
+        cancellation_registry_->finalize(handle.id());
+    };
+
+    // queued soft timeout：与取消经同一 phase CAS 仲裁，只赢一次。
+    auto on_timeout = [this, handle, state, executor_name, promise, promise_ready](
+                          std::exception_ptr exception) {
+        if (!state->try_timeout_before_start()) {
+            return;  // 取消已赢或已开始执行
+        }
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+        record_task_timeout(
+            executor_name, handle.id(),
+            "Tracked async task timed out before execution", exception);
         mark_task_graph_failed(
-            handle,
-            exception,
-            "Dependent task submission rejected");
+            handle, exception, "Tracked async task timed out before execution");
+        cancellation_registry_->finalize(handle.id());
+    };
+
+    auto invoke_user_callable =
+        [f = std::forward<F>(f),
+         args_tuple = std::make_tuple(std::forward<Args>(args)...),
+         state](StopToken token) mutable -> return_type {
+        if constexpr (kInjectToken) {
+            return std::apply(
+                [&f, &token](auto&&... unpacked) -> return_type {
+                    return f(token, std::forward<decltype(unpacked)>(unpacked)...);
+                },
+                std::move(args_tuple));
+        } else {
+            (void)token;
+            return std::apply(std::move(f), std::move(args_tuple));
+        }
+    };
+
+    auto task_wrapper = [this,
+                         handle,
+                         state,
+                         executor_name,
+                         dependencies,
+                         promise,
+                         promise_ready,
+                         invoke = std::move(invoke_user_callable)]() mutable {
+        // 依赖图变体：依赖未满足前保持 Pending/Queued，取消可赢排队仲裁。
+        if (dependencies && !dependencies->empty()) {
+            std::exception_ptr dependency_exception;
+            bool dependencies_ready = false;
+            {
+                std::unique_lock<std::mutex> lock(task_graph_mutex_);
+                task_graph_cv_.wait(lock, [&] {
+                    dependency_exception =
+                        dependency_failure_locked(*dependencies);
+                    if (dependency_exception) {
+                        return true;
+                    }
+                    if (dependencies_succeeded_locked(*dependencies)) {
+                        dependencies_ready = true;
+                        return true;
+                    }
+                    return state->cancel_requested();
+                });
+            }
+
+            if (dependency_exception) {
+                dependency_exception =
+                    reclassify_dependency_exception(dependency_exception);
+                mark_task_graph_failed(
+                    handle,
+                    dependency_exception,
+                    "Dependency failed before dependent task execution");
+                if (state->try_reject()) {
+                    bool expected = false;
+                    if (promise_ready->compare_exchange_strong(
+                            expected, true, std::memory_order_acq_rel,
+                            std::memory_order_acquire)) {
+                        promise->set_exception(dependency_exception);
+                    }
+                }
+                cancellation_registry_->finalize(handle.id());
+                std::rethrow_exception(dependency_exception);
+            }
+
+            if (!dependencies_ready) {
+                // 被自身取消唤醒：取消方已满足 future 并落图终态。
+                return;
+            }
+        }
+
+        // 开始执行仲裁（单一 CAS 线性化点）。
+        if (!state->try_begin_execution()) {
+            return;  // 取消/超时已先赢，future 已满足
+        }
+
+        mark_task_graph_running(handle);
+        try {
+            if constexpr (std::is_void_v<return_type>) {
+                invoke(state->stop_token());
+                mark_task_graph_succeeded(handle);
+                promise->set_value();
+            } else {
+                auto result = invoke(state->stop_token());
+                mark_task_graph_succeeded(handle);
+                promise->set_value(std::move(result));
+            }
+            promise_ready->store(true, std::memory_order_release);
+            state->try_finish_running(TaskCancellationState::Phase::Succeeded);
+            if (state->cancel_requested()) {
+                // 运行中收到停止请求后仍正常完成：保留业务结果，只计数。
+                cancellation_registry_->on_completed_after_request();
+            }
+            cancellation_registry_->finalize(handle.id());
+        } catch (...) {
+            auto exception = std::current_exception();
+            // 判定是否为"已请求取消后的协作退出"：只有 stop state 已被请求
+            // 时 TaskCancelled 才按取消归类；无取消请求时主动抛出的
+            // TaskCancelled 仍按任务异常处理，防止绕过 failure 统计。
+            bool cooperative_cancel = false;
+            try {
+                std::rethrow_exception(exception);
+            } catch (const TaskCancelled&) {
+                cooperative_cancel = state->cancel_requested();
+            } catch (...) {
+                cooperative_cancel = false;
+            }
+
+            if (cooperative_cancel) {
+                // 运行中协作取消：任务记为 Cancelled，不触发 failure。
+                state->try_finish_running(
+                    TaskCancellationState::Phase::Cancelled);
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    promise->set_exception(exception);
+                }
+                mark_task_graph_failed(
+                    handle, exception, "Task cancelled during execution");
+                manager_->record_in_flight_task_state(
+                    handle.id(), TaskLifecycleState::Cancelled);
+                cancellation_registry_->finalize(handle.id());
+                return;
+            }
+
+            state->try_finish_running(TaskCancellationState::Phase::Failed);
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                promise->set_exception(exception);
+            }
+            mark_task_graph_failed(handle, exception, "Tracked task failed");
+            if (state->cancel_requested()) {
+                cancellation_registry_->on_completed_after_request();
+            }
+            cancellation_registry_->finalize(handle.id());
+            record_task_exception(
+                executor_name, handle.id(),
+                "Tracked async task threw an exception", exception);
+            throw;
+        }
     };
 
     try {
-        submission.future = submit_with_rejection_observer(
-            std::move(on_rejected),
-            [this,
-             handle,
-             dependencies,
-             f = std::forward<F>(f),
-             args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable -> return_type {
-                std::exception_ptr dependency_exception;
-                {
-                    std::unique_lock<std::mutex> lock(task_graph_mutex_);
-                    task_graph_cv_.wait(lock, [&] {
-                        dependency_exception = dependency_failure_locked(dependencies);
-                        return dependency_exception || dependencies_succeeded_locked(dependencies);
-                    });
-                }
-
-                if (dependency_exception) {
-                    mark_task_graph_failed(
-                        handle,
-                        dependency_exception,
-                        "Dependency failed before dependent task execution");
-                    std::rethrow_exception(dependency_exception);
-                }
-
-                mark_task_graph_running(handle);
-                try {
-                    if constexpr (std::is_void_v<return_type>) {
-                        std::apply(f, std::move(args_tuple));
-                        mark_task_graph_succeeded(handle);
-                    } else {
-                        auto result = std::apply(f, std::move(args_tuple));
-                        mark_task_graph_succeeded(handle);
-                        return result;
-                    }
-                } catch (...) {
-                    auto exception = std::current_exception();
-                    mark_task_graph_failed(handle, exception, "Dependent task failed");
-                    throw;
-                }
-            });
+        bool accepted = false;
+        if (priority) {
+            accepted = executor_snapshot->try_submit_priority_task(
+                *priority, std::move(task_wrapper), std::move(on_timeout));
+        } else {
+            accepted = executor_snapshot->try_submit_task(
+                std::move(task_wrapper), std::move(on_timeout));
+        }
+        if (!accepted) {
+            auto exception = std::make_exception_ptr(std::runtime_error(
+                "Async executor rejected task submission"));
+            on_rejected(exception);
+            record_submit_rejected(
+                executor_name, handle.id(),
+                "Async executor rejected tracked task submission", exception);
+        }
     } catch (...) {
         auto exception = std::current_exception();
-        mark_task_graph_failed(handle, exception, "Dependent task submission failed");
+        mark_task_graph_failed(handle, exception, "Tracked task submission failed");
+        cancellation_registry_->finalize(handle.id());
         throw;
     }
 
@@ -1257,123 +1598,276 @@ auto Executor::submit_priority(int priority, F&& f, Args&&... args)
 template<typename F, typename... Args>
 auto Executor::submit_delayed(int64_t delay_ms, F&& f, Args&&... args)
     -> std::future<typename std::invoke_result<F, Args...>::type> {
-    using return_type = typename std::invoke_result<F, Args...>::type;
+    // legacy 变体：保持只返回 future；句柄被丢弃，因此不可按句柄取消。
+    return submit_delayed_impl<false>(
+        delay_ms, std::forward<F>(f), std::forward<Args>(args)...).future;
+}
 
-    auto executor = manager_->get_default_async_executor_snapshot();
-    const std::string executor_name = executor ? executor->get_name() : "default";
-    const std::string task_id = "facade_submit_delayed";
-    if (!executor) {
-        record_submit_rejected(
-            executor_name,
-            task_id,
-            "Async executor not initialized. Call initialize() first.");
-        throw std::runtime_error("Async executor not initialized. Call initialize() first.");
+template<typename F, typename... Args>
+auto Executor::submit_delayed_with_handle(int64_t delay_ms, F&& f, Args&&... args)
+    -> TimerSubmission<typename std::invoke_result<F, Args...>::type> {
+    return submit_delayed_impl<false>(
+        delay_ms, std::forward<F>(f), std::forward<Args>(args)...);
+}
+
+template<typename F, typename... Args>
+auto Executor::submit_delayed_cancellable_with_handle(
+    int64_t delay_ms, F&& f, Args&&... args)
+    -> TimerSubmission<typename std::invoke_result<F, StopToken, Args...>::type> {
+    return submit_delayed_impl<true>(
+        delay_ms, std::forward<F>(f), std::forward<Args>(args)...);
+}
+
+// submit_delayed_impl：delayed 系列的统一实现。
+//
+// - 到期前（Scheduled）cancel：任务不执行，future 以 TaskCancelled(Explicit)
+//   就绪（TimerScheduler 在锁内完成状态仲裁后回调 on_cancelled）；
+// - 到期派发后 cancel：经共享 TaskCancellationState 继续向排队/运行中的
+//   任务传播（CancellationRequestedAfterDispatch）；
+// - shutdown 清理未到期任务：future 以 TaskCancelled(Shutdown) 就绪，
+//   不产生 failure 事件（生命周期事件，非失败）；
+// - queued soft timeout / 派发被拒：保持既有 TimedOutException /
+//   SubmitRejected 诊断语义。
+template <bool kInjectToken, typename F, typename... Args>
+auto Executor::submit_delayed_impl(int64_t delay_ms, F&& f, Args&&... args)
+    -> TimerSubmission<typename tracked_invoke_result<kInjectToken, F, Args...>::type> {
+    using return_type =
+        typename tracked_invoke_result<kInjectToken, F, Args...>::type;
+
+    TimerSubmission<return_type> submission;
+
+    // legacy 语义：默认异步执行器未初始化时，提交立即失败（而非等到期）。
+    {
+        auto executor = manager_->get_default_async_executor_snapshot();
+        if (!executor) {
+            record_submit_rejected(
+                "default",
+                "facade_submit_delayed",
+                "Async executor not initialized. Call initialize() first.");
+            throw std::runtime_error(
+                "Async executor not initialized. Call initialize() first.");
+        }
     }
 
     auto promise = std::make_shared<std::promise<return_type>>();
     auto promise_ready = std::make_shared<std::atomic_bool>(false);
-    auto future = promise->get_future();
+    submission.future = promise->get_future();
 
-    auto execute_time = std::chrono::steady_clock::now() +
-                       std::chrono::milliseconds(delay_ms);
+    // cancellable 变体：任务取消状态从登记时刻即存在，关闭"到期派发瞬间
+    // cancel 找不到传播目标"的竞争窗口。
+    std::shared_ptr<TaskCancellationState> state;
+    if constexpr (kInjectToken) {
+        state = std::make_shared<TaskCancellationState>();
+        state->set_completion_sink(
+            [promise, promise_ready](std::exception_ptr exception) {
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    promise->set_exception(exception);
+                }
+            });
+    }
 
-    std::function<void()> task_wrapper = [this,
-                                         executor_name,
-                                         task_id,
-                                         f = std::forward<F>(f),
-                                         args_tuple = std::make_tuple(std::forward<Args>(args)...),
-                                         promise,
-                                         promise_ready]() mutable {
-        try {
-            if constexpr (std::is_void_v<return_type>) {
-                std::apply(f, std::move(args_tuple));
-                promise->set_value();
-            } else {
-                auto result = std::apply(f, std::move(args_tuple));
-                promise->set_value(std::move(result));
+    const std::string timer_id = generate_task_id();
+    const std::string task_state_id = timer_id + "#run";
+    const std::string task_id = kInjectToken ? task_state_id
+                                             : std::string("facade_submit_delayed");
+
+    // 到期派发闭包：把已包装任务提交到默认异步执行器。
+    auto dispatch = [this, state, task_state_id, task_id, promise, promise_ready,
+                     f = std::forward<F>(f),
+                     args_tuple = std::make_tuple(std::forward<Args>(args)...)]() mutable {
+        auto executor = manager_->get_default_async_executor_snapshot();
+        const std::string executor_name =
+            executor ? executor->get_name() : "default";
+
+        auto reject = [this, state, executor_name, task_id, promise,
+                       promise_ready](const char* message) {
+            auto exception = std::make_exception_ptr(std::runtime_error(message));
+            if (state) {
+                state->try_reject();
             }
-            promise_ready->store(true, std::memory_order_release);
-        } catch (...) {
-            auto exception = std::current_exception();
             bool expected = false;
-            if (promise_ready->compare_exchange_strong(expected, true)) {
+            if (promise_ready->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
                 promise->set_exception(exception);
             }
-            record_task_exception(
-                executor_name,
-                task_id,
-                "Delayed async task threw an exception",
-                exception);
-            throw;
-        }
-    };
+            record_submit_rejected(executor_name, task_id, message, exception);
+        };
 
-    DelayedTask delayed_task;
-    delayed_task.task_id = task_id;
-    delayed_task.execute_time = execute_time;
-    delayed_task.task = std::move(task_wrapper);
-    delayed_task.on_timeout = [this, executor_name, task_id, promise, promise_ready](
-                                  std::exception_ptr exception) {
-        bool expected = false;
-        if (promise_ready->compare_exchange_strong(expected, true)) {
-            promise->set_exception(exception);
+        if (!executor) {
+            reject("Async executor unavailable for delayed task");
+            return;
+        }
+
+        auto pool_task = [this, state, executor_name, task_id, promise,
+                          promise_ready, f = std::move(f),
+                          args_tuple = std::move(args_tuple)]() mutable {
+            if (state && !state->try_begin_execution()) {
+                return;  // 已取消/已超时，future 已满足
+            }
+            try {
+                if constexpr (std::is_void_v<return_type>) {
+                    if constexpr (kInjectToken) {
+                        std::apply(
+                            [&f, token = state->stop_token()](auto&&... unpacked) {
+                                f(token,
+                                  std::forward<decltype(unpacked)>(unpacked)...);
+                            },
+                            std::move(args_tuple));
+                    } else {
+                        std::apply(std::move(f), std::move(args_tuple));
+                    }
+                    promise->set_value();
+                } else {
+                    if constexpr (kInjectToken) {
+                        auto result = std::apply(
+                            [&f, token = state->stop_token()](
+                                auto&&... unpacked) -> return_type {
+                                return f(
+                                    token,
+                                    std::forward<decltype(unpacked)>(unpacked)...);
+                            },
+                            std::move(args_tuple));
+                        promise->set_value(std::move(result));
+                    } else {
+                        auto result = std::apply(
+                            std::move(f), std::move(args_tuple));
+                        promise->set_value(std::move(result));
+                    }
+                }
+                promise_ready->store(true, std::memory_order_release);
+                if (state) {
+                    state->try_finish_running(
+                        TaskCancellationState::Phase::Succeeded);
+                    if (state->cancel_requested()) {
+                        cancellation_registry_->on_completed_after_request();
+                    }
+                }
+            } catch (const TaskCancelled&) {
+                if (!state || !state->cancel_requested()) {
+                    throw;  // 无取消请求：按任务异常处理
+                }
+                state->try_finish_running(TaskCancellationState::Phase::Cancelled);
+                auto exception = std::current_exception();
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    promise->set_exception(exception);
+                }
+                // 协作取消是生命周期事件，不记 failure。
+            } catch (...) {
+                auto exception = std::current_exception();
+                if (state) {
+                    state->try_finish_running(
+                        TaskCancellationState::Phase::Failed);
+                }
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    promise->set_exception(exception);
+                }
+                record_task_exception(
+                    executor_name,
+                    task_id,
+                    "Delayed async task threw an exception",
+                    exception);
+                throw;
+            }
+        };
+
+        auto on_timeout = [this, state, executor_name, task_id, promise,
+                           promise_ready](std::exception_ptr exception) {
+            if (state && !state->try_timeout_before_start()) {
+                return;  // 取消已赢或已开始执行
+            }
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                promise->set_exception(exception);
+            }
             record_task_timeout(
                 executor_name,
                 task_id,
                 "Delayed async task timed out before execution",
                 exception);
-        }
-    };
-    delayed_task.on_rejected = [this, executor_name, task_id, promise, promise_ready](
-                                   std::exception_ptr exception) {
-        bool expected = false;
-        if (promise_ready->compare_exchange_strong(expected, true)) {
-            promise->set_exception(exception);
-            record_submit_rejected(
-                executor_name,
-                task_id,
-                "Async executor rejected delayed task submission",
-                exception);
+        };
+
+        if (!executor->try_submit_task(std::move(pool_task), std::move(on_timeout))) {
+            reject("Async executor rejected delayed task submission");
         }
     };
 
-    try {
-        if (!timer_running_.load()) {
-            start_timer_thread();
+    // 派发前取消回调：TimerScheduler 在锁内完成 Scheduled -> Cancelled 仲裁
+    // 后调用；future 以 TaskCancelled(Explicit) 就绪，无 failure 事件。
+    auto on_cancelled = [state, promise, promise_ready](
+                            std::exception_ptr exception) {
+        bool expected = false;
+        if (state) {
+            if (!state->try_cancel_before_start()) {
+                return;  // 任务侧已终态（并发窗口），future 已满足
+            }
+            state->notify_cancelled(exception);
+            return;
         }
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+    };
+
+    const std::string executor_check_name = "default";
+    try {
+        start_timer_thread();
     } catch (...) {
         auto exception = std::current_exception();
         bool expected = false;
-        if (promise_ready->compare_exchange_strong(expected, true)) {
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
             promise->set_exception(exception);
         }
         record_submit_rejected(
-            executor_name,
+            executor_check_name,
             task_id,
             "Timer thread creation failed for delayed task",
             exception);
         throw;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(delayed_tasks_mutex_);
-        // P-260816-002: start_timer_thread() 返回后定时器可能已被并发停止。
-        // timer_running_ 在 stop 的排空之前置 false：任务要么先于排空入队（被
-        // 排空路径拒绝），要么在这里直接拒绝，不会出现"入队后无人处理"的
-        // 悬挂 future。
-        if (timer_running_.load(std::memory_order_acquire)) {
-            delayed_tasks_.push(std::move(delayed_task));
-            return future;
+    const std::string scheduled_id = ensure_timers().schedule_once(
+        delay_ms, timer_id, state, task_state_id, std::move(dispatch),
+        std::move(on_cancelled));
+    if (scheduled_id.empty()) {
+        // 定时器已停止（并发 shutdown 窗口）：按 TaskCancelled(Shutdown)
+        // 满足 future；生命周期事件，不写 failure。注意 on_cancelled 已被
+        // 移入调度器，这里直接满足 promise，不能调用移空后的闭包。
+        auto exception = std::make_exception_ptr(TaskCancelled(
+            TaskCancellationReason::Shutdown,
+            "Timer stopped before delayed task execution"));
+        if (state) {
+            if (state->try_cancel_before_start()) {
+                state->notify_cancelled(exception);
+            }
+        } else {
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                promise->set_exception(exception);
+            }
         }
+    } else {
+        submission.handle = TimerHandle(timer_id, timers_);
     }
 
-    // 定时器已停止：在锁外走拒绝路径（on_rejected 可能重入 facade）。
-    auto stopped_exception = std::make_exception_ptr(std::runtime_error(
-        "Timer stopped before delayed task execution"));
-    if (delayed_task.on_rejected) {
-        delayed_task.on_rejected(stopped_exception);
-    }
-    return future;
+    return submission;
 }
 
 // 批量任务提交模板方法实现
