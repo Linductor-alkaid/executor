@@ -1410,21 +1410,28 @@ auto Executor::submit_tracked(
 
         mark_task_graph_running(handle);
         try {
+            // 观测不变式：future 就绪之前，取消生命周期计数必须已最终化
+            // （否则等待 future 后立即读 get_cancellation_status() 会与
+            // worker 侧计数竞态）。
             if constexpr (std::is_void_v<return_type>) {
                 invoke(state->stop_token());
                 mark_task_graph_succeeded(handle);
+                if (state->cancel_requested()) {
+                    // 运行中收到停止请求后仍正常完成：保留业务结果，只计数。
+                    cancellation_registry_->on_completed_after_request();
+                }
+                state->try_finish_running(TaskCancellationState::Phase::Succeeded);
                 promise->set_value();
             } else {
                 auto result = invoke(state->stop_token());
                 mark_task_graph_succeeded(handle);
+                if (state->cancel_requested()) {
+                    cancellation_registry_->on_completed_after_request();
+                }
+                state->try_finish_running(TaskCancellationState::Phase::Succeeded);
                 promise->set_value(std::move(result));
             }
             promise_ready->store(true, std::memory_order_release);
-            state->try_finish_running(TaskCancellationState::Phase::Succeeded);
-            if (state->cancel_requested()) {
-                // 运行中收到停止请求后仍正常完成：保留业务结果，只计数。
-                cancellation_registry_->on_completed_after_request();
-            }
             cancellation_registry_->finalize(handle.id());
         } catch (...) {
             auto exception = std::current_exception();
@@ -1738,14 +1745,16 @@ auto Executor::submit_delayed_impl(int64_t delay_ms, F&& f, Args&&... args)
                         promise->set_value(std::move(result));
                     }
                 }
-                promise_ready->store(true, std::memory_order_release);
                 if (state) {
-                    state->try_finish_running(
-                        TaskCancellationState::Phase::Succeeded);
+                    // 观测不变式：future 就绪前完成取消后完成计数（与
+                    // submit_tracked 一致）。
                     if (state->cancel_requested()) {
                         cancellation_registry_->on_completed_after_request();
                     }
+                    state->try_finish_running(
+                        TaskCancellationState::Phase::Succeeded);
                 }
+                promise_ready->store(true, std::memory_order_release);
             } catch (const TaskCancelled&) {
                 if (!state || !state->cancel_requested()) {
                     throw;  // 无取消请求：按任务异常处理
