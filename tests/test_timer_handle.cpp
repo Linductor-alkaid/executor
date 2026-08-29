@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,19 @@ using namespace executor;
 using namespace std::chrono_literals;
 
 namespace {
+
+// Windows CI 虚拟化下固定 sleep 不可靠：tick 计数断言一律有界轮询。
+bool wait_until(std::chrono::milliseconds timeout,
+                const std::function<bool()>& ready) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (ready()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return ready();
+}
 
 ExecutorConfig small_config() {
     ExecutorConfig config;
@@ -241,9 +255,9 @@ TEST(TimerHandleTest, ShutdownStopsPeriodicTicksWithoutFailureEvents) {
     auto handle = executor.submit_periodic_with_handle(
         20, [&ticks]() noexcept { ticks.fetch_add(1, std::memory_order_relaxed); });
 
-    std::this_thread::sleep_for(120ms);
+    ASSERT_TRUE(wait_until(2s, [&ticks] { return ticks.load() >= 1; }))
+        << "periodic timer should tick before shutdown";
     const int before = ticks.load();
-    ASSERT_GE(before, 1u) << "periodic timer should tick before shutdown";
 
     executor.shutdown();
     std::this_thread::sleep_for(120ms);
@@ -270,8 +284,8 @@ TEST(TimerHandleTest, PeriodicWithHandleCancelsAndBlocksFutureTicks) {
         20, [&ticks]() noexcept { ticks.fetch_add(1, std::memory_order_relaxed); });
     ASSERT_TRUE(handle.valid());
 
-    std::this_thread::sleep_for(100ms);
-    ASSERT_GE(ticks.load(), 2);
+    ASSERT_TRUE(wait_until(2s, [&ticks] { return ticks.load() >= 2; }))
+        << "periodic timer must tick before cancel";
 
     EXPECT_EQ(handle.cancel(), TimerOperationResult::CancelledBeforeDispatch);
 
@@ -319,8 +333,8 @@ TEST(TimerHandleTest, PeriodicRescheduleChangesNextExpiryNotPeriod) {
         30, [&ticks]() noexcept { ticks.fetch_add(1, std::memory_order_relaxed); });
 
     // 把下一次到期推迟：在 100ms 窗口内不应有新 tick（原周期 30ms）。
-    std::this_thread::sleep_for(40ms);  // 首个 tick 已到期
-    ASSERT_GE(ticks.load(), 1);
+    ASSERT_TRUE(wait_until(2s, [&ticks] { return ticks.load() >= 1; }))
+        << "first tick must fire before rescheduling";
     EXPECT_EQ(handle.reschedule_after(500), TimerOperationResult::Rescheduled);
 
     const int at_reschedule = ticks.load();
@@ -412,7 +426,12 @@ TEST(TimerHandleTest, LegacyDelayedAndPeriodicUnchanged) {
         20, [&ticks]() noexcept { ticks.fetch_add(1, std::memory_order_relaxed); });
     EXPECT_FALSE(task_id.empty());
 
-    std::this_thread::sleep_for(100ms);
+    ASSERT_TRUE(wait_until(
+        2s, [&executor, &task_id] {
+            auto status = executor.get_periodic_task_status(task_id);
+            return status && status->execution_count >= 2;
+        }))
+        << "legacy periodic task must tick at least twice";
     const auto status = executor.get_periodic_task_status(task_id);
     ASSERT_TRUE(status.has_value());
     EXPECT_EQ(status->task_id, task_id);

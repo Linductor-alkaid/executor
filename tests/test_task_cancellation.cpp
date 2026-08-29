@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -47,6 +48,20 @@ ExecutorConfig small_config() {
 
 bool wait_until_ready(std::future<void>& future, std::chrono::milliseconds timeout) {
     return future.wait_for(timeout) == std::future_status::ready;
+}
+
+// future 就绪早于 worker 线程到达 record_task_exception 是合法时序；
+// 计数断言必须轮询等待而非立即读取。
+bool wait_for_counter(std::chrono::milliseconds timeout,
+                      const std::function<uint64_t()>& read) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (read() >= 1u) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return read() >= 1u;
 }
 
 // 排队任务的辅助：先占满唯一 worker，再提交被测任务，保证其处于 Queued。
@@ -250,7 +265,13 @@ TEST(TaskCancellationTest, TaskCancelledWithoutRequestStillCountsAsFailure) {
     EXPECT_THROW(submission.future.get(), TaskCancelled);
 
     // 无取消请求时主动抛 TaskCancelled：不得绕过 failure 统计。
-    EXPECT_GE(executor.get_failure_status().task_exception_count, 1u);
+    // （计数在 worker 线程上记录，可能晚于 future 就绪，有界等待。）
+    EXPECT_TRUE(wait_for_counter(
+        std::chrono::seconds(2),
+        [&executor]() {
+            return executor.get_failure_status().task_exception_count;
+        }))
+        << "unrequested TaskCancelled must be counted as a task failure";
     executor.shutdown();
 }
 
