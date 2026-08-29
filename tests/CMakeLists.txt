@@ -37,6 +37,25 @@ foreach(STANDALONE_TEST_SOURCE
         target_include_directories(${STANDALONE_TEST_NAME} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../include
         )
+        # 与 executor 库目标一致：CUDA 启用时补头文件目录（GPU headers stub
+        # 编译路径用），OpenCL 启用时补 OpenCL 头并传宏。
+        if(EXECUTOR_CUDA_ENABLED)
+            if(CUDA_INCLUDE_DIRS)
+                target_include_directories(${STANDALONE_TEST_NAME} SYSTEM PRIVATE
+                    ${CUDA_INCLUDE_DIRS})
+            elseif(CUDAToolkit_INCLUDE_DIRS)
+                target_include_directories(${STANDALONE_TEST_NAME} SYSTEM PRIVATE
+                    ${CUDAToolkit_INCLUDE_DIRS})
+            endif()
+        endif()
+        if(EXECUTOR_OPENCL_ENABLED)
+            if(OpenCL_INCLUDE_DIRS)
+                target_include_directories(${STANDALONE_TEST_NAME} SYSTEM PRIVATE
+                    ${OpenCL_INCLUDE_DIRS})
+            endif()
+            target_compile_definitions(${STANDALONE_TEST_NAME} PRIVATE
+                EXECUTOR_ENABLE_OPENCL)
+        endif()
         target_compile_definitions(${STANDALONE_TEST_NAME} PRIVATE
             EXECUTOR_STOP_TOKEN_FORCE_FALLBACK)
     else()

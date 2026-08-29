@@ -119,7 +119,7 @@ std::set<std::string> extract_backticked_fields(const std::string& line) {
         // 字段名：小写开头、无空格/标点（periodic/state 等无下划线也算）。
         if (!token.empty() && token.find(' ') == std::string::npos &&
             token.find('(') == std::string::npos &&
-            token.find('）') == std::string::npos &&
+            token.find("）") == std::string::npos &&
             std::islower(static_cast<unsigned char>(token[0]))) {
             fields.insert(token);
         }
@@ -145,7 +145,7 @@ std::string full_line_containing(const std::string& doc,
 
 // 从"："分隔符之后提取反引号字段（跳过函数名 token 本身）。
 std::set<std::string> extract_fields_after_colon(const std::string& line) {
-    const size_t colon = line.find('：');
+    const size_t colon = line.find("：");
     if (colon == std::string::npos) {
         return {};
     }
