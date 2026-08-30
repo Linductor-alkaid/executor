@@ -1,15 +1,40 @@
 // A1 验收测试（mira_feedback_update_plan.md，对齐 docs/design/bounded_admission.md）：
 // 总量有界 admission 的拒绝语义、各终态恰好一次释放、shutdown 交错、
 // capacity rejection 与 stopping/invalid input 的可区分性、串行 ticket 释放。
+//
+// 断言使用 ADM_CHECK 而非 assert：Release(-DNDEBUG) 下 assert 会被剥离，
+// ex.initialize() 将不执行、facade 懒初始化为默认配置（admission 关闭），
+// 测试既空转也可能与自身的 blocker 释放顺序死锁。ADM_CHECK 显式求值并在
+// 失败时打印退出，保证 Release 运行同等地验证验收标准。
 #include <executor/executor.hpp>
 
 #include <atomic>
-#include <cassert>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <vector>
+
+namespace {
+
+#define ADM_CHECK(cond)                                                     \
+    do {                                                                    \
+        if (!(cond)) {                                                      \
+            std::fprintf(stderr, "test_bounded_admission: FAILED %s (%s:%d)\n", \
+                         #cond, __FILE__, __LINE__);                        \
+            std::exit(1);                                                   \
+        }                                                                   \
+    } while (0)
+
+// 期望立即就绪的 future 用有界等待：即使实现回归也不把 CI 挂满 120s。
+template <typename Future>
+bool settled_soon(Future& future, std::chrono::seconds budget) {
+    return future.wait_for(budget) == std::future_status::ready;
+}
+
+}  // namespace
 
 int main() {
     using executor::CapacityExhaustedException;
@@ -24,7 +49,7 @@ int main() {
         config.min_threads = 1;
         config.max_threads = 1;
         config.max_in_flight_tasks = 3;
-        assert(ex.initialize(config));
+        ADM_CHECK(ex.initialize(config));
 
         std::promise<void> release;
         auto release_future = release.get_future().share();
@@ -40,28 +65,29 @@ int main() {
         }
         started_future.wait();
         // 3 个未结算提交占满容量（1 运行 + 2 排队）。
-        assert(ex.get_in_flight_submissions() == 3);
-        assert(ex.get_max_in_flight_tasks() == 3);
+        ADM_CHECK(ex.get_in_flight_submissions() == 3);
+        ADM_CHECK(ex.get_max_in_flight_tasks() == 3);
 
         auto rejected = ex.submit([] { return 7; });
+        ADM_CHECK(settled_soon(rejected, std::chrono::seconds(2)));
         bool saw_capacity = false;
         try { (void)rejected.get(); }
         catch (const CapacityExhaustedException&) { saw_capacity = true; }
-        assert(saw_capacity);
+        ADM_CHECK(saw_capacity);
         // 拒绝不改变在途计数，不产生额外堆积。
-        assert(ex.get_in_flight_submissions() == 3);
+        ADM_CHECK(ex.get_in_flight_submissions() == 3);
 
         release.set_value();
         for (auto& future : blocked) future.get();
-        assert(ex.get_in_flight_submissions() == 0);
-        assert(ex.submit([] { return 11; }).get() == 11);
+        ADM_CHECK(ex.get_in_flight_submissions() == 0);
+        ADM_CHECK(ex.submit([] { return 11; }).get() == 11);
 
         const auto failure_status = ex.get_failure_status();
-        assert(failure_status.capacity_exhausted_count == 1);
-        assert(failure_status.total_count >= 1);
+        ADM_CHECK(failure_status.capacity_exhausted_count == 1);
+        ADM_CHECK(failure_status.total_count >= 1);
         const auto recent = ex.get_recent_failures(8);
-        assert(!recent.empty());
-        assert(recent.front().kind == executor::FailureKind::CapacityExhausted);
+        ADM_CHECK(!recent.empty());
+        ADM_CHECK(recent.front().kind == executor::FailureKind::CapacityExhausted);
         ex.shutdown();
     }
 
@@ -73,17 +99,17 @@ int main() {
         config.max_threads = 1;
         config.max_in_flight_tasks = 4;
         config.task_timeout_ms = 50;
-        assert(ex.initialize(config));
+        ADM_CHECK(ex.initialize(config));
 
         // 完成。
-        assert(ex.submit([] { return 1; }).get() == 1);
-        assert(ex.get_in_flight_submissions() == 0);
+        ADM_CHECK(ex.submit([] { return 1; }).get() == 1);
+        ADM_CHECK(ex.get_in_flight_submissions() == 0);
         // 异常。
         bool saw_error = false;
         try { (void)ex.submit([] { throw std::runtime_error("boom"); }).get(); }
         catch (const std::runtime_error&) { saw_error = true; }
-        assert(saw_error);
-        assert(ex.get_in_flight_submissions() == 0);
+        ADM_CHECK(saw_error);
+        ADM_CHECK(ex.get_in_flight_submissions() == 0);
 
         // 排队取消：先占住唯一 worker，tracked 任务排队后被取消。
         std::promise<void> release_cancel;
@@ -95,29 +121,29 @@ int main() {
             release_cancel_future.wait();
         });
         cancel_blocker_started_future.wait();
-        auto cancelled = ex.submit_with_handle([] { assert(false && "cancelled before start"); });
+        auto cancelled = ex.submit_with_handle([] { ADM_CHECK(false && "cancelled before start"); });
         const auto response = ex.request_task_cancel(cancelled.handle);
-        assert(response.result == executor::TaskCancellationResult::RequestedBeforeStart);
+        ADM_CHECK(response.result == executor::TaskCancellationResult::RequestedBeforeStart);
         bool saw_cancel = false;
         try { (void)cancelled.future.get(); }
         catch (const executor::TaskCancelled&) { saw_cancel = true; }
-        assert(saw_cancel);
-        assert(ex.get_in_flight_submissions() == 1);  // 仅剩 blocker
+        ADM_CHECK(saw_cancel);
+        ADM_CHECK(ex.get_in_flight_submissions() == 1);  // 仅剩 blocker
         release_cancel.set_value();
         cancel_blocker.get();
-        assert(ex.get_in_flight_submissions() == 0);
+        ADM_CHECK(ex.get_in_flight_submissions() == 0);
 
         // 执行前超时：sleep 占满 worker，排队任务出队时已过期。
         auto sleeper = ex.submit([] {
             std::this_thread::sleep_for(std::chrono::milliseconds(150));
         });
-        auto timed_out = ex.submit([] { assert(false && "must time out"); });
+        auto timed_out = ex.submit([] { ADM_CHECK(false && "must time out"); });
         bool saw_timeout = false;
         try { (void)timed_out.get(); }
         catch (const executor::TimedOutException&) { saw_timeout = true; }
-        assert(saw_timeout);
+        ADM_CHECK(saw_timeout);
         sleeper.get();
-        assert(ex.get_in_flight_submissions() == 0);
+        ADM_CHECK(ex.get_in_flight_submissions() == 0);
         ex.shutdown();
     }
 
@@ -128,7 +154,7 @@ int main() {
         config.min_threads = 1;
         config.max_threads = 1;
         config.max_in_flight_tasks = 2;
-        assert(ex.initialize(config));
+        ADM_CHECK(ex.initialize(config));
         executor::SerialExecutionContext context;
 
         std::promise<void> release;
@@ -145,17 +171,18 @@ int main() {
         // 其 ticket 必须被释放，不得阻塞后续 ticket 的顺序执行。
         auto first = ex.submit_on_with_handle(context, [] { return 1; });
         auto rejected = ex.submit_on_with_handle(context, [] { return 2; });
+        ADM_CHECK(settled_soon(rejected.future, std::chrono::seconds(2)));
         bool saw_capacity = false;
         try { (void)rejected.future.get(); }
         catch (const CapacityExhaustedException&) { saw_capacity = true; }
-        assert(saw_capacity);
+        ADM_CHECK(saw_capacity);
 
         release.set_value();
         blocker.get();
-        assert(first.future.get() == 1);
+        ADM_CHECK(first.future.get() == 1);
         auto third = ex.submit_on_with_handle(context, [] { return 3; });
-        assert(third.future.get() == 3);
-        assert(ex.get_in_flight_submissions() == 0);
+        ADM_CHECK(third.future.get() == 3);
+        ADM_CHECK(ex.get_in_flight_submissions() == 0);
         context.shutdown();
         ex.shutdown();
     }
@@ -167,31 +194,32 @@ int main() {
         config.min_threads = 1;
         config.max_threads = 1;
         config.max_in_flight_tasks = 1;
-        assert(ex.initialize(config));
+        ADM_CHECK(ex.initialize(config));
 
         std::promise<void> release;
         auto release_future = release.get_future().share();
         auto blocker = ex.submit([&] { release_future.wait(); });
 
         auto rejected = ex.submit([] { return 1; });
+        ADM_CHECK(settled_soon(rejected, std::chrono::seconds(2)));
         bool saw_capacity = false;
         try { (void)rejected.get(); }
         catch (const CapacityExhaustedException&) { saw_capacity = true; }
-        assert(saw_capacity);
+        ADM_CHECK(saw_capacity);
 
         // invalid input：空任务的拒绝是 std::invalid_argument。
         auto empty = ex.submit(std::function<int()>());
         bool saw_invalid = false;
         try { (void)empty.get(); }
         catch (const std::invalid_argument&) { saw_invalid = true; }
-        assert(saw_invalid);
+        ADM_CHECK(saw_invalid);
 
         release.set_value();
         blocker.get();
 
         const auto status = ex.get_failure_status();
-        assert(status.capacity_exhausted_count == 1);
-        assert(status.submit_rejected_count >= 1);  // 空 task 走 SubmitRejected
+        ADM_CHECK(status.capacity_exhausted_count == 1);
+        ADM_CHECK(status.submit_rejected_count >= 1);  // 空 task 走 SubmitRejected
         ex.shutdown();
     }
 
@@ -202,7 +230,7 @@ int main() {
         config.min_threads = 2;
         config.max_threads = 2;
         config.max_in_flight_tasks = 8;
-        assert(ex.initialize(config));
+        ADM_CHECK(ex.initialize(config));
 
         std::atomic<uint64_t> capacity_rejections{0};
         ex.set_failure_callback([&](const executor::ExecutorFailureEvent& event) {
@@ -237,13 +265,13 @@ int main() {
                 // 池停止后的 SubmitRejected 结算路径。
                 settled = true;
             }
-            assert(settled);
+            ADM_CHECK(settled);
         }
-        assert(ex.get_in_flight_submissions() == 0);
+        ADM_CHECK(ex.get_in_flight_submissions() == 0);
         // 峰值不超过容量的必要条件：拒绝只在容量满时发生，且每条拒绝都有
         // 对应 failure 事件（回读计数与回调计数一致）。
-        assert(capacity_rejections.load() ==
-               ex.get_failure_status().capacity_exhausted_count);
+        ADM_CHECK(capacity_rejections.load() ==
+                  ex.get_failure_status().capacity_exhausted_count);
     }
 
     // 运行期调整：调小不驱逐已接纳任务，只约束后续提交。
@@ -252,19 +280,20 @@ int main() {
         ExecutorConfig config;
         config.min_threads = 1;
         config.max_threads = 1;
-        assert(ex.initialize(config));
-        assert(ex.get_max_in_flight_tasks() == 0);
-        assert(ex.get_in_flight_submissions() == 0);  // 未启用恒为 0
+        ADM_CHECK(ex.initialize(config));
+        ADM_CHECK(ex.get_max_in_flight_tasks() == 0);
+        ADM_CHECK(ex.get_in_flight_submissions() == 0);  // 未启用恒为 0
 
         ex.set_max_in_flight_tasks(1);
         std::promise<void> release;
         auto release_future = release.get_future().share();
         auto blocker = ex.submit([&] { release_future.wait(); });
         auto rejected = ex.submit([] {});
+        ADM_CHECK(settled_soon(rejected, std::chrono::seconds(2)));
         bool saw_capacity = false;
         try { (void)rejected.get(); }
         catch (const CapacityExhaustedException&) { saw_capacity = true; }
-        assert(saw_capacity);
+        ADM_CHECK(saw_capacity);
         release.set_value();
         blocker.get();
         ex.shutdown();

@@ -2,18 +2,31 @@
 // 突发中取消/超时/context shutdown/executor shutdown 的交错收敛。
 // 旧实现（阻塞 wrapper）在两 worker × 10,000 突发下首 future 30s 超时
 //（Mira 台账 EXE-20260830-002 复现口径），本测试是回归门。
+//
+// 断言使用 STRESS_CHECK 而非 assert：Release(-DNDEBUG) 下 assert 会被剥离，
+// ex.initialize() 将不执行、facade 懒初始化为默认配置（超时等参数不生效），
+// 测试会空转通过。STRESS_CHECK 显式求值并打印退出，Release 运行同等地验证。
 #include <executor/executor.hpp>
 
 #include <atomic>
-#include <cassert>
 #include <chrono>
-#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
 namespace {
+
+#define STRESS_CHECK(cond)                                                     \
+    do {                                                                       \
+        if (!(cond)) {                                                         \
+            std::fprintf(stderr, "test_serial_context_stress: FAILED %s (%s:%d)\n", \
+                         #cond, __FILE__, __LINE__);                           \
+            std::exit(1);                                                      \
+        }                                                                      \
+    } while (0)
 
 using Clock = std::chrono::steady_clock;
 
@@ -23,7 +36,7 @@ void run_burst_fifo(unsigned workers, int count, std::chrono::seconds budget) {
     executor::ExecutorConfig config;
     config.min_threads = workers;
     config.max_threads = workers;
-    assert(ex.initialize(config));
+    STRESS_CHECK(ex.initialize(config));
     executor::SerialExecutionContext context;
 
     std::vector<int> executed;
@@ -40,11 +53,11 @@ void run_burst_fifo(unsigned workers, int count, std::chrono::seconds budget) {
     for (auto& future : futures) future.get();
     const auto elapsed = Clock::now() - start;
 
-    assert(executed.size() == static_cast<size_t>(count));
+    STRESS_CHECK(executed.size() == static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
-        assert(executed[static_cast<size_t>(i)] == i);
+        STRESS_CHECK(executed[static_cast<size_t>(i)] == i);
     }
-    assert(elapsed < budget);
+    STRESS_CHECK(elapsed < budget);
     context.shutdown();
     ex.shutdown();
 }
@@ -68,7 +81,7 @@ int main() {
         executor::ExecutorConfig config;
         config.min_threads = 2;
         config.max_threads = 2;
-        assert(ex.initialize(config));
+        STRESS_CHECK(ex.initialize(config));
         executor::SerialExecutionContext context;
 
         constexpr int kCount = 4000;
@@ -96,10 +109,10 @@ int main() {
             } catch (const executor::TaskCancelled&) {
                 settled = true;
             }
-            assert(settled);
+            STRESS_CHECK(settled);
         }
-        assert(executed.load() + cancelled_seen <= kCount);
-        assert(executed.load() >= kCount / 2);  // 取消窗口之后的提交全部执行
+        STRESS_CHECK(executed.load() + cancelled_seen <= kCount);
+        STRESS_CHECK(executed.load() >= kCount / 2);  // 取消窗口之后的提交全部执行
         context.shutdown();
         ex.shutdown();
     }
@@ -114,22 +127,22 @@ int main() {
         config.min_threads = 2;
         config.max_threads = 2;
         config.task_timeout_ms = 50;
-        assert(ex.initialize(config));
+        STRESS_CHECK(ex.initialize(config));
         executor::SerialExecutionContext context;
 
         auto sleeper1 = ex.submit([] { std::this_thread::sleep_for(std::chrono::milliseconds(150)); });
         auto sleeper2 = ex.submit([] { std::this_thread::sleep_for(std::chrono::milliseconds(150)); });
 
-        auto timed_out = ex.submit_on_with_handle(context, [] { assert(false && "must time out"); });
+        auto timed_out = ex.submit_on_with_handle(context, [] { STRESS_CHECK(false && "must time out"); });
         bool saw_timeout = false;
         try { (void)timed_out.future.get(); }
         catch (const executor::TimedOutException&) { saw_timeout = true; }
-        assert(saw_timeout);
+        STRESS_CHECK(saw_timeout);
         // 超时已释放 ticket：后续提交不被拖死。
         auto after_timeout = ex.submit_on_with_handle(context, [] { return 42; });
         sleeper1.get();
         sleeper2.get();
-        assert(after_timeout.future.get() == 42);
+        STRESS_CHECK(after_timeout.future.get() == 42);
         context.shutdown();
         ex.shutdown();
     }
@@ -141,7 +154,7 @@ int main() {
         executor::ExecutorConfig config;
         config.min_threads = 2;
         config.max_threads = 2;
-        assert(ex.initialize(config));
+        STRESS_CHECK(ex.initialize(config));
         executor::SerialExecutionContext context;
 
         constexpr int kCount = 4000;
@@ -168,7 +181,7 @@ int main() {
                 ++stopped;
             }
         }
-        assert(values + stopped == kCount);
+        STRESS_CHECK(values + stopped == kCount);
         ex.shutdown();
     }
 
@@ -179,7 +192,7 @@ int main() {
         executor::ExecutorConfig config;
         config.min_threads = 2;
         config.max_threads = 2;
-        assert(ex.initialize(config));
+        STRESS_CHECK(ex.initialize(config));
         executor::SerialExecutionContext context;
 
         constexpr int kCount = 2000;

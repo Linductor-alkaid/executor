@@ -26,6 +26,25 @@ using namespace executor;
 
 namespace {
 
+// CI（尤其 Windows runner）负载下，任务从提交到被 worker 出队可能超过
+// 原 20ms 裕度：blocker 自身被软超时后 future.get() 抛 TimedOutException，
+// 经 TEST_ASSERT 之外的路径传播为 terminate/MSVC fail-fast(0xc0000409)。
+// 断言改为异常安全并给出诊断；超时/阻塞裕度放宽 5 倍，被测语义
+//（排队任务在 worker 忙碌期间过期）不变。
+bool future_returns(std::future<int>& future, int expected, const char* what) {
+    try {
+        const int value = future.get();
+        if (value == expected) return true;
+        std::cerr << what << " returned " << value << ", expected " << expected
+                  << std::endl;
+        return false;
+    } catch (const std::exception& ex) {
+        std::cerr << what << " threw unexpected exception: " << ex.what()
+                  << std::endl;
+        return false;
+    }
+}
+
 bool future_throws_timed_out(std::future<int>& future) {
     try {
         (void)future.get();
@@ -53,18 +72,18 @@ bool test_thread_pool_timeout_satisfies_future_and_monitor() {
     ThreadPoolConfig config;
     config.min_threads = 1;
     config.max_threads = 1;
-    config.task_timeout_ms = 20;
+    config.task_timeout_ms = 100;
     TEST_ASSERT(pool.initialize(config), "thread pool should initialize");
 
     monitor::TaskMonitor monitor;
     pool.set_task_monitor(&monitor);
 
     auto blocker = pool.submit([]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
         return 1;
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
     std::atomic<bool> timed_out_task_ran{false};
     auto timed_out = pool.submit([&timed_out_task_ran]() {
@@ -72,7 +91,8 @@ bool test_thread_pool_timeout_satisfies_future_and_monitor() {
         return 7;
     });
 
-    TEST_ASSERT(blocker.get() == 1, "blocker task should complete normally");
+    TEST_ASSERT(future_returns(blocker, 1, "blocker task"),
+                "blocker task should complete normally");
     TEST_ASSERT(future_throws_timed_out(timed_out),
                 "timed-out ThreadPool future should throw TimedOutException");
 
@@ -104,15 +124,15 @@ bool test_executor_timeout_satisfies_future_and_failure_status() {
     ExecutorConfig config;
     config.min_threads = 1;
     config.max_threads = 1;
-    config.task_timeout_ms = 20;
+    config.task_timeout_ms = 100;
     TEST_ASSERT(executor.initialize(config), "executor should initialize");
 
     auto blocker = executor.submit([]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
         return 1;
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
     std::atomic<bool> timed_out_task_ran{false};
     auto timed_out = executor.submit([&timed_out_task_ran]() {
@@ -120,7 +140,8 @@ bool test_executor_timeout_satisfies_future_and_failure_status() {
         return 9;
     });
 
-    TEST_ASSERT(blocker.get() == 1, "facade blocker should complete normally");
+    TEST_ASSERT(future_returns(blocker, 1, "facade blocker"),
+                "facade blocker should complete normally");
     TEST_ASSERT(future_throws_timed_out(timed_out),
                 "timed-out Executor future should throw TimedOutException");
 
