@@ -79,8 +79,13 @@ auto tracked = ex.submit_on_with_handle(context, [] { /* FIFO */ });
 `SerialExecutionContext` 使用单线程 FIFO 执行回调；任务仍先进入 facade admission，
 因此提交拒绝、异常和取消可在 executor 状态中观察。`submit_on_with_handle` 返回的
 句柄可用于 `request_task_cancel()`。上下文关闭后新提交会以 `ExecutorStopping` 完成。
-该类型不依赖或适配 asio，也不保证与外部 strand 绑定；strand 所有权定时器迁移仍
-等待 T2。
+
+派发与结算分离：池 worker 只执行有界非阻塞的 ticket 发布，不等待串行回调完成，
+业务 future 由串行线程直接结算。因此小型多 worker 池不会被等待中的派发包装占满，
+任意 worker 数下突发提交都按 ticket FIFO 有界时间内结算。排队取消、执行前超时与
+提交拒绝都会释放 ticket，不阻塞后续 ticket 的顺序执行；被池丢弃的派发任务由
+内部兜底以 `ExecutorStopping` 结算。该类型不依赖或适配 asio，也不保证与外部
+strand 绑定；strand 所有权定时器迁移仍等待 T2。
 
 ### 3.1 基本提交
 
@@ -470,6 +475,45 @@ void set_cancellation_registry_capacity(size_t capacity);
 
 与外部事件循环（asio strand 等）的取消/定时边界见
 [外部事件循环互操作指南](external_event_loop_interop.md)。
+
+### 3.10 总量有界 admission（max_in_flight_tasks）
+
+`ExecutorConfig::max_in_flight_tasks` 为 facade 默认异步提交提供总量上限：
+`0`（默认）不启用、零热路径开销；正值 N 表示该 Executor 实例已接纳未结算的
+提交（scheduler 全局队列 + worker 本地队列 + 执行中）至多 N 个。覆盖
+`submit`、`submit_with_handle`、`submit_priority`、`submit_after*`、
+`submit_cancellable*`、`submit_batch*`、`submit_on*`；`submit_delayed*` /
+`submit_periodic*`（timer 派发）与 realtime / GPU / Blocking I/O / lockfree
+不在覆盖范围。直接使用 `ThreadPool` / `PriorityScheduler` 的调用方不受保护。
+
+```cpp
+executor::ExecutorConfig config;
+config.max_in_flight_tasks = 256;          // 总在途上限
+ex.initialize(config);
+// 运行期可调（不驱逐已接纳任务）：
+ex.set_max_in_flight_tasks(512);
+size_t in_flight = ex.get_in_flight_submissions();
+```
+
+- **拒绝语义**：达到上限时提交不抛出，对应 future 立即以
+  `CapacityExhaustedException` 就绪，并同步记录 `FailureKind::CapacityExhausted`
+  事件（`capacity_exhausted_count` 计数）。与 executor 停止
+  （`ExecutorStopping` / `SubmitRejected`）和非法输入（`std::invalid_argument`）
+  经异常类型与 failure kind 双通道可区分。
+- **释放语义**：每个接纳的提交恰好释放一次容量，终态集合 = 正常完成、任务
+  异常、排队取消、执行前超时、提交拒绝、context shutdown 拒绝、池丢弃。
+  future 就绪前容量计数已释放（观测不变式：future 就绪后查询 status 即为
+  最终值）。
+- **batch**：逐任务独立接纳，部分接纳合法；被拒任务的对应 future 以
+  `CapacityExhaustedException` 就绪。
+- **串行上下文**：`submit_on_with_handle` 被拒时 context ticket 同步释放，
+  后续 FIFO 不阻塞。
+- **与 `queue_capacity` 的区别**：`queue_capacity` 只构造每 worker 的本地
+  有界队列并驱动扩缩容阈值，不是总量背压边界；本地队列满时任务回退到
+  scheduler 全局队列。总量背压只由 `max_in_flight_tasks` 表达。
+- **无旁路**：CRITICAL 优先级不越过容量；需要余量时由配置容量表达。
+
+详细设计见 [总量有界 Admission 设计](design/bounded_admission.md)。
 
 ---
 
@@ -1240,6 +1284,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `enable_work_stealing` | `bool` | `true` | 无锁工作窃取；`max_threads == 1` 时自动关；-10.7% 性能退化关闭 |
 | `enable_monitoring` | `bool` | `true` | 是否启用监控 |
 | `task_graph_retention_capacity` | `size_t` | `1024` | 已完成任务图 handle 的保留上限；`0` 表示终态 handle 立即过期，活动依赖不会提前回收 |
+| `max_in_flight_tasks` | `size_t` | `0` | facade 默认异步提交的总量在途上限（scheduler + 本地队列 + 执行中）；`0` = 不启用（零热路径开销）。与 `queue_capacity`（每 worker 本地队列）语义无关，见 §3.10 |
 
 内部动态 resize 扩容时，新增 worker 的负载元数据会重置为零负载，并将 `last_update` 初始化为当前 `std::chrono::steady_clock::now()`。
 
@@ -1284,7 +1329,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
   - `pool_exhausted_count` (uint64_t)：对象池耗尽拒绝累计数。
   - `queue_full_count` (uint64_t)：队列满拒绝累计数。
 - **TaskStatistics**：`total_count`、`success_count`、`fail_count`、`timeout_count`、`total_execution_time_ns`、`max_`/`min_execution_time_ns`。执行前软超时增加 `timeout_count`，不增加 `fail_count`。
-- **ExecutorFailureStatus**：`task_exception_count`、`submit_rejected_count`、`timeout_count`、`realtime_drop_count`、`gpu_failure_count`、`wait_timeout_count`、`tuning_fallback_count`、`total_count`。`wait_for_completion()` 或 `try_wait_for_completion(timeout)` 等待超时时记录 `FailureKind::WaitTimeout` 并增加 `wait_timeout_count`；这只表示等待动作超时，不表示任务被取消、panic 或抛异常。
+- **ExecutorFailureStatus**：`task_exception_count`、`submit_rejected_count`、`timeout_count`、`realtime_drop_count`、`gpu_failure_count`、`wait_timeout_count`、`tuning_fallback_count`、`capacity_exhausted_count`、`total_count`。`wait_for_completion()` 或 `try_wait_for_completion(timeout)` 等待超时时记录 `FailureKind::WaitTimeout` 并增加 `wait_timeout_count`；这只表示等待动作超时，不表示任务被取消、panic 或抛异常。总量 admission 耗尽时记录 `FailureKind::CapacityExhausted` 并增加 `capacity_exhausted_count`（配置与覆盖范围见 §3.10）。
 - **ExecutorResult**：`ok`、`error_code`、`message`，用于 `initialize_ex`、`register_realtime_task_ex`、`start_realtime_task_ex`、`register_gpu_executor_ex`。常见 `ExecutorErrorCode`：`AlreadyInitialized`、`AlreadyShutdown`、`InvalidConfig`、`DuplicateName`、`NotFound`、`BackendUnavailable`、`StartFailed`、`PermissionDenied`。`_ex` 失败会写入 failure/diagnostic event，但配置错误不会计入 `task_exception_count`。
 - **CompletionStatus**：`executor_name`、`is_initialized`、`is_running`、`is_idle`、`active_tasks`、`queued_tasks`、`pending_tasks`、`completed_tasks`、`failed_tasks`。由 `get_completion_status()` 和 `WaitResult::status` 返回；状态查询不会触发默认异步执行器懒初始化。它仅描述默认异步执行器，不包含实时线程、实时队列或应用自建的多消费者流水线；跨视觉、控制等消费者的 idle 状态由应用定义并汇总。
 - **WaitResult**：`completed`、`timed_out`、`timeout`、`status`、`message`、可选 `diagnostic_snapshot`。由 `wait_for_completion_ex(timeout)` 返回；超时会记录 `FailureKind::WaitTimeout`，并保留同一次路径采集的完整生命周期快照。

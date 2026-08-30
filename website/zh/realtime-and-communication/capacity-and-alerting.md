@@ -60,6 +60,34 @@ CommWindow calculate_window(const executor::comm::CommStats& before,
 
 因此无法只用 `sent_count + dropped_count` 为所有策略统一还原入口请求数。若业务需要准确的尝试率和拒绝率，在调用 `try_send()`/`send_for()` 的边界另计 attempted、accepted 和 rejected。
 
+## 默认异步提交的总量 admission
+
+通信与实时组件之外，普通 `submit()` / `submit_batch()` 等默认异步提交默认**没有**
+总量上限：`queue_capacity` 只构造每 worker 本地队列，本地队列满时任务回退到
+scheduler 全局队列，过载表现为无界积压。需要结构化过载拒绝时显式配置
+`max_in_flight_tasks`：
+
+```cpp
+executor::ExecutorConfig config;
+config.max_in_flight_tasks = 256;   // 已接纳未结算的提交总量
+```
+
+- 达到上限时提交不抛出：future 立即以 `CapacityExhaustedException` 就绪，
+  并记录 `FailureKind::CapacityExhausted`（`capacity_exhausted_count` 可窗口化
+  告警），与 executor 停止、非法输入可区分。
+- 每个接纳提交在正常完成、异常、排队取消、执行前超时、拒绝或丢弃时恰好
+  释放一次容量；future 就绪时计数已最终化。
+- 覆盖普通/优先级/批量/依赖/可取消/串行（`submit_on*`）提交；timer 派发
+  （`submit_delayed*`/`submit_periodic*`）与 realtime/GPU 不在范围——后者的
+  背压语义见本页后续各节。
+- `get_in_flight_submissions()` 是瞬时水位，与 `capacity_exhausted_count` 的
+  窗口增量配合使用：水位贴顶 + 拒绝增长 = 持续过载；水位贴顶 + 零拒绝 =
+  容量恰好，无回压需求。
+
+告警处置与通信组件一致：先确认是入口过量、消费变慢还是泄漏（在途计数不
+随完成下降），再决定限流、扩容或降级；不要用调大 `max_in_flight_tasks`
+掩盖消费端停顿。
+
 ## MpscChannel：每条消息都要处理
 
 ### 计算可持续性

@@ -43,7 +43,12 @@ Rule of thumb: the timeout is a pool policy, the deadline is a label, and cancel
 ## Serialized context dispatch
 
 Use `SerialExecutionContext` with `submit_on(context, fn)` when FIFO work should remain
-visible to Executor admission and monitoring. Shutdown rejects new submissions and drains
+visible to Executor admission and monitoring. Dispatch and settlement are split: pool
+workers only perform a bounded, non-blocking ticket publish, and the business future is
+settled directly on the serial thread — so small multi-worker pools keep making bounded
+progress in ticket FIFO order under bursts instead of starving each other. Queued
+cancellations, timeouts, and rejections all release the ticket without blocking later
+submissions. Shutdown rejects new submissions and drains
 accepted work. This adapter does not bind to an asio strand; objects that require strand-
 affine execution and destruction remain application-managed.
 

@@ -20,8 +20,8 @@ Most users can begin with `submit_auto()`. Move to a specialized path only when 
 
 - **One entry point, multiple execution models**: a single `Executor` manages thread pools, lock-free low-latency paths, dedicated realtime threads, blocking I/O, and GPU executors.
 - **Honest result semantics**: ordinary tasks return futures, bounded dispatch reports admission, and long-lived workers return lifecycle handles. Different models are not disguised behind one completion contract.
-- **Common concurrency tools included**: priority, delay, soft periodic work, batching, dependencies, cooperative cancellation, timer handles, FIFO channels, latest values, snapshots, phase coordination, and topic fan-out.
-- **Observable failure and overload**: submission rejection, task exceptions, timeouts, realtime drops, queue depth, and communication latency remain visible through results, status, or callbacks.
+- **Common concurrency tools included**: priority, delay, soft periodic work, batching, dependencies, cooperative cancellation, timer handles, a FIFO serial execution context, FIFO channels, latest values, snapshots, phase coordination, and topic fan-out.
+- **Observable failure and overload**: submission rejection, task exceptions, timeouts, realtime drops, queue depth, total-admission rejections, and communication latency remain visible through results, status, or callbacks.
 - **Progressive adoption**: the default CPU path does not require knowledge of internal executors; realtime, lock-free, and GPU capabilities can be introduced only when needed.
 
 Typical uses include background computation, robotics and device control, sensor acquisition, long-lived I/O services, and local applications with mixed CPU/GPU work.
@@ -98,6 +98,7 @@ Executor deliberately keeps the following boundaries:
 - It is not a hard realtime operating system. End-to-end jitter still depends on task bodies, the OS, privileges, CPU isolation, resident memory, and target hardware.
 - It cannot safely force arbitrary running C++ functions to terminate. Cancellation (`request_task_cancel` / `StopToken`) is a cooperative request, not preemption; long-lived work must poll its stop token. `TaskOptions::deadline` remains advisory routing/diagnostics and never triggers cancellation by itself.
 - `submit_periodic()` is soft periodic work on the ordinary thread pool, not a dedicated realtime thread.
+- Default async submission is unbounded by default; configure `max_in_flight_tasks` explicitly when structured overload rejection is required (covers facade submits including serial dispatch, but not timer firing or realtime/GPU — see `docs/API.md` §3.10). `queue_capacity` only sizes per-worker local queues and is not a backpressure bound.
 - Facade timer handles (`TimerHandle`) dispatch expiry work to the ordinary thread pool. They do not bind to external event loops (asio strands); timers that must execute and be destroyed on one strand stay application-managed. See the [external event loop interop guide](docs/external_event_loop_interop.md).
 
 In 0.4.0, key communication synchronization paths use fixed storage and atomic implementations. “Synchronization lock-free” does not cover payload operations, callbacks, page faults, or OS scheduling. `Topic<T>` belongs to the ordinary control plane and is not a realtime primitive. See the [0.4.0 migration notes](docs/MIGRATION.md) for exact guarantees.

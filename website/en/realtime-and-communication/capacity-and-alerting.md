@@ -50,6 +50,22 @@ Production code also handles `seconds <= 0`, component recreation, and counter w
 
 `sent_count` is successful admission, not necessarily producer attempts. Under `RejectNewest`, rejected inputs increment drops but not sends; `DropOldest` admits the new value while discarding an old one; `KeepLatest` clears old backlog and increments overwrites before admitting the new value. If exact attempt/rejection rates matter, count attempts, accepts, and rejects at the `try_send()`/`send_for()` boundary.
 
+## Total admission for default async submits
+
+Beyond communication and realtime components, ordinary `submit()` / `submit_batch()` submissions have **no** total bound by default: `queue_capacity` only sizes per-worker local queues, and tasks fall back to the global scheduler queue when a local queue is full — overload shows up as unbounded backlog. Configure `max_in_flight_tasks` explicitly when structured overload rejection is required:
+
+```cpp
+executor::ExecutorConfig config;
+config.max_in_flight_tasks = 256;   // total accepted-but-unsettled submissions
+```
+
+- At the bound, submission does not throw: the future settles immediately with `CapacityExhaustedException` and a `FailureKind::CapacityExhausted` event is recorded (`capacity_exhausted_count` can be windowed for alerting), distinguishable from executor stop and invalid input.
+- Every admitted submission releases its capacity slot exactly once — on completion, exception, queued cancellation, pre-execution timeout, rejection, or drop; counters are finalized before the future becomes ready.
+- Coverage includes ordinary/priority/batch/dependency/cancellable/serial (`submit_on*`) submits; timer firing (`submit_delayed*`/`submit_periodic*`) and realtime/GPU are out of scope — their backpressure semantics are the rest of this page.
+- `get_in_flight_submissions()` is an instantaneous watermark; combine it with windowed `capacity_exhausted_count` growth: watermark at the bound plus rising rejections means sustained overload; watermark at the bound with zero rejections means the bound simply fits.
+
+Alert handling follows the same discipline as communication components: determine whether the cause is excess input, slow consumption, or a leak (in-flight count that never drops), then throttle, scale, or shed load. Do not hide consumer stalls by raising `max_in_flight_tasks`.
+
 ## `MpscChannel`: every message matters
 
 For a FIFO flow, calculate within stable windows:

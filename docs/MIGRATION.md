@@ -4,7 +4,53 @@
 
 ---
 
-## 升级到当前版本：任务协作取消与定时句柄
+## 升级到当前版本：串行派发安全与总量有界 admission
+
+本版本重构 `submit_on`/`submit_on_with_handle` 的派发包装为非阻塞共享状态
+（消除多 worker 饥饿与栈条件变量竞争），并新增 `max_in_flight_tasks` 总量
+有界 admission。所有既有提交 API 的签名与返回类型不变。
+
+### 移除串行派发兼容层（Mira EXE-20260830-002/003 临时方案）
+
+如果你的集成在 facade 之外自建了"reserve ticket + 非阻塞 post_reserved +
+业务 promise"的兼容层（例如 Mira `RuntimeBaseline` 的非阻塞 tracked dispatch），
+可以迁移回直接 `submit_on_with_handle()`：
+
+- 派发包装不再阻塞 worker 等待串行回调，多 worker 池下突发提交按 ticket
+  FIFO 有界时间内结算（两 worker × 10,000 突发在回归测试中约 1s 内完成）；
+- 同步状态由共享对象拥有，TSAN 下重复 10,000+ 次串行提交无
+  condition-variable lifetime race；
+- 迁移前置检查：依赖版本包含 `docs/design/serial_execution_context.md`
+  "派发与结算结构"一节；回归运行 `test_serial_execution_context`、
+  `test_serial_context_stress`。
+
+### 把应用侧在途计数迁移到 max_in_flight_tasks（Mira EXE-20260830-001 临时方案）
+
+如果你的集成在提交边界自建原子在途计数以获得拒绝语义（例如 Mira
+`RuntimeBaseline` 的有界 admission boundary），可改为原生配置：
+
+```cpp
+executor::ExecutorConfig config;
+config.max_in_flight_tasks = /* 原 max_in_flight */;
+```
+
+- 拒绝语义：future 立即以 `CapacityExhaustedException` 就绪 +
+  `FailureKind::CapacityExhausted` 事件（区别于 stopping 与 invalid input）；
+- 迁移后删除应用侧计数与拒绝转换逻辑；回归运行 `test_bounded_admission`；
+- 注意语义差异：原生容量按 Executor 内部结算点计算（覆盖 scheduler、本地
+  队列与执行中），不再按应用命令生命周期；`submit_delayed*`/`submit_periodic*`
+  不在覆盖范围（见 API.md §3.10）。
+
+### queue_capacity 语义澄清
+
+`ExecutorConfig::queue_capacity` 只构造每 worker 本地有界队列并驱动扩缩容
+阈值，**不是总量背压边界**；本地队列满时任务回退到 scheduler 全局队列。
+如果你的代码把 `queue_capacity` 当作拒绝边界使用，请改用
+`max_in_flight_tasks`。
+
+---
+
+## 升级到上一版本：任务协作取消与定时句柄
 
 本版本在 facade 上新增任务级协作取消（C1）与定时句柄（T1），并调整了两处可观察
 行为。既有 `submit()` / `submit_priority()` / `submit_with_handle()` /

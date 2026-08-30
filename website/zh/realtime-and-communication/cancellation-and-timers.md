@@ -57,9 +57,12 @@ Facade 为长期工作新增两项能力：**任务协作取消**（`submit_canc
 ## 串行上下文派发
 
 需要将 FIFO 串行工作纳入 Executor admission 时，可使用
-`SerialExecutionContext` 与 `submit_on(context, fn)`。上下文关闭后拒绝新提交并
-排空已接收任务；该 API 不绑定 asio strand，必须与外部 strand 同上下文销毁的对象
-仍由应用侧管理。
+`SerialExecutionContext` 与 `submit_on(context, fn)`。派发与结算分离：池 worker
+只做有界非阻塞的 ticket 发布，业务 future 由串行线程直接结算，因此小型多
+worker 池在突发提交下仍按 ticket FIFO 有界时间内前进，不会互相饥饿；排队取消、
+超时与拒绝都会释放 ticket，不阻塞后续顺序。上下文关闭后拒绝新提交并排空已接收
+任务；该 API 不绑定 asio strand，必须与外部 strand 同上下文销毁的对象仍由应用侧
+管理。
 
 ## 不承诺的事
 
