@@ -92,7 +92,9 @@ compatibility boundary（有界在途计数、非阻塞 tracked dispatch）在 A
   所有权显式消除，无栈引用逃逸。
 - [ ] FIFO、排队取消、异常传播、context shutdown 拒绝、future 恰好一次结算的语义
   全部有定义并与现有测试兼容。
-- [ ] 上游 issue 已创建，Mira 台账两条状态为 Proposed。
+- [x] 上游 issue 已创建，Mira 台账两条状态为 Proposed。
+  （[executor#178](https://github.com/Linductor-alkaid/executor/issues/178)；台账状态
+  后续随实现合入 master 推进至 Accepted，见 D3。）
 
 ---
 
@@ -234,9 +236,11 @@ compatibility boundary（有界在途计数、非阻塞 tracked dispatch）在 A
 - [x] 中英文网站新增/更新对应主题页与编译示例，双语同源，`docs:check`/`docs:build`
   通过。（`capacity-and-alerting` 新增"默认异步提交的总量 admission"小节、
   `cancellation-and-timers` 串行小节更新，双语同源；105 文件 check 通过、build 通过。）
-- [ ] 回写 Mira 台账：EXE-20260830-001/002/003 状态随各 PR 合入推进 Proposed →
+- [x] 回写 Mira 台账：EXE-20260830-001/002/003 状态随各 PR 合入推进 Proposed →
   Accepted，附上游版本号；Mira 完成迁移后由 Mira 侧标 Resolved。
-  （台账已回写 Proposed + issue 链接；Accepted 待发布版本号后更新。）
+  （三条已回写 Accepted，引用 issue #178/#179 与 executor master 提交
+  `13214c0`+`def5200`；台账中标注"等待可用版本后移除临时方案"。Resolved
+  与 compatibility boundary 移除统计由 Mira 迁移后回填。）
 
 ### 验收
 

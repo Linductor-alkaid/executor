@@ -202,4 +202,5 @@
   饥饿与栈条件变量 notify/析构竞争，TSAN 与两 worker × 10,000 突发压测通过
 - [x] 完成默认异步提交的总量有界 admission（EXE-20260830-001）：跨 scheduler 与本地队列的
   可配置总容量、可区分 capacity rejection、终态恰好一次释放
-- [x] 完成 API/迁移/README/网站同步，并回写 Mira 台账状态（Open → Proposed）
+- [x] 完成 API/迁移/README/网站同步，并回写 Mira 台账状态（Proposed → Accepted，
+  引用 issue #178/#179 与上游 master 提交 def5200）
