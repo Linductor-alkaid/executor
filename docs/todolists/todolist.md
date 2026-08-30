@@ -188,3 +188,17 @@
   纳入监控（外部 strand 绑定由 T2/S2 门控）
 - [ ] 完成外部事件循环互操作指南（P1-1 第一步），并依据评审结论决定序列化上下文 API 是否落地
 - [ ] P2-1/P2-2 重估门：待 heyaki M6/M7 消息与文件传输压测后定形
+
+---
+
+## 阶段 19：Mira 反馈缺口收敛（总量 admission、串行 facade wrapper 安全）
+
+输入来源：Mira 仓库 `docs/executor_feedback/ledger.md`（2026-08-30）EXE-20260830-001/002/003，
+三条缺口已在 master `2af11a3` 上经代码核查确认。
+
+- [ ] 执行 [Mira 反馈缺口收敛更新计划](mira_feedback_update_plan.md)
+- [ ] 完成串行 facade wrapper 非阻塞共享状态重构（EXE-20260830-002/003）：消除多 worker
+  饥饿与栈条件变量 notify/析构竞争，TSAN 与两 worker × 10,000 突发压测通过
+- [ ] 完成默认异步提交的总量有界 admission（EXE-20260830-001）：跨 scheduler 与本地队列的
+  可配置总容量、可区分 capacity rejection、终态恰好一次释放
+- [ ] 完成 API/迁移/README/网站同步，并回写 Mira 台账状态（Proposed → Accepted）
