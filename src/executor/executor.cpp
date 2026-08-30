@@ -248,6 +248,7 @@ ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
         task_graph_retention_capacity_ = config.task_graph_retention_capacity;
         trim_task_graph_retention_locked();
     }
+    max_in_flight_tasks_.store(config.max_in_flight_tasks, std::memory_order_release);
     if (!manager_->initialize_async_executor(config)) {
         auto code = manager_->is_default_async_shutdown()
                         ? ExecutorErrorCode::AlreadyShutdown
@@ -1518,6 +1519,9 @@ void Executor::record_failure(ExecutorFailureEvent event) {
         case FailureKind::TuningFallback:
             ++failure_status_.tuning_fallback_count;
             break;
+        case FailureKind::CapacityExhausted:
+            ++failure_status_.capacity_exhausted_count;
+            break;
         default:
             break;
         }
@@ -1570,6 +1574,61 @@ void Executor::record_submit_rejected(const std::string& executor_name,
     event.message = message;
     event.exception = exception;
     record_failure(std::move(event));
+}
+
+void Executor::record_capacity_exhausted(const std::string& executor_name,
+                                         const std::string& task_id,
+                                         const std::string& message) {
+    ExecutorFailureEvent event;
+    event.kind = FailureKind::CapacityExhausted;
+    event.executor_name = executor_name;
+    event.task_id = task_id;
+    event.message = message;
+    event.exception = std::make_exception_ptr(CapacityExhaustedException(message));
+    record_failure(std::move(event));
+}
+
+Executor::AdmissionDecision Executor::try_admit_submission(
+    const std::string& executor_name,
+    const std::string& task_id,
+    const std::string& scope) {
+    AdmissionDecision decision;
+    const int64_t max = static_cast<int64_t>(
+        max_in_flight_tasks_.load(std::memory_order_acquire));
+    if (max <= 0) {
+        return decision;  // 未启用：无计数、无释放器
+    }
+    const int64_t current =
+        in_flight_submissions_.fetch_add(1, std::memory_order_acq_rel);
+    if (current >= max) {
+        in_flight_submissions_.fetch_sub(1, std::memory_order_release);
+        record_capacity_exhausted(
+            executor_name, task_id,
+            "In-flight submission capacity exhausted (" + scope + "); "
+            "max_in_flight_tasks=" + std::to_string(max));
+        decision.accepted = false;
+        return decision;
+    }
+    decision.releaser = std::make_shared<AdmissionReleaser>(&in_flight_submissions_);
+    return decision;
+}
+
+void Executor::set_max_in_flight_tasks(size_t max) {
+    max_in_flight_tasks_.store(max, std::memory_order_release);
+}
+
+size_t Executor::get_max_in_flight_tasks() const {
+    return max_in_flight_tasks_.load(std::memory_order_acquire);
+}
+
+size_t Executor::get_in_flight_submissions() const {
+    const int64_t max = static_cast<int64_t>(
+        max_in_flight_tasks_.load(std::memory_order_acquire));
+    if (max <= 0) {
+        return 0;
+    }
+    const int64_t current = in_flight_submissions_.load(std::memory_order_acquire);
+    return current > 0 ? static_cast<size_t>(current) : 0;
 }
 
 void Executor::record_task_exception(const std::string& executor_name,

@@ -78,6 +78,10 @@ struct ExecutorConfig {
     bool enable_monitoring = true;       // 启用任务监控（默认开启）
     // 已完成 TaskHandle 的有界保留数；0 表示终态 handle 不保留。
     size_t task_graph_retention_capacity = 1024;
+    // 总量有界 admission：facade 已接纳未结算的默认异步提交上限（scheduler
+    // 全局队列 + worker 本地队列 + 执行中）。0 = 不启用（默认，零热路径开销）。
+    // 注意与 queue_capacity（每 worker 本地队列构造参数）语义无关。
+    size_t max_in_flight_tasks = 0;
 };
 
 /**

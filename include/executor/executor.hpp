@@ -164,6 +164,17 @@ public:
     size_t task_graph_retention_capacity() const;
 
     /**
+     * @brief 总量有界 admission 运行期配置与观测
+     *
+     * 上限属于本 facade 实例的默认异步提交（已接纳未结算）。调小不驱逐已
+     * 接纳任务，只约束后续提交。`get_in_flight_submissions()` 在未启用时
+     * 恒为 0。见 docs/design/bounded_admission.md。
+     */
+    void set_max_in_flight_tasks(size_t max);
+    size_t get_max_in_flight_tasks() const;
+    size_t get_in_flight_submissions() const;
+
+    /**
      * @brief 提交优先级任务
      * 
      * @tparam F 可调用对象类型
@@ -997,6 +1008,53 @@ private:
     // 按句柄取消 registry（active + 有界 tombstone + lifecycle 计数）。
     std::unique_ptr<TaskCancellationRegistry> cancellation_registry_;
 
+    // 总量有界 admission（docs/design/bounded_admission.md）：上限 0 = 未启用，
+    // 提交热路径零额外开销。接纳经 try_admit_submission() 单次 fetch_add，
+    // 释放由 AdmissionReleaser 恰好一次完成（显式路径先于 future 结算，
+    // 析构兜底覆盖池丢弃）。
+    std::atomic<size_t> max_in_flight_tasks_{0};
+    std::atomic<int64_t> in_flight_submissions_{0};
+
+    /**
+     * @brief admission 容量的恰好一次释放器（内部管道类型）。
+     *
+     * 经 shared_ptr 被所有可能结算 future 的闭包共享；任何路径先调用
+     * release()（计数先于 future 的观测不变式），析构兜底无人结算的路径
+     * （如池 shutdown(false) 丢弃排队任务）。
+     */
+    struct AdmissionReleaser {
+        std::atomic<int64_t>* counter;
+        std::atomic_bool released{false};
+
+        explicit AdmissionReleaser(std::atomic<int64_t>* c) noexcept : counter(c) {}
+
+        void release() noexcept {
+            bool expected = false;
+            if (released.compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                counter->fetch_sub(1, std::memory_order_release);
+            }
+        }
+
+        ~AdmissionReleaser() { release(); }
+    };
+
+    struct AdmissionDecision {
+        bool accepted = true;
+        std::shared_ptr<AdmissionReleaser> releaser;  // null 当 admission 未启用
+    };
+
+    /** 接纳检查；拒绝时已记录 CapacityExhausted failure 事件。 */
+    AdmissionDecision try_admit_submission(
+        const std::string& executor_name,
+        const std::string& task_id,
+        const std::string& scope);
+
+    void record_capacity_exhausted(const std::string& executor_name,
+                                   const std::string& task_id,
+                                   const std::string& message);
+
     // 定时器调度器（delayed/periodic registry + generation heap + 线程）。
     // 懒创建：地址在 Executor 生命周期内稳定，TimerHandle 经 weak_ptr 锚定。
     std::shared_ptr<detail::TimerScheduler> timers_;
@@ -1054,6 +1112,7 @@ template<typename F, typename... Args>
 auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Args&&... args)
     -> TaskSubmission<typename std::invoke_result<F, Args...>::type> {
     using return_type = typename std::invoke_result<F, Args...>::type;
+
     TaskSubmission<return_type> stopped_submission;
     auto ticket = context.reserve();
     if (!ticket) {
@@ -1063,44 +1122,299 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
             ExecutorStopping("Serial execution context is stopped")));
         return stopped_submission;
     }
+
+    TaskSubmission<return_type> submission;
+    submission.handle = allocate_task_handle();
+    TaskHandle handle = submission.handle;
+
+    // 派发/结算分离（docs/design/serial_execution_context.md"派发与结算结构"）：
+    // 池 worker 只做有界非阻塞发布，业务 future 由共享状态结算。旧实现把
+    // mutex/cv/finished 放在 wrapper 栈上并等待串行 callback（TSAN 竞争 +
+    // 多 worker 饥饿），本结构按构造消除两者。
+    auto promise = std::make_shared<std::promise<return_type>>();
+    auto promise_ready = std::make_shared<std::atomic_bool>(false);
+    submission.future = promise->get_future();
+
+    auto published_holder = std::make_shared<std::atomic_bool>(false);
+
+    // 发布成功后 ticket 已被上下文消费；只有未发布路径需要 abandon 释放 FIFO。
+    auto complete_terminal = [&context, ticket = *ticket, published_holder]() {
+        if (!published_holder->load(std::memory_order_acquire)) {
+            context.abandon(ticket);
+        }
+    };
+
+    auto settle_exception = [promise, promise_ready](std::exception_ptr exception) {
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+    };
+
+    // 总量有界 admission（先于 registry；拒绝时 ticket 经 complete_terminal
+    // 释放，后续 FIFO 不阻塞）。
+    auto admission = try_admit_submission("default", handle.id(), "serial submit");
+    if (!admission.accepted) {
+        auto exception = std::make_exception_ptr(CapacityExhaustedException(
+            "In-flight submission capacity exhausted"));
+        settle_exception(exception);
+        mark_task_graph_failed(handle, exception, "Serial dispatch submission rejected");
+        complete_terminal();
+        return submission;
+    }
+    auto release_admission = [releaser = std::move(admission.releaser)]() {
+        if (releaser) releaser->release();
+    };
+
+    auto state = std::make_shared<TaskCancellationState>();
+    state->set_completion_sink(
+        [settle_exception, complete_terminal, release_admission](std::exception_ptr exception) mutable {
+            release_admission();  // 计数先于 future
+            settle_exception(std::move(exception));
+            complete_terminal();
+        });
+
+    // registry admission：容量耗尽按提交拒绝处理，不静默失去取消能力。
+    if (!cancellation_registry_->register_state(handle.id(), state)) {
+        auto exception = std::make_exception_ptr(std::runtime_error(
+            "Cancellation registry capacity exhausted; serial dispatch rejected"));
+        release_admission();
+        state->try_reject();
+        settle_exception(exception);
+        mark_task_graph_failed(handle, exception, "Serial dispatch submission rejected");
+        record_submit_rejected(
+            "default", handle.id(),
+            "Cancellation registry capacity exhausted for serial dispatch", exception);
+        complete_terminal();
+        return submission;
+    }
+
+    auto executor_snapshot = manager_->get_default_async_executor_snapshot();
+    const std::string executor_name =
+        executor_snapshot ? executor_snapshot->get_name() : "default";
+    if (!executor_snapshot) {
+        const std::string message =
+            "Async executor not initialized. Call initialize() first.";
+        auto exception = std::make_exception_ptr(std::runtime_error(message));
+        state->try_reject();
+        settle_exception(exception);
+        mark_task_graph_failed(handle, exception, message);
+        record_submit_rejected(executor_name, handle.id(), message, exception);
+        cancellation_registry_->finalize(handle.id());
+        complete_terminal();
+        throw std::runtime_error(message);
+    }
+
+    // queued soft timeout：与取消经同一 phase CAS 仲裁，只赢一次。
+    auto on_timeout = [this, handle, state, executor_name, settle_exception,
+                       complete_terminal, release_admission](std::exception_ptr exception) mutable {
+        if (!state->try_timeout_before_start()) {
+            return;  // 取消已赢或已开始执行
+        }
+        release_admission();  // 计数先于 future
+        settle_exception(exception);
+        record_task_timeout(
+            executor_name, handle.id(),
+            "Serial dispatch timed out before execution", exception);
+        mark_task_graph_failed(
+            handle, exception, "Serial dispatch timed out before execution");
+        cancellation_registry_->finalize(handle.id());
+        complete_terminal();
+    };
+
+    std::shared_ptr<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))> bound;
     try {
-        auto bound = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
+        bound = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...));
-        auto gate = std::make_shared<std::promise<return_type>>();
-        auto gate_future = std::make_shared<std::future<return_type>>(gate->get_future());
-        auto wrapper = [&context, ticket = *ticket, bound, gate, gate_future]() mutable -> return_type {
-            std::mutex mutex;
-            std::condition_variable cv;
-            bool finished = false;
-            bool accepted = context.post_reserved(ticket, [bound, gate, &mutex, &cv, &finished]() mutable {
-                try {
-                    if constexpr (std::is_void_v<return_type>) {
-                        std::invoke(*bound);
-                        gate->set_value();
-                    } else {
-                        gate->set_value(std::invoke(*bound));
-                    }
-                } catch (...) {
-                    try { gate->set_exception(std::current_exception()); } catch (...) {}
-                }
-                { std::lock_guard<std::mutex> lock(mutex); finished = true; }
-                cv.notify_one();
-            });
-            if (!accepted) {
-                throw ExecutorStopping("Serial execution context is stopped");
-            }
-            std::unique_lock<std::mutex> lock(mutex);
-            cv.wait(lock, [&finished] { return finished; });
-            return gate_future->get();
-        };
-        return submit_tracked_with_hook<false>(
-            std::nullopt, nullptr,
-            [&context, ticket = *ticket] { context.abandon(ticket); },
-            std::move(wrapper));
     } catch (...) {
         context.abandon(*ticket);
         throw;
     }
+
+    // 串行线程上的终态化：admission 与计数、registry finalize 先于业务
+    // future 就绪，延续 tracked 路径的观测不变式。
+    auto finish_success = [this, handle, state, complete_terminal,
+                           release_admission]() mutable {
+        mark_task_graph_succeeded(handle);
+        if (state->cancel_requested()) {
+            cancellation_registry_->on_completed_after_request();
+        }
+        state->try_finish_running(TaskCancellationState::Phase::Succeeded);
+        cancellation_registry_->finalize(handle.id());
+        release_admission();
+        complete_terminal();
+    };
+
+    auto serial_callback = [this, handle, state, executor_name, bound, promise,
+                            promise_ready, complete_terminal, release_admission,
+                            finish_success]() mutable {
+        try {
+            if constexpr (std::is_void_v<return_type>) {
+                std::invoke(*bound);
+                finish_success();
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    promise->set_value();
+                }
+            } else {
+                auto result = std::invoke(*bound);
+                finish_success();
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    promise->set_value(std::move(result));
+                }
+            }
+        } catch (...) {
+            auto exception = std::current_exception();
+            bool cooperative_cancel = false;
+            try {
+                std::rethrow_exception(exception);
+            } catch (const TaskCancelled&) {
+                cooperative_cancel = state->cancel_requested();
+            } catch (...) {
+                cooperative_cancel = false;
+            }
+
+            if (cooperative_cancel) {
+                state->try_finish_running(TaskCancellationState::Phase::Cancelled);
+                release_admission();  // 计数先于 future
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    promise->set_exception(exception);
+                }
+                mark_task_graph_failed(
+                    handle, exception, "Task cancelled during execution");
+                manager_->record_in_flight_task_state(
+                    handle.id(), TaskLifecycleState::Cancelled);
+            } else {
+                state->try_finish_running(TaskCancellationState::Phase::Failed);
+                release_admission();  // 计数先于 future
+                bool expected = false;
+                if (promise_ready->compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    promise->set_exception(exception);
+                }
+                mark_task_graph_failed(
+                    handle, exception, "Serial context task failed");
+                if (state->cancel_requested()) {
+                    cancellation_registry_->on_completed_after_request();
+                }
+                record_task_exception(
+                    executor_name, handle.id(),
+                    "Serial context task threw an exception", exception);
+            }
+            cancellation_registry_->finalize(handle.id());
+            complete_terminal();
+        }
+    };
+
+    // 派发任务被池丢弃（shutdown(false) 清队列）时释放 ticket 并兜底结算。
+    // 经 shared_ptr 共享，闭包拷贝不会提前触发析构。
+    struct TicketGuard {
+        SerialExecutionContext* context;
+        SerialExecutionContext::Ticket ticket;
+        std::shared_ptr<std::atomic_bool> published;
+        std::shared_ptr<TaskCancellationState> state;
+        std::shared_ptr<std::promise<return_type>> promise;
+        std::shared_ptr<std::atomic_bool> promise_ready;
+
+        ~TicketGuard() {
+            if (published->load(std::memory_order_acquire)) {
+                return;
+            }
+            context->abandon(ticket);
+            if (state->terminal()) {
+                // 取消/超时/拒绝的结算方仍在途，由其完成 future。
+                return;
+            }
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                promise->set_exception(std::make_exception_ptr(ExecutorStopping(
+                    "Serial dispatch dropped by executor shutdown")));
+            }
+        }
+    };
+    auto guard = std::make_shared<TicketGuard>();
+    guard->context = &context;
+    guard->ticket = *ticket;
+    guard->published = published_holder;
+    guard->state = state;
+    guard->promise = promise;
+    guard->promise_ready = promise_ready;
+
+    auto publish_task = [this, handle, state, executor_name, &context, ticket = *ticket,
+                         promise, promise_ready, published_holder, complete_terminal,
+                         release_admission,
+                         guard, serial_callback = std::move(serial_callback)]() mutable {
+        // 开始执行仲裁（单一 CAS 线性化点）。
+        if (!state->try_begin_execution()) {
+            return;  // 取消/超时已先赢，future 已满足，ticket 已释放
+        }
+
+        mark_task_graph_running(handle);
+        const bool accepted =
+            context.post_reserved(ticket, std::move(serial_callback));
+        published_holder->store(true, std::memory_order_release);
+        if (accepted) {
+            // 业务 future 由串行线程按 ticket 顺序结算；发布不等待 callback，
+            // worker 立即可服务其他任务（包括更早 ticket 的发布）。
+            return;
+        }
+
+        // context shutdown 等拒绝：ticket 已由上下文释放，按 ExecutorStopping
+        // 结算业务 future。
+        auto exception = std::make_exception_ptr(
+            ExecutorStopping("Serial execution context is stopped"));
+        state->try_finish_running(TaskCancellationState::Phase::Failed);
+        release_admission();  // 计数先于 future
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+        mark_task_graph_failed(
+            handle, exception, "Serial execution context stopped before dispatch");
+        cancellation_registry_->finalize(handle.id());
+        complete_terminal();
+        record_task_exception(
+            executor_name, handle.id(),
+            "Serial dispatch rejected by stopped context", exception);
+    };
+
+    try {
+        if (!executor_snapshot->try_submit_task(std::move(publish_task), std::move(on_timeout))) {
+            auto exception = std::make_exception_ptr(std::runtime_error(
+                "Async executor rejected serial dispatch submission"));
+            state->try_reject();
+            settle_exception(exception);
+            mark_task_graph_failed(handle, exception, "Serial dispatch submission rejected");
+            cancellation_registry_->finalize(handle.id());
+            record_submit_rejected(
+                executor_name, handle.id(),
+                "Async executor rejected serial dispatch submission", exception);
+            complete_terminal();
+        }
+    } catch (...) {
+        auto exception = std::current_exception();
+        mark_task_graph_failed(handle, exception, "Serial dispatch submission failed");
+        cancellation_registry_->finalize(handle.id());
+        complete_terminal();
+        throw;
+    }
+
+    return submission;
 }
 
 template<typename F, typename... Args>
@@ -1153,17 +1467,36 @@ auto Executor::submit_with_rejection_observer(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
 
-    auto task_wrapper = [this, executor_name, task_id, promise, promise_ready, bound_task]() mutable {
+    // 总量有界 admission：拒绝时 future 立即以 CapacityExhaustedException
+    // 就绪（不抛出），failure 事件已由 try_admit_submission 记录。
+    auto admission = try_admit_submission(executor_name, task_id, "submit");
+    if (!admission.accepted) {
+        auto exception = std::make_exception_ptr(CapacityExhaustedException(
+            "In-flight submission capacity exhausted"));
+        promise_ready->store(true, std::memory_order_release);
+        promise->set_exception(exception);
+        return future;
+    }
+    auto release_admission = [releaser = std::move(admission.releaser)]() {
+        if (releaser) releaser->release();
+    };
+
+    auto task_wrapper = [this, executor_name, task_id, promise, promise_ready, bound_task,
+                         release_admission]() mutable {
         try {
             if constexpr (std::is_void_v<return_type>) {
                 std::invoke(*bound_task);
+                release_admission();
                 promise->set_value();
             } else {
-                promise->set_value(std::invoke(*bound_task));
+                auto result = std::invoke(*bound_task);
+                release_admission();
+                promise->set_value(std::move(result));
             }
             promise_ready->store(true, std::memory_order_release);
         } catch (...) {
             auto exception = std::current_exception();
+            release_admission();
             promise->set_exception(exception);
             promise_ready->store(true, std::memory_order_release);
             record_task_exception(
@@ -1175,10 +1508,11 @@ auto Executor::submit_with_rejection_observer(
         }
     };
 
-    auto on_timeout = [this, executor_name, task_id, promise, promise_ready](
-                          std::exception_ptr exception) {
+    auto on_timeout = [this, executor_name, task_id, promise, promise_ready,
+                       release_admission](std::exception_ptr exception) {
         bool expected = false;
         if (promise_ready->compare_exchange_strong(expected, true)) {
+            release_admission();
             promise->set_exception(exception);
             record_task_timeout(
                 executor_name,
@@ -1193,6 +1527,7 @@ auto Executor::submit_with_rejection_observer(
             std::runtime_error("Async executor rejected task submission"));
         bool expected = false;
         if (promise_ready->compare_exchange_strong(expected, true)) {
+            release_admission();
             promise->set_exception(exception);
             record_submit_rejected(
                 executor_name,
@@ -1355,9 +1690,31 @@ auto Executor::submit_tracked_with_hook(
     auto promise_ready = std::make_shared<std::atomic_bool>(false);
     submission.future = promise->get_future();
 
+    // 总量有界 admission（先于 registry，见 docs/design/bounded_admission.md
+    // D-2）：拒绝的提交不占用 registry 槽位；releaser 被所有可能结算 future
+    // 的闭包共享，显式路径先于结算释放，析构兜底池丢弃路径。
+    auto admission = try_admit_submission("default", handle.id(), "tracked submit");
+    if (!admission.accepted) {
+        auto exception = std::make_exception_ptr(CapacityExhaustedException(
+            "In-flight submission capacity exhausted"));
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+        mark_task_graph_failed(handle, exception, "Tracked task submission rejected");
+        complete_terminal();
+        return submission;
+    }
+    auto release_admission = [releaser = std::move(admission.releaser)]() {
+        if (releaser) releaser->release();
+    };
+
     auto state = std::make_shared<TaskCancellationState>();
     state->set_completion_sink(
-        [promise, promise_ready, complete_terminal](std::exception_ptr exception) mutable {
+        [promise, promise_ready, complete_terminal, release_admission](std::exception_ptr exception) mutable {
+            release_admission();  // 计数先于 future（观测不变式）
             bool expected = false;
             if (promise_ready->compare_exchange_strong(
                     expected, true, std::memory_order_acq_rel,
@@ -1371,6 +1728,7 @@ auto Executor::submit_tracked_with_hook(
     if (!cancellation_registry_->register_state(handle.id(), state)) {
         auto exception = std::make_exception_ptr(std::runtime_error(
             "Cancellation registry capacity exhausted; tracked task rejected"));
+        release_admission();
         state->try_reject();
         bool expected = false;
         if (promise_ready->compare_exchange_strong(
@@ -1407,8 +1765,9 @@ auto Executor::submit_tracked_with_hook(
 
     // 提交被拒时 wrapper 永不运行：节点必须落 Failed，否则依赖它的后续
     // 任务会在 worker 线程上等待 Pending 节点直到挂死。
-    auto on_rejected = [this, handle, state, promise, promise_ready, complete_terminal](
-                           std::exception_ptr exception) mutable {
+    auto on_rejected = [this, handle, state, promise, promise_ready, complete_terminal,
+                        release_admission](std::exception_ptr exception) mutable {
+        release_admission();  // 计数先于 future
         state->try_reject();
         bool expected = false;
         if (promise_ready->compare_exchange_strong(
@@ -1423,10 +1782,12 @@ auto Executor::submit_tracked_with_hook(
 
     // queued soft timeout：与取消经同一 phase CAS 仲裁，只赢一次。
     auto on_timeout = [this, handle, state, executor_name, promise, promise_ready,
-                       complete_terminal](std::exception_ptr exception) mutable {
+                       complete_terminal,
+                       release_admission](std::exception_ptr exception) mutable {
         if (!state->try_timeout_before_start()) {
             return;  // 取消已赢或已开始执行
         }
+        release_admission();  // 计数先于 future
         bool expected = false;
         if (promise_ready->compare_exchange_strong(
                 expected, true, std::memory_order_acq_rel,
@@ -1466,6 +1827,7 @@ auto Executor::submit_tracked_with_hook(
                          promise,
                          promise_ready,
                          complete_terminal,
+                         release_admission,
                          invoke = std::move(invoke_user_callable)]() mutable {
         // 依赖图变体：依赖未满足前保持 Pending/Queued，取消可赢排队仲裁。
         if (dependencies && !dependencies->empty()) {
@@ -1495,6 +1857,7 @@ auto Executor::submit_tracked_with_hook(
                     dependency_exception,
                     "Dependency failed before dependent task execution");
                 if (state->try_reject()) {
+                    release_admission();
                     bool expected = false;
                     if (promise_ready->compare_exchange_strong(
                             expected, true, std::memory_order_acq_rel,
@@ -1531,6 +1894,7 @@ auto Executor::submit_tracked_with_hook(
                     cancellation_registry_->on_completed_after_request();
                 }
                 state->try_finish_running(TaskCancellationState::Phase::Succeeded);
+                release_admission();  // 计数先于 future
                 promise->set_value();
             } else {
                 auto result = invoke(state->stop_token());
@@ -1539,6 +1903,7 @@ auto Executor::submit_tracked_with_hook(
                     cancellation_registry_->on_completed_after_request();
                 }
                 state->try_finish_running(TaskCancellationState::Phase::Succeeded);
+                release_admission();  // 计数先于 future
                 promise->set_value(std::move(result));
             }
             promise_ready->store(true, std::memory_order_release);
@@ -1562,6 +1927,7 @@ auto Executor::submit_tracked_with_hook(
                 // 运行中协作取消：任务记为 Cancelled，不触发 failure。
                 state->try_finish_running(
                     TaskCancellationState::Phase::Cancelled);
+                release_admission();  // 计数先于 future
                 bool expected = false;
                 if (promise_ready->compare_exchange_strong(
                         expected, true, std::memory_order_acq_rel,
@@ -1578,6 +1944,7 @@ auto Executor::submit_tracked_with_hook(
             }
 
             state->try_finish_running(TaskCancellationState::Phase::Failed);
+            release_admission();  // 计数先于 future
             bool expected = false;
             if (promise_ready->compare_exchange_strong(
                     expected, true, std::memory_order_acq_rel,
@@ -1663,17 +2030,35 @@ auto Executor::submit_priority(int priority, F&& f, Args&&... args)
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
     );
 
-    auto task_wrapper = [this, executor_name, task_id, promise, promise_ready, bound_task]() mutable {
+    // 总量有界 admission（与 submit 相同语义：拒绝不抛出，future 立即就绪）。
+    auto admission = try_admit_submission(executor_name, task_id, "submit_priority");
+    if (!admission.accepted) {
+        auto exception = std::make_exception_ptr(CapacityExhaustedException(
+            "In-flight submission capacity exhausted"));
+        promise_ready->store(true, std::memory_order_release);
+        promise->set_exception(exception);
+        return future;
+    }
+    auto release_admission = [releaser = std::move(admission.releaser)]() {
+        if (releaser) releaser->release();
+    };
+
+    auto task_wrapper = [this, executor_name, task_id, promise, promise_ready, bound_task,
+                         release_admission]() mutable {
         try {
             if constexpr (std::is_void_v<return_type>) {
                 std::invoke(*bound_task);
+                release_admission();
                 promise->set_value();
             } else {
-                promise->set_value(std::invoke(*bound_task));
+                auto result = std::invoke(*bound_task);
+                release_admission();
+                promise->set_value(std::move(result));
             }
             promise_ready->store(true, std::memory_order_release);
         } catch (...) {
             auto exception = std::current_exception();
+            release_admission();
             promise->set_exception(exception);
             promise_ready->store(true, std::memory_order_release);
             record_task_exception(
@@ -1685,10 +2070,11 @@ auto Executor::submit_priority(int priority, F&& f, Args&&... args)
         }
     };
 
-    auto on_timeout = [this, executor_name, task_id, promise, promise_ready](
-                          std::exception_ptr exception) {
+    auto on_timeout = [this, executor_name, task_id, promise, promise_ready,
+                       release_admission](std::exception_ptr exception) {
         bool expected = false;
         if (promise_ready->compare_exchange_strong(expected, true)) {
+            release_admission();
             promise->set_exception(exception);
             record_task_timeout(
                 executor_name,
@@ -1704,6 +2090,7 @@ auto Executor::submit_priority(int priority, F&& f, Args&&... args)
             std::runtime_error("Async executor rejected priority task submission"));
         bool expected = false;
         if (promise_ready->compare_exchange_strong(expected, true)) {
+            release_admission();
             promise->set_exception(exception);
             record_submit_rejected(
                 executor_name,
@@ -2031,13 +2418,31 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
         if (detail::is_empty_std_function(tasks[i])) {
             has_empty_task = true;
         }
-        task_wrappers.push_back([this, executor_name, task_id, promise, promise_ready, task = tasks[i]]() mutable {
+
+        // 总量有界 admission：逐任务独立接纳，部分接纳合法（设计稿 D-4）。
+        // 被拒任务的 future 立即以 CapacityExhaustedException 就绪，不进入
+        // 池提交；接纳任务的 releaser 由 wrapper/timeout 闭包持有。
+        auto admission = try_admit_submission(executor_name, task_id, "submit_batch");
+        if (!admission.accepted) {
+            promise_ready->store(true, std::memory_order_release);
+            promise->set_exception(std::make_exception_ptr(CapacityExhaustedException(
+                "In-flight submission capacity exhausted")));
+            continue;
+        }
+        auto release_admission = [releaser = std::move(admission.releaser)]() {
+            if (releaser) releaser->release();
+        };
+
+        task_wrappers.push_back([this, executor_name, task_id, promise, promise_ready, task = tasks[i],
+                                 release_admission]() mutable {
             try {
                 task();
+                release_admission();  // 计数先于 future
                 promise->set_value();
                 promise_ready->store(true, std::memory_order_release);
             } catch (...) {
                 auto exception = std::current_exception();
+                release_admission();  // 计数先于 future
                 promise->set_exception(exception);
                 promise_ready->store(true, std::memory_order_release);
                 record_task_exception(
@@ -2049,10 +2454,11 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
             }
         });
         timeout_handlers.push_back(
-            [this, executor_name, task_id, promise, promise_ready](
-                std::exception_ptr exception) {
+            [this, executor_name, task_id, promise, promise_ready,
+             release_admission](std::exception_ptr exception) {
                 bool expected = false;
                 if (promise_ready->compare_exchange_strong(expected, true)) {
+                    release_admission();  // 计数先于 future
                     promise->set_exception(exception);
                     record_task_timeout(
                         executor_name,
@@ -2066,8 +2472,11 @@ std::vector<std::future<void>> Executor::submit_batch(const std::vector<F>& task
     if (has_empty_task) {
         auto exception = std::make_exception_ptr(std::invalid_argument("empty task"));
         for (size_t i = 0; i < promises.size(); ++i) {
-            promise_ready_flags[i]->store(true, std::memory_order_release);
-            promises[i]->set_exception(exception);
+            // CAS：容量拒绝的 future 已就绪，不得双重结算。
+            bool expected = false;
+            if (promise_ready_flags[i]->compare_exchange_strong(expected, true)) {
+                promises[i]->set_exception(exception);
+            }
         }
         record_submit_rejected(
             executor_name,
@@ -2147,11 +2556,23 @@ void Executor::submit_batch_no_future(const std::vector<F>& tasks) {
         std::string task_id =
             "facade_submit_batch_no_future[" + std::to_string(i) + "]";
 
-        task_wrappers.push_back([this, executor_name, task_id, execution_failure_seen, task = tasks[i]]() mutable {
+        // 总量有界 admission：逐任务接纳；被拒任务仅记录事件（无 future）。
+        auto admission = try_admit_submission(executor_name, task_id, "submit_batch_no_future");
+        if (!admission.accepted) {
+            continue;
+        }
+        auto release_admission = [releaser = std::move(admission.releaser)]() {
+            if (releaser) releaser->release();
+        };
+
+        task_wrappers.push_back([this, executor_name, task_id, execution_failure_seen, task = tasks[i],
+                                 release_admission]() mutable {
             try {
                 task();
+                release_admission();
             } catch (...) {
                 auto exception = std::current_exception();
+                release_admission();
                 execution_failure_seen->store(true, std::memory_order_release);
                 record_task_exception(
                     executor_name,

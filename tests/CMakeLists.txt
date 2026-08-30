@@ -13,7 +13,9 @@ foreach(STANDALONE_TEST_SOURCE
         test_multithread_mpsc.cpp
         test_lockfree_worker_queue_concurrent_steal.cpp
         test_task_cancellation_fallback.cpp
-        test_serial_execution_context.cpp)
+        test_serial_execution_context.cpp
+        test_serial_context_stress.cpp
+        test_bounded_admission.cpp)
     list(FILTER TEST_SOURCES EXCLUDE REGEX ".*/${STANDALONE_TEST_SOURCE}$")
     get_filename_component(STANDALONE_TEST_NAME ${STANDALONE_TEST_SOURCE} NAME_WE)
     add_executable(${STANDALONE_TEST_NAME} ${STANDALONE_TEST_SOURCE})

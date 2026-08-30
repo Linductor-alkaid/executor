@@ -44,6 +44,18 @@ public:
 };
 
 /**
+ * @brief 总量有界 admission 拒绝异常
+ *
+ * `ExecutorConfig::max_in_flight_tasks` 耗尽时，被拒提交的 future 立即以该
+ * 异常就绪；同时记录 `FailureKind::CapacityExhausted` failure 事件。
+ */
+class CapacityExhaustedException : public std::runtime_error {
+public:
+    explicit CapacityExhaustedException(const std::string& message)
+        : std::runtime_error(message) {}
+};
+
+/**
  * @brief 任务优先级枚举
  */
 enum class TaskPriority {
@@ -168,7 +180,8 @@ enum class FailureKind {
     RealtimeDrop,      // 实时队列丢任务/推送失败
     GpuFailure,        // GPU 执行失败
     WaitTimeout,       // 等待完成超时
-    TuningFallback     // 平台调优失败并安全回退
+    TuningFallback,    // 平台调优失败并安全回退
+    CapacityExhausted  // 总量有界 admission 拒绝（max_in_flight_tasks 耗尽）
 };
 
 /**
@@ -195,6 +208,7 @@ struct ExecutorFailureStatus {
     uint64_t gpu_failure_count = 0;
     uint64_t wait_timeout_count = 0;
     uint64_t tuning_fallback_count = 0;
+    uint64_t capacity_exhausted_count = 0;  // max_in_flight_tasks 拒绝数
     uint64_t total_count = 0;
 };
 
