@@ -29,7 +29,7 @@ LockFreeTaskExecutor::~LockFreeTaskExecutor() {
 
 bool LockFreeTaskExecutor::start() {
     std::lock_guard<std::mutex> lock(stop_mutex_);
-    if (stopped_.load(std::memory_order_acquire)) {
+    if (push_gate_.load(std::memory_order_acquire) & kPushGateClosedBit) {
         return false;
     }
 
@@ -60,14 +60,18 @@ bool LockFreeTaskExecutor::stop_and_join() {
     std::thread joiner;
     {
         std::lock_guard<std::mutex> lock(stop_mutex_);
-        stopped_.store(true, std::memory_order_release);
+        // P-001: close the admission gate atomically first. A producer either
+        // registered before this RMW — and is waited for below — or observes
+        // the closed bit and rejects without touching the pool, queue, or
+        // any other member.
+        push_gate_.fetch_or(kPushGateClosedBit, std::memory_order_acq_rel);
         if (std::this_thread::get_id() == worker_id_) {
             self_stop_requested_.store(true, std::memory_order_release);
             running_.store(false, std::memory_order_release);
             return false;
         }
 
-        while (active_pushes_.load(std::memory_order_acquire) != 0) {
+        while ((push_gate_.load(std::memory_order_acquire) & kPushGateActiveMask) != 0) {
             std::this_thread::yield();
         }
         running_.store(false, std::memory_order_release);
@@ -306,22 +310,40 @@ void LockFreeTaskExecutor::set_before_batch_allocation_hook_for_test(
     before_batch_allocation_hook_ = hook;
 }
 
+void LockFreeTaskExecutor::set_admission_registered_hook_for_test(
+    AdmissionRegisteredHook hook, void* context) {
+    admission_registered_hook_ = hook;
+    admission_registered_context_ = context;
+}
+
 bool LockFreeTaskExecutor::enter_push() {
-    if (stopped_.load(std::memory_order_acquire)) {
-        return false;
+    // P-001: admission is a single RMW — the closed check and the active
+    // count increment cannot be interleaved with stop_and_join()'s close, so
+    // a producer that wins this CAS is guaranteed to be waited for.
+    uint32_t state = push_gate_.load(std::memory_order_relaxed);
+    while (true) {
+        if (state & kPushGateClosedBit) {
+            return false;
+        }
+        if ((state & kPushGateActiveMask) == kPushGateActiveMask) {
+            // Overflow guard: refuse rather than let the +1 spill into the
+            // closed bit. 2^31 concurrent producers is unreachable in
+            // practice; this only keeps the encoding sound.
+            return false;
+        }
+        if (push_gate_.compare_exchange_weak(
+                state, static_cast<uint32_t>(state + 1),
+                std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            if (admission_registered_hook_) {
+                admission_registered_hook_(admission_registered_context_);
+            }
+            return true;
+        }
     }
-
-    active_pushes_.fetch_add(1, std::memory_order_acq_rel);
-    if (stopped_.load(std::memory_order_acquire)) {
-        leave_push();
-        return false;
-    }
-
-    return true;
 }
 
 void LockFreeTaskExecutor::leave_push() {
-    active_pushes_.fetch_sub(1, std::memory_order_acq_rel);
+    push_gate_.fetch_sub(1, std::memory_order_release);
 }
 
 void LockFreeTaskExecutor::worker_thread() {

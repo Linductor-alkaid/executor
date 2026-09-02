@@ -593,6 +593,62 @@ TEST(LockFreeTaskExecutorTest, ConcurrentStopRejectsLateProducers) {
     EXPECT_EQ(exec.pending_count(), 0u);
 }
 
+// P-001 regression: a producer that has entered the submission path (won the
+// admission CAS) must hold stop_and_join() until it leaves. The old
+// check-increment-recheck enter_push() let stop_and_join() observe a zero
+// active count while a producer sat between its stopped_ check and the
+// fetch_add, return, and let the destructor free the object under the
+// producer.
+TEST(LockFreeTaskExecutorTest, StopAdmissionGatePreventsLateProducerUaf) {
+    LockFreeTaskExecutor exec(4096);
+    ASSERT_TRUE(exec.start());
+
+    struct AdmissionHooks {
+        std::atomic<bool> registered{false};
+        std::atomic<bool> release{false};
+    } hooks;
+    exec.set_admission_registered_hook_for_test(
+        +[](void* context) {
+            auto* h = static_cast<AdmissionHooks*>(context);
+            h->registered.store(true, std::memory_order_release);
+            while (!h->release.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+        },
+        &hooks);
+
+    std::atomic<bool> push_accepted{true};
+    std::thread producer([&] {
+        push_accepted.store(exec.push_task([] {}), std::memory_order_release);
+    });
+    while (!hooks.registered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+
+    std::atomic<bool> stop_returned{false};
+    std::thread stopper([&] {
+        (void)exec.stop_and_join();
+        stop_returned.store(true, std::memory_order_release);
+    });
+
+    // The producer is registered inside the admission gate, so stop must not
+    // return (and must not make the object safe to destroy) before it leaves.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_FALSE(stop_returned.load(std::memory_order_acquire));
+
+    hooks.release.store(true, std::memory_order_release);
+    producer.join();
+    stopper.join();
+
+    EXPECT_TRUE(stop_returned.load(std::memory_order_acquire));
+    // The producer registered before the gate closed and running_ is only
+    // flipped after the registered count drains, so its submission completes.
+    EXPECT_TRUE(push_accepted.load(std::memory_order_acquire));
+    // Once stop_and_join() has returned, the gate is closed: a late producer
+    // is rejected without touching the pool or queue.
+    EXPECT_FALSE(exec.push_task([] {}));
+}
+
 TEST(LockFreeTaskExecutorTest, BatchExceptionSafety) {
     // The original P-004 design used a custom ThrowOnCopy wrapper that
     // threw from its copy ctor to simulate an exception during
