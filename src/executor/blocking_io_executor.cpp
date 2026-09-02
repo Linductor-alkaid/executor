@@ -162,9 +162,13 @@ void BlockingIoExecutor::run(StopToken stop_token) noexcept {
             util::set_cpu_affinity(self_handle, config_.cpu_affinity),
             std::memory_order_release);
     }
+    // 引用计数租约：run() 返回（worker 退出、执行器停止）时释放，多个
+    // 执行器并发启停时只有最后一个停止的才 munlockall（见 ProcessMemoryLockLease）。
+    util::ProcessMemoryLockLease memory_lock_lease;
     if (config_.enable_memory_lock) {
+        memory_lock_lease = util::ProcessMemoryLockLease::try_acquire();
         memory_locked_.store(
-            util::try_mlock_process_memory().applied, std::memory_order_release);
+            memory_lock_lease.holds_lock(), std::memory_order_release);
     }
 
     ready_.store(true, std::memory_order_release);

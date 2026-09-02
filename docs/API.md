@@ -615,7 +615,7 @@ WorkerHandle start_worker(BlockingWorkerSpec spec);
 | --- | --- |
 | `BlockingIoConfig::thread_name` | 必填的线程名称 |
 | `cpu_affinity` | 可选 affinity；空值保持 OS 调度 |
-| `enable_memory_lock` | 默认 `false`；仅在显式请求时尝试进程级 `mlockall`，会影响当前和后续进程映射 |
+| `enable_memory_lock` | 默认 `false`；仅在显式请求时尝试进程级 `mlockall`，会影响当前和后续进程映射。锁定通过引用计数租约持有（`ProcessMemoryLockLease`）：worker 停止时释放本执行器的租约，进程内最后一个持有执行器（实时或阻塞 I/O）停止时才调用 `munlockall`，多个执行器并发启停不会互相解除锁定 |
 | `startup_timeout` | 默认 1000 ms；`0` 不等待 ready，正值限制启动等待 |
 | `BlockingIoExecutorStatus::ready` | executor 线程已建立并完成线程属性设置；不表示协议、设备或业务数据已就绪 |
 | `wakeup_count` | executor 调用 worker `wakeup()` 的累计次数 |
@@ -1302,7 +1302,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
 | `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |
 | `enable_allocation_guard` | `bool` | Linux 诊断构建中在 `cycle_callback` 外挂载记录型分配 guard；默认 `false`，仅在构建时启用 `EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD` 后生效。它不构成实时安全证明。 |
-| `enable_process_memory_lock` | `bool` | 是否显式请求 Linux `mlockall(MCL_CURRENT \| MCL_FUTURE)`；这是进程级操作，会锁定当前映射及后续映射，默认 `false`。权限或 `RLIMIT_MEMLOCK` 不足时安全回退；Android 普通 App 通常无权限，同样只报告状态。 |
+| `enable_process_memory_lock` | `bool` | 是否显式请求 Linux `mlockall(MCL_CURRENT \| MCL_FUTURE)`；这是进程级操作，会锁定当前映射及后续映射，默认 `false`。权限或 `RLIMIT_MEMLOCK` 不足时安全回退；Android 普通 App 通常无权限，同样只报告状态。锁定通过引用计数租约持有：实时线程退出时释放本执行器的租约，进程内最后一个持有执行器（实时或阻塞 I/O）停止时才 `munlockall`；若进程在库之外自行 `mlockall`，最后一个租约释放时的 `munlockall` 同样会解除外部锁定 |
 | `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，尽力设置，不可用或权限不足时安全回退）；`0` = 显式 opt-out 保留内核默认 |
 
 ### 7.3 状态与统计类型

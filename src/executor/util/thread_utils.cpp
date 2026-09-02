@@ -1,5 +1,8 @@
 #include "thread_utils.hpp"
 
+#include <cassert>
+#include <mutex>
+
 #ifdef _WIN32
     #include <windows.h>
 #elif defined(__linux__)
@@ -110,11 +113,6 @@ std::vector<int> get_current_thread_affinity() {
     }
     
     return cpu_ids;
-}
-
-ProcessMemoryLockResult try_mlock_process_memory() {
-    // Windows 不支持 mlockall，无对应的进程级内存锁定语义，直接返回 false
-    return {false, ERROR_NOT_SUPPORTED};
 }
 
 void set_current_thread_name(const std::string& name) {
@@ -255,13 +253,6 @@ std::vector<int> get_current_thread_affinity() {
     return cpu_ids;
 }
 
-ProcessMemoryLockResult try_mlock_process_memory() {
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) == 0) {
-        return {true, 0};
-    }
-    return {false, errno};
-}
-
 void set_current_thread_name(const std::string& name) {
     // pthread_setname_np 限制线程名最长 15 字符 + '\0'，超出会失败
     // 这里主动截断到 15 字符以保证设置成功
@@ -274,6 +265,103 @@ bool set_current_thread_timer_slack_ns(uint64_t slack_ns) {
 }
 
 #endif
+
+// ---- 进程级内存锁定：真实系统调用与引用计数租约 ----
+
+ProcessMemoryLockResult RealProcessMemoryLockSyscalls::mlockall_current_future() {
+#if defined(__linux__)
+    if (::mlockall(MCL_CURRENT | MCL_FUTURE) == 0) {
+        return {true, 0};
+    }
+    return {false, errno};
+#else
+    // Windows 不支持 mlockall，无对应的进程级内存锁定语义
+    return {false, ERROR_NOT_SUPPORTED};
+#endif
+}
+
+int RealProcessMemoryLockSyscalls::munlockall() {
+#if defined(__linux__)
+    return ::munlockall();
+#else
+    return -1;
+#endif
+}
+
+ProcessMemoryLockResult try_mlock_process_memory() {
+    // 无租约语义的一次性调用：仅报告结果，不参与引用计数（历史公开行为）。
+    RealProcessMemoryLockSyscalls real_syscalls;
+    return real_syscalls.mlockall_current_future();
+}
+
+namespace {
+// 引用计数与替身接缝由同一把互斥保护，保证多执行器并发启停时
+// mlockall/munlockall 仍严格按“首获取锁定 / 末释放解锁”配对。
+std::mutex g_process_memory_lock_mutex;
+int g_process_memory_lock_refcount = 0;
+ProcessMemoryLockSyscalls* g_process_memory_lock_test_syscalls = nullptr;
+
+ProcessMemoryLockSyscalls& process_memory_lock_syscalls() {
+    static RealProcessMemoryLockSyscalls real_syscalls;
+    if (g_process_memory_lock_test_syscalls != nullptr) {
+        return *g_process_memory_lock_test_syscalls;
+    }
+    return real_syscalls;
+}
+}  // namespace
+
+ProcessMemoryLockLease ProcessMemoryLockLease::try_acquire() {
+    std::lock_guard<std::mutex> lock(g_process_memory_lock_mutex);
+    if (g_process_memory_lock_refcount > 0) {
+        ++g_process_memory_lock_refcount;
+        return ProcessMemoryLockLease(true, 0);
+    }
+    const ProcessMemoryLockResult result =
+        process_memory_lock_syscalls().mlockall_current_future();
+    if (!result.applied) {
+        return ProcessMemoryLockLease(false, result.error_code);
+    }
+    ++g_process_memory_lock_refcount;
+    return ProcessMemoryLockLease(true, 0);
+}
+
+ProcessMemoryLockLease::ProcessMemoryLockLease(ProcessMemoryLockLease&& other) noexcept
+    : held_(other.held_), error_code_(other.error_code_) {
+    other.held_ = false;
+    other.error_code_ = 0;
+}
+
+ProcessMemoryLockLease& ProcessMemoryLockLease::operator=(ProcessMemoryLockLease&& other) noexcept {
+    if (this != &other) {
+        release();
+        held_ = other.held_;
+        error_code_ = other.error_code_;
+        other.held_ = false;
+        other.error_code_ = 0;
+    }
+    return *this;
+}
+
+ProcessMemoryLockLease::~ProcessMemoryLockLease() {
+    release();
+}
+
+void ProcessMemoryLockLease::release() {
+    if (!held_) {
+        return;
+    }
+    held_ = false;
+    std::lock_guard<std::mutex> lock(g_process_memory_lock_mutex);
+    if (--g_process_memory_lock_refcount == 0) {
+        (void)process_memory_lock_syscalls().munlockall();
+    }
+}
+
+void ProcessMemoryLockLease::set_syscalls_for_test(ProcessMemoryLockSyscalls* syscalls) {
+    std::lock_guard<std::mutex> lock(g_process_memory_lock_mutex);
+    assert(g_process_memory_lock_refcount == 0);
+    g_process_memory_lock_test_syscalls = syscalls;
+}
 
 } // namespace util
 } // namespace executor
