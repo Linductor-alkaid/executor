@@ -615,7 +615,7 @@ WorkerHandle start_worker(BlockingWorkerSpec spec);
 | --- | --- |
 | `BlockingIoConfig::thread_name` | 必填的线程名称 |
 | `cpu_affinity` | 可选 affinity；空值保持 OS 调度 |
-| `enable_memory_lock` | 默认 `false`；仅在显式请求时尝试进程级 `mlockall`，会影响当前和后续进程映射 |
+| `enable_memory_lock` | 默认 `false`；仅在显式请求时尝试进程级 `mlockall`，会影响当前和后续进程映射。锁定通过引用计数租约持有（`ProcessMemoryLockLease`）：worker 停止时释放本执行器的租约，进程内最后一个持有执行器（实时或阻塞 I/O）停止时才调用 `munlockall`，多个执行器并发启停不会互相解除锁定 |
 | `startup_timeout` | 默认 1000 ms；`0` 不等待 ready，正值限制启动等待 |
 | `BlockingIoExecutorStatus::ready` | executor 线程已建立并完成线程属性设置；不表示协议、设备或业务数据已就绪 |
 | `wakeup_count` | executor 调用 worker `wakeup()` 的累计次数 |
@@ -774,7 +774,7 @@ public:
 
 | `QueueStats` 字段 | 含义与使用建议 | 需要 `enable_stats=true` |
 |---|---|---|
-| `queue_capacity` | 调整为 2 的幂后的实际队列容量。 | 否（始终可读） |
+| `queue_capacity` | 调整为 2 的幂后的环形缓冲容量；实际可用槽位为该值减一（环形缓冲保留一个空槽），对象池按同一取整后容量分配，因此提交背压上限就是 `queue_capacity - 1`。例如构造请求 5 时环容量取整为 8，最多可同时入队 7 个任务。 | 否（始终可读） |
 | `submission_rejection` | 进入队列前的拒绝：空任务、停止后提交或对象池耗尽；始终累计。 | 否（始终可读） |
 | `exception_count` | 任务执行期间累计捕获的异常次数；也可由 `exception_count()` 读取。 | 否（始终可读） |
 | `rejected_empty_count` | 因空 `std::function` 输入被拒绝的累计次数；也可由 `rejected_empty_count()` 读取。 | 否（始终可读） |
@@ -908,7 +908,7 @@ executor::LockFreeTaskExecutor low_freq(1024);
 // 高频场景：4096-16384
 executor::LockFreeTaskExecutor high_freq(8192);
 
-// 容量必须是 2 的幂（会自动调整）
+// 容量非 2 的幂时会向上取整（如 5 → 8），对象池与可用槽位按取整后容量统一
 ```
 
 **3. 正确处理队列满的情况**
@@ -1120,20 +1120,24 @@ for (int i = 0; i < 2; ++i) {
 }
 ```
 
-**4. 死锁或挂起**
+**4. 自停止语义误解**
 
-**原因**：在任务中等待执行器停止
+**原因**：在任务内调用 stop 系列接口并假定它会等待消费者线程退出
 ```cpp
-// ❌ 问题代码
+// ❌ 误用：任务内调用 stop_and_join() 并期望它完成 join
 exec.push_task([&exec]() {
-    exec.stop();  // 死锁！消费者线程等待自己
+    exec.stop_and_join();  // 返回 false：只请求自停止，不会等待自身
 });
 ```
 
-**解决方案**：
+**解决方案**：任务内调用 `stop()` / `stop_and_join()` 是安全的自停止请求，二者都不会等待消费者线程自身——`stop_and_join()` 在工作线程内立即返回 `false`，只请求停止；join 必须由外部线程完成（语义与 §5.4「停止后的提交语义」一致）
 ```cpp
-// ✅ 在外部停止
-exec.stop();
+// ✅ 任务内只请求自停止，外部线程负责最终 join
+exec.push_task([&exec]() {
+    exec.stop();  // 安全：请求停止并返回，不会死锁
+});
+// ... 外部线程稍后：
+exec.stop_and_join();  // 返回 true，完成 join
 ```
 
 ### 5.8 性能调优建议
@@ -1297,12 +1301,12 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `thread_name` | `std::string` | 线程名称（Linux 通过 `pthread_setname_np` 设置；Android bionic 同样可用，便于诊断工具识别） |
 | `cycle_period_ns` | `int64_t` | 周期（纳秒），如 2 000 000 表示 2 ms |
 | `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99）；== 0 时按 `cycle_period_ns` 自适应建议（≤1 ms → 80，≤10 ms → 50，>10 ms → 0）；Android 默认保持普通调度，显式设值仍 best-effort 尝试 |
-| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；Android 的允许集合受 cgroup/SELinux 限制；显式设值保留 |
+| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；Android 的允许集合受 cgroup/SELinux 限制；显式设值保留。Windows 上逻辑 CPU 编号按处理器组扩展（组 g 覆盖 `g*64 .. g*64+组内数-1`），支持大于 64 CPU 的多处理器组主机；单线程亲和性只能落在同一组内，跨组请求（如 `{0, 64}`）整体拒绝并体现为 `cpu_affinity_applied = false` |
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
 | `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |
 | `enable_allocation_guard` | `bool` | Linux 诊断构建中在 `cycle_callback` 外挂载记录型分配 guard；默认 `false`，仅在构建时启用 `EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD` 后生效。它不构成实时安全证明。 |
-| `enable_process_memory_lock` | `bool` | 是否显式请求 Linux `mlockall(MCL_CURRENT \| MCL_FUTURE)`；这是进程级操作，会锁定当前映射及后续映射，默认 `false`。权限或 `RLIMIT_MEMLOCK` 不足时安全回退；Android 普通 App 通常无权限，同样只报告状态。 |
+| `enable_process_memory_lock` | `bool` | 是否显式请求 Linux `mlockall(MCL_CURRENT \| MCL_FUTURE)`；这是进程级操作，会锁定当前映射及后续映射，默认 `false`。权限或 `RLIMIT_MEMLOCK` 不足时安全回退；Android 普通 App 通常无权限，同样只报告状态。锁定通过引用计数租约持有：实时线程退出时释放本执行器的租约，进程内最后一个持有执行器（实时或阻塞 I/O）停止时才 `munlockall`；若进程在库之外自行 `mlockall`，最后一个租约释放时的 `munlockall` 同样会解除外部锁定 |
 | `timer_slack_ns` | `uint64_t` | Linux timer slack（纳秒）；默认 1（1 ns，尽力设置，不可用或权限不足时安全回退）；`0` = 显式 opt-out 保留内核默认 |
 
 ### 7.3 状态与统计类型

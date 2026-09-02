@@ -1,5 +1,8 @@
 #include "thread_utils.hpp"
 
+#include <cassert>
+#include <mutex>
+
 #ifdef _WIN32
     #include <windows.h>
 #elif defined(__linux__)
@@ -19,6 +22,54 @@ namespace executor {
 namespace util {
 
 #ifdef _WIN32
+
+// Windows 每个处理器组最多 64 个逻辑处理器（KAFFINITY 位宽），也是逻辑
+// CPU 编号到组的换算基数。
+constexpr int kCpusPerProcessorGroup = 64;
+
+// ProcessorGroupApi 的真实实现：转发到 Win32 处理器组 API。
+struct RealProcessorGroupApi : ProcessorGroupApi {
+    unsigned short get_active_processor_group_count() override {
+        return GetActiveProcessorGroupCount();
+    }
+
+    unsigned long get_active_processor_count(unsigned short group) override {
+        return GetActiveProcessorCount(group);
+    }
+
+    int get_thread_group_affinity(void* thread, ProcessorGroupAffinity* out) override {
+        GROUP_AFFINITY affinity{};
+        if (GetThreadGroupAffinity(static_cast<HANDLE>(thread), &affinity) == 0) {
+            return 0;
+        }
+        out->mask = affinity.Mask;
+        out->group = affinity.Group;
+        return 1;
+    }
+
+    int set_thread_group_affinity(void* thread,
+                                  const ProcessorGroupAffinity* affinity) override {
+        GROUP_AFFINITY win_affinity{};
+        win_affinity.Mask = static_cast<KAFFINITY>(affinity->mask);
+        win_affinity.Group = affinity->group;
+        return SetThreadGroupAffinity(static_cast<HANDLE>(thread), &win_affinity, nullptr) != 0 ? 1 : 0;
+    }
+};
+
+namespace {
+// 测试接缝：非空时 processor_group_api() 返回替身而非真实 Win32 调用。
+ProcessorGroupApi* g_processor_group_api_override = nullptr;
+
+ProcessorGroupApi& processor_group_api() {
+    static RealProcessorGroupApi real_api;
+    return g_processor_group_api_override != nullptr ? *g_processor_group_api_override
+                                                     : real_api;
+}
+}  // namespace
+
+void set_processor_group_api_for_test(ProcessorGroupApi* api) {
+    g_processor_group_api_override = api;
+}
 
 bool set_thread_priority(std::thread::native_handle_type handle, int priority) {
     // Windows优先级映射
@@ -49,16 +100,41 @@ bool set_cpu_affinity(std::thread::native_handle_type handle,
     if (cpu_ids.empty()) {
         return false;
     }
-    
-    DWORD_PTR mask = 0;
+
+    ProcessorGroupApi& api = processor_group_api();
+    const int group_count = api.get_active_processor_group_count();
+    if (group_count <= 0) {
+        return false;
+    }
+
+    // 逻辑 CPU 编号 = group * 64 + 组内序号。单线程亲和性只能用一个
+    // (group, mask) 表达，因此请求必须全部落在同一处理器组内；跨组或指向
+    // 未激活 CPU 的请求整体拒绝。
+    unsigned long long mask = 0;
+    int requested_group = -1;
     for (int cpu_id : cpu_ids) {
-        if (cpu_id < 0 || cpu_id >= 64) {  // Windows最多支持64个CPU
+        if (cpu_id < 0) {
             return false;
         }
-        mask |= (static_cast<DWORD_PTR>(1) << cpu_id);
+        const int group = cpu_id / kCpusPerProcessorGroup;
+        const int index_in_group = cpu_id % kCpusPerProcessorGroup;
+        if (group >= group_count ||
+            index_in_group >= static_cast<int>(
+                api.get_active_processor_count(static_cast<unsigned short>(group)))) {
+            return false;
+        }
+        if (requested_group == -1) {
+            requested_group = group;
+        } else if (requested_group != group) {
+            return false;  // 跨处理器组请求
+        }
+        mask |= (1ULL << index_in_group);
     }
-    
-    return SetThreadAffinityMask(handle, mask) != 0;
+
+    ProcessorGroupAffinity affinity{};
+    affinity.mask = mask;
+    affinity.group = static_cast<unsigned short>(requested_group);
+    return api.set_thread_group_affinity(handle, &affinity) != 0;
 }
 
 int get_current_thread_priority() {
@@ -87,34 +163,22 @@ int get_current_thread_priority() {
 }
 
 std::vector<int> get_current_thread_affinity() {
-    HANDLE handle = GetCurrentThread();
-    DWORD_PTR process_mask, system_mask;
-    
-    if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask) == 0) {
+    ProcessorGroupApi& api = processor_group_api();
+    ProcessorGroupAffinity affinity{};
+    if (api.get_thread_group_affinity(GetCurrentThread(), &affinity) == 0) {
         return {};
     }
-    
-    DWORD_PTR thread_mask = SetThreadAffinityMask(handle, process_mask);
-    if (thread_mask == 0) {
-        return {};
-    }
-    
-    // 恢复原始亲和性
-    SetThreadAffinityMask(handle, thread_mask);
-    
+
+    // 线程亲和性属于单个处理器组：读出 (group, mask) 后按 group * 64 + 序号
+    // 还原逻辑 CPU 编号，多处理器组机器上可返回 64 及以上的编号。
     std::vector<int> cpu_ids;
-    for (int i = 0; i < 64; ++i) {
-        if (thread_mask & (static_cast<DWORD_PTR>(1) << i)) {
-            cpu_ids.push_back(i);
+    const int group_base = static_cast<int>(affinity.group) * kCpusPerProcessorGroup;
+    for (int i = 0; i < kCpusPerProcessorGroup; ++i) {
+        if (affinity.mask & (1ULL << i)) {
+            cpu_ids.push_back(group_base + i);
         }
     }
-    
     return cpu_ids;
-}
-
-ProcessMemoryLockResult try_mlock_process_memory() {
-    // Windows 不支持 mlockall，无对应的进程级内存锁定语义，直接返回 false
-    return {false, ERROR_NOT_SUPPORTED};
 }
 
 void set_current_thread_name(const std::string& name) {
@@ -255,13 +319,6 @@ std::vector<int> get_current_thread_affinity() {
     return cpu_ids;
 }
 
-ProcessMemoryLockResult try_mlock_process_memory() {
-    if (mlockall(MCL_CURRENT | MCL_FUTURE) == 0) {
-        return {true, 0};
-    }
-    return {false, errno};
-}
-
 void set_current_thread_name(const std::string& name) {
     // pthread_setname_np 限制线程名最长 15 字符 + '\0'，超出会失败
     // 这里主动截断到 15 字符以保证设置成功
@@ -274,6 +331,103 @@ bool set_current_thread_timer_slack_ns(uint64_t slack_ns) {
 }
 
 #endif
+
+// ---- 进程级内存锁定：真实系统调用与引用计数租约 ----
+
+ProcessMemoryLockResult RealProcessMemoryLockSyscalls::mlockall_current_future() {
+#if defined(__linux__)
+    if (::mlockall(MCL_CURRENT | MCL_FUTURE) == 0) {
+        return {true, 0};
+    }
+    return {false, errno};
+#else
+    // Windows 不支持 mlockall，无对应的进程级内存锁定语义
+    return {false, ERROR_NOT_SUPPORTED};
+#endif
+}
+
+int RealProcessMemoryLockSyscalls::munlockall() {
+#if defined(__linux__)
+    return ::munlockall();
+#else
+    return -1;
+#endif
+}
+
+ProcessMemoryLockResult try_mlock_process_memory() {
+    // 无租约语义的一次性调用：仅报告结果，不参与引用计数（历史公开行为）。
+    RealProcessMemoryLockSyscalls real_syscalls;
+    return real_syscalls.mlockall_current_future();
+}
+
+namespace {
+// 引用计数与替身接缝由同一把互斥保护，保证多执行器并发启停时
+// mlockall/munlockall 仍严格按“首获取锁定 / 末释放解锁”配对。
+std::mutex g_process_memory_lock_mutex;
+int g_process_memory_lock_refcount = 0;
+ProcessMemoryLockSyscalls* g_process_memory_lock_test_syscalls = nullptr;
+
+ProcessMemoryLockSyscalls& process_memory_lock_syscalls() {
+    static RealProcessMemoryLockSyscalls real_syscalls;
+    if (g_process_memory_lock_test_syscalls != nullptr) {
+        return *g_process_memory_lock_test_syscalls;
+    }
+    return real_syscalls;
+}
+}  // namespace
+
+ProcessMemoryLockLease ProcessMemoryLockLease::try_acquire() {
+    std::lock_guard<std::mutex> lock(g_process_memory_lock_mutex);
+    if (g_process_memory_lock_refcount > 0) {
+        ++g_process_memory_lock_refcount;
+        return ProcessMemoryLockLease(true, 0);
+    }
+    const ProcessMemoryLockResult result =
+        process_memory_lock_syscalls().mlockall_current_future();
+    if (!result.applied) {
+        return ProcessMemoryLockLease(false, result.error_code);
+    }
+    ++g_process_memory_lock_refcount;
+    return ProcessMemoryLockLease(true, 0);
+}
+
+ProcessMemoryLockLease::ProcessMemoryLockLease(ProcessMemoryLockLease&& other) noexcept
+    : held_(other.held_), error_code_(other.error_code_) {
+    other.held_ = false;
+    other.error_code_ = 0;
+}
+
+ProcessMemoryLockLease& ProcessMemoryLockLease::operator=(ProcessMemoryLockLease&& other) noexcept {
+    if (this != &other) {
+        release();
+        held_ = other.held_;
+        error_code_ = other.error_code_;
+        other.held_ = false;
+        other.error_code_ = 0;
+    }
+    return *this;
+}
+
+ProcessMemoryLockLease::~ProcessMemoryLockLease() {
+    release();
+}
+
+void ProcessMemoryLockLease::release() {
+    if (!held_) {
+        return;
+    }
+    held_ = false;
+    std::lock_guard<std::mutex> lock(g_process_memory_lock_mutex);
+    if (--g_process_memory_lock_refcount == 0) {
+        (void)process_memory_lock_syscalls().munlockall();
+    }
+}
+
+void ProcessMemoryLockLease::set_syscalls_for_test(ProcessMemoryLockSyscalls* syscalls) {
+    std::lock_guard<std::mutex> lock(g_process_memory_lock_mutex);
+    assert(g_process_memory_lock_refcount == 0);
+    g_process_memory_lock_test_syscalls = syscalls;
+}
 
 } // namespace util
 } // namespace executor

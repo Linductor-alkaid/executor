@@ -39,7 +39,9 @@ public:
     };
     /**
      * @brief 构造函数
-     * @param queue_capacity 队列容量（必须是2的幂，如果不是会自动调整）
+     * @param queue_capacity 队列容量（非 2 的幂会向上取整到 2 的幂；对象池与
+     *                       push_tasks_batch 上限按取整后的环容量统一分配，
+     *                       实际可用槽位为取整后容量减一）
      * @param backoff_multiplier CAS 退避倍数（默认2，适合中等竞争场景）；必须大于0，
      *                           超过 LockFreeQueue::kMaxBackoffMultiplier 时会被钳制
      * @param enable_stats 是否启用性能统计（默认false）

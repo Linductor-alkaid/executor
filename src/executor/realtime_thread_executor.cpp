@@ -151,12 +151,15 @@ bool RealtimeThreadExecutor::start() {
         }
 
         // mlockall 是进程级操作，默认关闭，必须由调用方显式接受其资源影响。
+        // 通过引用计数租约持有：本线程退出（执行器停止）时释放，多个执行器
+        // 并发启停时只有最后一个停止的执行器才 munlockall。
+        util::ProcessMemoryLockLease memory_lock_lease;
         if (config_.enable_process_memory_lock) {
-            const auto memory_lock_result = util::try_mlock_process_memory();
+            memory_lock_lease = util::ProcessMemoryLockLease::try_acquire();
             process_memory_lock_applied_.store(
-                memory_lock_result.applied, std::memory_order_release);
+                memory_lock_lease.holds_lock(), std::memory_order_release);
             process_memory_lock_errno_.store(
-                memory_lock_result.error_code, std::memory_order_release);
+                memory_lock_lease.error_code(), std::memory_order_release);
         }
 
         // 设置线程名，便于 top/htop/perf 调试

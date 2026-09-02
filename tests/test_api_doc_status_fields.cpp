@@ -277,7 +277,7 @@ TEST(ApiDocStatusFields, LockFreeQueueStatsDocsDescribeStatsAvailability) {
               std::string::npos);
 
     const std::vector<std::string> always_observable_fields = {
-        "`queue_capacity` | 调整为 2 的幂后的实际队列容量。 | 否（始终可读）",
+        "`queue_capacity` | 调整为 2 的幂后的环形缓冲容量；实际可用槽位为该值减一",
         "`submission_rejection` | 进入队列前的拒绝：空任务、停止后提交或对象池耗尽；始终累计。 | 否（始终可读）",
         "`exception_count` | 任务执行期间累计捕获的异常次数；也可由 `exception_count()` 读取。 | 否（始终可读）",
     };
@@ -285,6 +285,10 @@ TEST(ApiDocStatusFields, LockFreeQueueStatsDocsDescribeStatsAvailability) {
         EXPECT_NE(queue_stats.find(field), std::string::npos)
             << field << " must not be documented as enable_stats-gated";
     }
+    // queue_capacity 行本身必须标注为始终可读（完整行以门控说明结尾）。
+    EXPECT_NE(queue_stats.find("对象池按同一取整后容量分配，因此提交背压上限就是 `queue_capacity - 1`。例如构造请求 5 时环容量取整为 8，最多可同时入队 7 个任务。 | 否（始终可读） |"),
+              std::string::npos)
+        << "`queue_capacity` must not be documented as enable_stats-gated";
 }
 
 TEST(ApiDocStatusFields, GpuRegistrationDocsMatchSupportedBackends) {
