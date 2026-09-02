@@ -20,6 +20,7 @@ TEST(ThreadUtilsProcessorGroup, DisabledOnNonWindows) {
 
 #include <windows.h>
 
+#include <utility>
 #include <vector>
 
 #include "executor/config.hpp"
@@ -189,5 +190,7 @@ TEST(ThreadUtilsProcessorGroup, RealtimeExplicitAffinityStatusReported) {
     EXPECT_TRUE(status.cpu_affinity_applied)
         << "CPU 0 (group 0) exists on every Windows host; explicit affinity must apply";
 }
+
+}  // namespace
 
 #endif  // _WIN32
