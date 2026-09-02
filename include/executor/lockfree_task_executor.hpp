@@ -209,6 +209,16 @@ public:
     void set_before_batch_allocation_hook_for_test(BeforeBatchAllocationHook hook,
                                                    void* context);
 
+    // Test-only hook invoked immediately after a producer wins the admission
+    // CAS in enter_push() and before it touches the object pool or queue.
+    // Blocking inside it simulates a producer inside the submission path;
+    // stop_and_join() must not return until every such producer leaves.
+    // Not invoked when admission is rejected; do not change it while
+    // producers are submitting.
+    using AdmissionRegisteredHook = void (*)(void*);
+    void set_admission_registered_hook_for_test(AdmissionRegisteredHook hook,
+                                                void* context);
+
 protected:
     virtual std::thread create_worker_thread();
 
@@ -231,8 +241,18 @@ private:
     std::mutex stop_mutex_;
     std::atomic<bool> self_stop_requested_{false};
     std::atomic<bool> running_{false};
-    std::atomic<bool> stopped_{false};
-    std::atomic<uint32_t> active_pushes_{0};
+    // P-001: single-atom admission gate. Bit 31 marks the gate closed by
+    // stop_and_join(); the low bits count producers that won admission and
+    // are still inside the submission path. Registration and the closed
+    // check are one RMW, so a producer either counts itself before the close
+    // — and stop waits for it before joining/draining — or rejects without
+    // touching the pool, queue, or any other member. The previous
+    // check-increment-recheck enter_push() let stop observe a zero count
+    // while a producer sat between its stopped_ load and the fetch_add,
+    // letting stop return and the destructor free the object under it.
+    static constexpr uint32_t kPushGateClosedBit = uint32_t{1} << 31;
+    static constexpr uint32_t kPushGateActiveMask = kPushGateClosedBit - 1;
+    std::atomic<uint32_t> push_gate_{0};
     std::atomic<uint64_t> processed_count_{0};
     // P-260618-006: 累计异常计数, 始终累计, worker 线程写, 读取方任意线程.
     std::atomic<uint64_t> exception_count_{0};
@@ -241,6 +261,8 @@ private:
     std::atomic<uint64_t> submission_rejection_{0};
     BeforeBatchAllocationHook before_batch_allocation_hook_{nullptr};
     void* before_batch_allocation_context_{nullptr};
+    AdmissionRegisteredHook admission_registered_hook_{nullptr};
+    void* admission_registered_context_{nullptr};
     // P-260618-006: 可选异常回调. 在 worker 线程中调用, 需自行保证线程安全.
     std::mutex exception_handler_mutex_;
     std::function<void(std::exception_ptr)> exception_handler_;

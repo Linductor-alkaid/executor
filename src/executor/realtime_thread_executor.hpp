@@ -106,6 +106,15 @@ public:
      */
     bool push_task_ex(std::function<void()> task) override;
 
+    // Test-only hook invoked immediately after a producer wins the admission
+    // CAS in enter_push() and before it observes running_. Blocking inside it
+    // simulates a producer inside the submission path; stop_and_join() must
+    // not return until every such producer leaves. Not invoked when admission
+    // is rejected; do not change it while producers are submitting.
+    using AdmissionRegisteredHook = void (*)(void*);
+    void set_admission_registered_hook_for_test(AdmissionRegisteredHook hook,
+                                                void* context);
+
     /**
      * @brief 获取执行器名称
      * @return 执行器名称
@@ -155,6 +164,16 @@ private:
     void drain_stopped_queue();
 
     /**
+     * @brief P-002: atomically register with the stop admission gate.
+     *
+     * Returns false once stop_and_join() has closed the gate; the caller must
+     * not touch any other member in that case. Pair every success with
+     * leave_push().
+     */
+    bool enter_push();
+    void leave_push();
+
+    /**
      * @brief 更新周期统计信息
      * 
      * @param cycle_time_ns 当前周期执行时间（纳秒）
@@ -186,7 +205,20 @@ private:
     bool stop_finalization_in_progress_{false};
     std::atomic<bool> cycle_manager_active_{false};
     std::atomic<bool> self_stop_requested_{false};
-    std::atomic<uint32_t> in_flight_pushes_{0};      // 正在进入队列的 push_task_ex 调用
+    // P-002: single-atom admission gate for push_task_ex(). Bit 31 marks the
+    // gate closed by stop_and_join(); the low bits count producers that won
+    // admission and are still inside push_task_ex(). Registration and the
+    // closed check are one RMW, so a producer either counts itself before the
+    // close — and stop waits for it before the final drain — or rejects
+    // without touching the object pool, queue, or any other member. The
+    // previous unconditional fetch_add let stop observe a zero count while a
+    // producer sat before the increment, letting stop drain, return, and the
+    // destructor free the object under it.
+    static constexpr uint32_t kPushGateClosedBit = uint32_t{1} << 31;
+    static constexpr uint32_t kPushGateActiveMask = kPushGateClosedBit - 1;
+    std::atomic<uint32_t> push_gate_{0};
+    AdmissionRegisteredHook admission_registered_hook_{nullptr};
+    void* admission_registered_context_{nullptr};
 
     // 无锁队列（直接传递任务指针）
     util::LockFreeQueue<TaskWrapper*> lockfree_queue_;

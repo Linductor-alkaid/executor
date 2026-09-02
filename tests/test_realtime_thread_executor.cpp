@@ -634,6 +634,85 @@ bool test_realtime_concurrent_stop_push_no_accepted_orphans() {
     return true;
 }
 
+// P-002 regression: a producer that registered at the admission gate must
+// hold stop_and_join() until it leaves, and producers arriving after the gate
+// closed are rejected as drops without touching the pool or queue. The old
+// unconditional fetch_add let stop observe in_flight_pushes_ == 0 while a
+// producer sat before the increment, so stop could drain, return, and the
+// destructor could free the object under the producer.
+bool test_realtime_stop_admission_gate_waits_for_registered_producer() {
+    std::cout << "Testing RealtimeThreadExecutor StopAdmissionGate..." << std::endl;
+
+    RealtimeThreadConfig config;
+    config.thread_name = "test_admission_gate";
+    config.cycle_period_ns = 20'000'000;  // 20ms
+    config.thread_priority = 0;
+    config.cycle_callback = [] {};
+
+    RealtimeThreadExecutor executor("test_admission_gate", config);
+    TEST_ASSERT(executor.start(), "admission gate executor should start");
+
+    std::atomic<bool> registered{false};
+    std::atomic<bool> release{false};
+    struct AdmissionHooks {
+        std::atomic<bool>* registered;
+        std::atomic<bool>* release;
+    } hooks{&registered, &release};
+    executor.set_admission_registered_hook_for_test(
+        +[](void* context) {
+            auto* h = static_cast<AdmissionHooks*>(context);
+            h->registered->store(true, std::memory_order_release);
+            while (!h->release->load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+        },
+        &hooks);
+
+    std::atomic<bool> push_accepted{true};
+    std::thread producer([&] {
+        push_accepted.store(executor.push_task_ex([] {}),
+                            std::memory_order_release);
+    });
+    while (!registered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+
+    std::atomic<bool> stop_returned{false};
+    std::thread stopper([&] {
+        (void)executor.stop_and_join();
+        stop_returned.store(true, std::memory_order_release);
+    });
+
+    // The producer is registered inside the admission gate; stop must not
+    // return before it leaves.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    TEST_ASSERT(!stop_returned.load(std::memory_order_acquire),
+                "stop_and_join returned while a registered producer was "
+                "still inside push_task_ex");
+
+    release.store(true, std::memory_order_release);
+    producer.join();
+    stopper.join();
+
+    TEST_ASSERT(stop_returned.load(std::memory_order_acquire),
+                "stop_and_join should return after the producer left");
+    // running_ is flipped before stop waits out registered producers, so this
+    // submission completes as a post-stop reject.
+    TEST_ASSERT(!push_accepted.load(std::memory_order_acquire),
+                "submission after stop began should be rejected");
+
+    const auto before = executor.get_status();
+    TEST_ASSERT(!executor.push_task_ex([] {}),
+                "late producer after stop_and_join should be rejected");
+    const auto after = executor.get_status();
+    TEST_ASSERT(after.dropped_task_count == before.dropped_task_count + 1,
+                "late producer rejection should count as a drop");
+
+    std::cout << "  RealtimeStopAdmissionGateWaitsForRegisteredProducer: PASSED"
+              << std::endl;
+    return true;
+}
+
 // ========== 统计信息测试 ==========
 
 bool test_realtime_executor_statistics() {
@@ -962,6 +1041,7 @@ int main() {
     all_passed &= test_realtime_concurrent_stop_does_not_double_release();
     all_passed &= test_realtime_push_after_stop_returns_false_and_counts_drop();
     all_passed &= test_realtime_concurrent_stop_push_no_accepted_orphans();
+    all_passed &= test_realtime_stop_admission_gate_waits_for_registered_producer();
     
     // 统计信息测试
     all_passed &= test_realtime_executor_statistics();
