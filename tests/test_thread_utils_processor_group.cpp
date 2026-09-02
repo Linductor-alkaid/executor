@@ -20,6 +20,8 @@ TEST(ThreadUtilsProcessorGroup, DisabledOnNonWindows) {
 
 #include <windows.h>
 
+#include <chrono>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -171,7 +173,8 @@ TEST(ThreadUtilsProcessorGroup, GetAffinityReportsGroupBasedIds) {
 }
 
 // 真实 API 路径：显式 affinity 的应用状态如实上报（组 0 的 CPU 0 在任何
-// Windows runner 上都存在；不依赖具体核数）。
+// Windows runner 上都存在；不依赖具体核数）。affinity 在 worker 线程上
+// 异步应用，start() 返回不代表已生效，需要有界轮询等待状态可见。
 TEST(ThreadUtilsProcessorGroup, RealtimeExplicitAffinityStatusReported) {
     ApiRestoreGuard guard(nullptr);  // 确保使用真实 Win32 API
 
@@ -184,10 +187,17 @@ TEST(ThreadUtilsProcessorGroup, RealtimeExplicitAffinityStatusReported) {
 
     executor::RealtimeThreadExecutor executor("p008_rt", config);
     ASSERT_TRUE(executor.start());
-    const auto status = executor.get_status();
+
+    bool applied = false;
+    for (int i = 0; i < 3000 && !applied; ++i) {
+        applied = executor.get_status().cpu_affinity_applied;
+        if (!applied) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
     executor.stop_and_join();
 
-    EXPECT_TRUE(status.cpu_affinity_applied)
+    EXPECT_TRUE(applied)
         << "CPU 0 (group 0) exists on every Windows host; explicit affinity must apply";
 }
 
