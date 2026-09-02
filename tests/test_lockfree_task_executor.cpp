@@ -267,6 +267,47 @@ TEST(LockFreeTaskExecutorTest, QueueFull) {
     EXPECT_FALSE(result);
 }
 
+// 非 2 的幂容量请求会向上取整（5 → 环 8）；对象池必须按取整后的环容量
+// 分配，使实际背压上限与 get_queue_stats().queue_capacity - 1 一致，
+// 而不是在原始请求数（5）处提前耗尽。
+TEST(LockFreeTaskExecutorTest, NonPowerOfTwoCapacityUsesRoundedUsableCapacity) {
+    LockFreeTaskExecutor exec(/*queue_capacity=*/5);
+
+    // 环容量取整为 8；可用槽位 7（环形缓冲保留一个空槽）。
+    ASSERT_EQ(exec.get_queue_stats().queue_capacity, 8u);
+
+    // 预填充：7 个连续 push_task 全部成功，第 8 个被拒绝。
+    for (int i = 0; i < 7; ++i) {
+        EXPECT_TRUE(exec.push_task([]() {}));
+    }
+    EXPECT_FALSE(exec.push_task([]() {}));
+
+    // 消费掉预填充（worker 释放 wrapper 后对象池应完整复用）。
+    ASSERT_TRUE(exec.start());
+    EXPECT_TRUE(wait_until([&exec] { return exec.processed_count() >= 7; }));
+    exec.stop_and_join();
+
+    // 第二轮：同样规模的原子 batch 仍可成功，验证池没有被第一轮耗尽。
+    LockFreeTaskExecutor batch_exec(/*queue_capacity=*/5);
+    std::function<void()> tasks[7];
+    for (auto& task : tasks) {
+        task = [] {};
+    }
+    size_t pushed = 0;
+    EXPECT_TRUE(batch_exec.push_tasks_batch(tasks, 7, pushed));
+    EXPECT_EQ(pushed, 7u);
+
+    // batch 上限同样是取整后可用容量：8 项 batch 必须整体失败。
+    std::function<void()> oversized[8];
+    for (auto& task : oversized) {
+        task = [] {};
+    }
+    pushed = 0;
+    EXPECT_FALSE(batch_exec.push_tasks_batch(oversized, 8, pushed));
+    EXPECT_EQ(pushed, 0u);
+    EXPECT_EQ(batch_exec.pending_count(), 7u);
+}
+
 TEST(LockFreeTaskExecutorTest, RejectsEmptyTask) {
     LockFreeTaskExecutor exec(/*queue_capacity=*/16,
                               /*backoff_multiplier=*/1,

@@ -19,8 +19,11 @@ namespace executor {
 
 LockFreeTaskExecutor::LockFreeTaskExecutor(size_t queue_capacity, size_t backoff_multiplier, bool enable_stats)
     : queue_(std::make_unique<util::LockFreeQueue<TaskWrapper*>>(queue_capacity, backoff_multiplier, enable_stats))
-    , task_pool_(std::make_unique<util::ObjectPool<TaskWrapper>>(queue_capacity))
-    , task_pool_capacity_(queue_capacity) {
+    // 队列容量会向上取整到 2 的幂；对象池必须按取整后的环容量分配，否则
+    // 非 2 的幂请求（如 5 → 环 8、可用 7）会在池处提前背压，实际提交上限
+    // 与 get_queue_stats().queue_capacity 报告的容量脱节。
+    , task_pool_(std::make_unique<util::ObjectPool<TaskWrapper>>(queue_->capacity()))
+    , task_pool_capacity_(queue_->capacity()) {
 }
 
 LockFreeTaskExecutor::~LockFreeTaskExecutor() {

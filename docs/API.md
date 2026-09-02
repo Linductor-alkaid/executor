@@ -774,7 +774,7 @@ public:
 
 | `QueueStats` 字段 | 含义与使用建议 | 需要 `enable_stats=true` |
 |---|---|---|
-| `queue_capacity` | 调整为 2 的幂后的实际队列容量。 | 否（始终可读） |
+| `queue_capacity` | 调整为 2 的幂后的环形缓冲容量；实际可用槽位为该值减一（环形缓冲保留一个空槽），对象池按同一取整后容量分配，因此提交背压上限就是 `queue_capacity - 1`。例如构造请求 5 时环容量取整为 8，最多可同时入队 7 个任务。 | 否（始终可读） |
 | `submission_rejection` | 进入队列前的拒绝：空任务、停止后提交或对象池耗尽；始终累计。 | 否（始终可读） |
 | `exception_count` | 任务执行期间累计捕获的异常次数；也可由 `exception_count()` 读取。 | 否（始终可读） |
 | `rejected_empty_count` | 因空 `std::function` 输入被拒绝的累计次数；也可由 `rejected_empty_count()` 读取。 | 否（始终可读） |
@@ -908,7 +908,7 @@ executor::LockFreeTaskExecutor low_freq(1024);
 // 高频场景：4096-16384
 executor::LockFreeTaskExecutor high_freq(8192);
 
-// 容量必须是 2 的幂（会自动调整）
+// 容量非 2 的幂时会向上取整（如 5 → 8），对象池与可用槽位按取整后容量统一
 ```
 
 **3. 正确处理队列满的情况**
