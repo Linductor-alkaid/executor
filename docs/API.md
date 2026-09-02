@@ -1301,7 +1301,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 | `thread_name` | `std::string` | 线程名称（Linux 通过 `pthread_setname_np` 设置；Android bionic 同样可用，便于诊断工具识别） |
 | `cycle_period_ns` | `int64_t` | 周期（纳秒），如 2 000 000 表示 2 ms |
 | `thread_priority` | `int` | 线程优先级（如 SCHED_FIFO 1–99）；== 0 时按 `cycle_period_ns` 自适应建议（≤1 ms → 80，≤10 ms → 50，>10 ms → 0）；Android 默认保持普通调度，显式设值仍 best-effort 尝试 |
-| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；Android 的允许集合受 cgroup/SELinux 限制；显式设值保留 |
+| `cpu_affinity` | `std::vector<int>` | CPU 亲和性；空 = 自适应 sentinel，实时线程 start 时通过 `g_next_rt_cpu_hint` 在当前允许 CPU 集合内 round-robin 自动选择；Android 的允许集合受 cgroup/SELinux 限制；显式设值保留。Windows 上逻辑 CPU 编号按处理器组扩展（组 g 覆盖 `g*64 .. g*64+组内数-1`），支持大于 64 CPU 的多处理器组主机；单线程亲和性只能落在同一组内，跨组请求（如 `{0, 64}`）整体拒绝并体现为 `cpu_affinity_applied = false` |
 | `cycle_callback` | `std::function<void()>` | 每周期执行的回调 |
 | `cycle_manager` | `ICycleManager*` | 可选，外部周期管理器；默认 nullptr 使用内置周期 |
 | `max_tasks_per_cycle` | `uint64_t` | 单周期内最多处理的任务数；`0` 表示不限（保留旧行为，但生产环境建议 > 0 以保周期确定性）；默认 64 |

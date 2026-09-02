@@ -23,6 +23,54 @@ namespace util {
 
 #ifdef _WIN32
 
+// Windows 每个处理器组最多 64 个逻辑处理器（KAFFINITY 位宽），也是逻辑
+// CPU 编号到组的换算基数。
+constexpr int kCpusPerProcessorGroup = 64;
+
+// ProcessorGroupApi 的真实实现：转发到 Win32 处理器组 API。
+struct RealProcessorGroupApi : ProcessorGroupApi {
+    unsigned short get_active_processor_group_count() override {
+        return GetActiveProcessorGroupCount();
+    }
+
+    unsigned long get_active_processor_count(unsigned short group) override {
+        return GetActiveProcessorCount(group);
+    }
+
+    int get_thread_group_affinity(void* thread, ProcessorGroupAffinity* out) override {
+        GROUP_AFFINITY affinity{};
+        if (GetThreadGroupAffinity(static_cast<HANDLE>(thread), &affinity) == 0) {
+            return 0;
+        }
+        out->mask = affinity.Mask;
+        out->group = affinity.Group;
+        return 1;
+    }
+
+    int set_thread_group_affinity(void* thread,
+                                  const ProcessorGroupAffinity* affinity) override {
+        GROUP_AFFINITY win_affinity{};
+        win_affinity.Mask = static_cast<KAFFINITY>(affinity->mask);
+        win_affinity.Group = affinity->group;
+        return SetThreadGroupAffinity(static_cast<HANDLE>(thread), &win_affinity, nullptr) != 0 ? 1 : 0;
+    }
+};
+
+namespace {
+// 测试接缝：非空时 processor_group_api() 返回替身而非真实 Win32 调用。
+ProcessorGroupApi* g_processor_group_api_override = nullptr;
+
+ProcessorGroupApi& processor_group_api() {
+    static RealProcessorGroupApi real_api;
+    return g_processor_group_api_override != nullptr ? *g_processor_group_api_override
+                                                     : real_api;
+}
+}  // namespace
+
+void set_processor_group_api_for_test(ProcessorGroupApi* api) {
+    g_processor_group_api_override = api;
+}
+
 bool set_thread_priority(std::thread::native_handle_type handle, int priority) {
     // Windows优先级映射
     // priority范围：-2到2，对应THREAD_PRIORITY_IDLE到THREAD_PRIORITY_TIME_CRITICAL
@@ -52,16 +100,41 @@ bool set_cpu_affinity(std::thread::native_handle_type handle,
     if (cpu_ids.empty()) {
         return false;
     }
-    
-    DWORD_PTR mask = 0;
+
+    ProcessorGroupApi& api = processor_group_api();
+    const int group_count = api.get_active_processor_group_count();
+    if (group_count <= 0) {
+        return false;
+    }
+
+    // 逻辑 CPU 编号 = group * 64 + 组内序号。单线程亲和性只能用一个
+    // (group, mask) 表达，因此请求必须全部落在同一处理器组内；跨组或指向
+    // 未激活 CPU 的请求整体拒绝。
+    unsigned long long mask = 0;
+    int requested_group = -1;
     for (int cpu_id : cpu_ids) {
-        if (cpu_id < 0 || cpu_id >= 64) {  // Windows最多支持64个CPU
+        if (cpu_id < 0) {
             return false;
         }
-        mask |= (static_cast<DWORD_PTR>(1) << cpu_id);
+        const int group = cpu_id / kCpusPerProcessorGroup;
+        const int index_in_group = cpu_id % kCpusPerProcessorGroup;
+        if (group >= group_count ||
+            index_in_group >= static_cast<int>(
+                api.get_active_processor_count(static_cast<unsigned short>(group)))) {
+            return false;
+        }
+        if (requested_group == -1) {
+            requested_group = group;
+        } else if (requested_group != group) {
+            return false;  // 跨处理器组请求
+        }
+        mask |= (1ULL << index_in_group);
     }
-    
-    return SetThreadAffinityMask(handle, mask) != 0;
+
+    ProcessorGroupAffinity affinity{};
+    affinity.mask = mask;
+    affinity.group = static_cast<unsigned short>(requested_group);
+    return api.set_thread_group_affinity(handle, &affinity) != 0;
 }
 
 int get_current_thread_priority() {
@@ -90,28 +163,21 @@ int get_current_thread_priority() {
 }
 
 std::vector<int> get_current_thread_affinity() {
-    HANDLE handle = GetCurrentThread();
-    DWORD_PTR process_mask, system_mask;
-    
-    if (GetProcessAffinityMask(GetCurrentProcess(), &process_mask, &system_mask) == 0) {
+    ProcessorGroupApi& api = processor_group_api();
+    ProcessorGroupAffinity affinity{};
+    if (api.get_thread_group_affinity(GetCurrentThread(), &affinity) == 0) {
         return {};
     }
-    
-    DWORD_PTR thread_mask = SetThreadAffinityMask(handle, process_mask);
-    if (thread_mask == 0) {
-        return {};
-    }
-    
-    // 恢复原始亲和性
-    SetThreadAffinityMask(handle, thread_mask);
-    
+
+    // 线程亲和性属于单个处理器组：读出 (group, mask) 后按 group * 64 + 序号
+    // 还原逻辑 CPU 编号，多处理器组机器上可返回 64 及以上的编号。
     std::vector<int> cpu_ids;
-    for (int i = 0; i < 64; ++i) {
-        if (thread_mask & (static_cast<DWORD_PTR>(1) << i)) {
-            cpu_ids.push_back(i);
+    const int group_base = static_cast<int>(affinity.group) * kCpusPerProcessorGroup;
+    for (int i = 0; i < kCpusPerProcessorGroup; ++i) {
+        if (affinity.mask & (1ULL << i)) {
+            cpu_ids.push_back(group_base + i);
         }
     }
-    
     return cpu_ids;
 }
 

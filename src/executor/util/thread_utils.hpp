@@ -158,5 +158,41 @@ void set_current_thread_name(const std::string& name);
  */
 bool set_current_thread_timer_slack_ns(uint64_t slack_ns);
 
+#ifdef _WIN32
+
+/**
+ * @brief Windows 处理器组亲和性的值类型（对应 Win32 GROUP_AFFINITY）
+ *
+ * 单个线程的亲和性只能用一个 (group, mask) 表达；mask 是组内 64 位掩码。
+ */
+struct ProcessorGroupAffinity {
+    unsigned long long mask;  // KAFFINITY：组内 64 位 CPU 掩码
+    unsigned short group;     // 处理器组编号
+};
+
+/**
+ * @brief Windows 处理器组 Win32 API 的可注入包装（默认实现转发真实 API）
+ *
+ * 逻辑 CPU 编号按 group * 64 + 组内序号 扩展到 64 以上（多处理器组服务器）；
+ * 跨组请求会被 set_cpu_affinity() 拒绝。test_thread_utils_processor_group.cpp
+ * 通过派生替身模拟多处理器组。接口类型不依赖 windows.h 以便在头文件声明。
+ */
+struct ProcessorGroupApi {
+    virtual ~ProcessorGroupApi() = default;
+
+    virtual unsigned short get_active_processor_group_count() = 0;
+    virtual unsigned long get_active_processor_count(unsigned short group) = 0;
+    // 返回非 0 成功；affinity 为出参。
+    virtual int get_thread_group_affinity(void* thread, ProcessorGroupAffinity* affinity) = 0;
+    // 返回非 0 成功。
+    virtual int set_thread_group_affinity(void* thread,
+                                          const ProcessorGroupAffinity* affinity) = 0;
+};
+
+/** @brief 注入替身处理器组 API（测试接缝）；传 nullptr 恢复真实实现 */
+void set_processor_group_api_for_test(ProcessorGroupApi* api);
+
+#endif  // _WIN32
+
 } // namespace util
 } // namespace executor
