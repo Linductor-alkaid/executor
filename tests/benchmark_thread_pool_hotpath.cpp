@@ -14,6 +14,7 @@
 
 #include "executor/thread_pool/thread_pool.hpp"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>

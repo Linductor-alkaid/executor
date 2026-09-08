@@ -68,10 +68,18 @@ bool wait_for_counter(std::chrono::milliseconds timeout,
 class OccupiedPool {
 public:
     explicit OccupiedPool(Executor& executor)
-        : gate_(std::make_shared<std::promise<void>>()) {
-        occupied_ = executor.submit([state = gate_]() {
+        : gate_(std::make_shared<std::promise<void>>())
+        , entered_(std::make_shared<std::promise<void>>()) {
+        occupied_ = executor.submit([state = gate_, entered = entered_]() {
+            entered->set_value();
             state->get_future().wait();
         });
+        // 等占位任务真正进入执行再返回。此前构造只等 submit 返回——任务
+        // 可能仍在队列中，随后提交的高优先级被测任务会先被调度出队
+        // （PriorityScheduler 按优先级取，CRITICAL 先于排队的 NORMAL 占位
+        // 任务），取消到达时被测任务已在运行，RequestedBeforeStart 的
+        // 断言随之失败。
+        entered_->get_future().wait();
     }
 
     void release() {
@@ -90,6 +98,7 @@ public:
 
 private:
     std::shared_ptr<std::promise<void>> gate_;
+    std::shared_ptr<std::promise<void>> entered_;
     std::future<void> occupied_;
     std::atomic<bool> released_{false};
 };
