@@ -576,7 +576,10 @@ private:
 - 支持线程优先级和CPU亲和性设置
 - 提供线程池状态监控和统计
 
-**线程池实现**：
+**线程池实现**（当前实现：`PriorityScheduler` 四条优先级队列各持细粒度锁，配合
+worker 本地有界队列 + work-stealing + `TaskDispatcher` 批量派发；无中央
+`task_queue_`/全局队列锁。以下为公开接口形状，内部结构见
+`src/executor/thread_pool/`）：
 ```cpp
 class ThreadPool {
 public:
@@ -606,20 +609,22 @@ public:
     
 private:
     std::vector<std::thread> workers_;           // 工作线程
-    std::queue<Task> task_queue_;                // 任务队列
-    std::mutex queue_mutex_;                     // 队列锁
-    std::condition_variable condition_;          // 条件变量
+    PriorityScheduler scheduler_;                // 四条优先级队列（各持锁的 vector 堆）
+    std::vector<WorkerQueueConcrete> queues_;    // worker 本地有界队列（work-stealing）
+    ThreadPoolResizer resizer_;                  // 负载驱动的扩缩容
     std::atomic<bool> stop_;                     // 停止标志
     ThreadPoolConfig config_;                    // 配置信息
 };
 ```
 
-**线程池配置**：
+**线程池配置**（实际默认值由 `ExecutorManager` 推导：`max_threads = 0` 时取
+调度可用核数（Android 上限 4），`min_threads = 0` 时取 `max(2, 核数/4)`，见
+`src/executor/executor_manager.cpp`）：
 ```cpp
 struct ThreadPoolConfig {
-    size_t min_threads;              // 最小线程数（默认：CPU核心数）
-    size_t max_threads;              // 最大线程数（默认：CPU核心数 * 2）
-    size_t queue_capacity;           // 任务队列容量
+    size_t min_threads;              // 最小线程数（默认：max(2, CPU核心数/4)）
+    size_t max_threads;              // 最大线程数（默认：CPU核心数；Android 上限 4）
+    size_t queue_capacity;           // 每 worker 本地队列容量（非总量上限）
     int thread_priority;             // 线程优先级（-20到19，Linux）
     std::vector<int> cpu_affinity;   // CPU亲和性（绑定到特定核心）
     int64_t task_timeout_ms;         // 任务超时时间（毫秒）

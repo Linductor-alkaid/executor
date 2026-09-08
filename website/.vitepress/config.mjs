@@ -25,7 +25,7 @@ export default defineConfig({
             text: 'Reference',
             items: [
               { text: 'Versions and Migration · v0.4.0', link: '/en/reference/version-and-migration' },
-              { text: 'Complete API Reference', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' }
+              { text: 'API Reference', link: '/en/reference/api' }
             ]
           },
           {
@@ -67,7 +67,7 @@ export default defineConfig({
               text: 'Reference',
               items: [
                 { text: 'Versions and Migration', link: '/en/reference/version-and-migration' },
-                { text: 'Complete API Reference', link: 'https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md' }
+                { text: 'API Reference', link: '/en/reference/api' }
               ]
             }
           ],

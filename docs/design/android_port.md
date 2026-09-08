@@ -1,13 +1,17 @@
 # Android 适配方案
 
-> 状态：待评审设计（对应实施计划见 [`docs/todolists/android_port_plan.md`](../todolists/android_port_plan.md)）。
+> 状态：**一期已交付**（CPU-only 交叉编译 CI、`executor::StopToken` 兼容层、
+> best-effort 调度语义、打包与集成文档均已合入；实施记录见
+> [`docs/todolists/android_port_plan.md`](../todolists/android_port_plan.md)）。
+> 未完成：arm64 真机 smoke test 与 big.LITTLE 验证（见 CHANGELOG"Android 适配一期"
+> 的验证边界）。本文最初为评审期设计稿，§1 的三个阻塞点已在一期解决，保留为决策记录。
 > 本文只描述 executor 核心库如何适配 Android；具体 App、JNI 业务、协议或硬件接入不属于本项目。
 
 ## 1. 结论
 
 **Android 适配可行，但必须先完成三个确定阻塞点的改造，再按“CPU-only、best-effort 调度、真机验证”的边界落地。**
 
-当前仓库不能直接交叉编译。已用 NDK r26c / r28b 实际验证，定位到以下问题：
+~~当前仓库不能直接交叉编译。~~（一期已解决：`__ANDROID__` 编译路径、StopToken 兼容层与 NDK CI 均已落地，下述阻塞点为评审期记录。）当时用 NDK r26c / r28b 实际验证，定位到以下问题：
 
 1. Android libc++ 对 `std::stop_token` / `std::jthread` 支持不稳定，当前公开头 `blocking_io.hpp` 直接依赖它们。
 2. bionic 没有 glibc 扩展 `pthread_setaffinity_np` / `pthread_getaffinity_np`。

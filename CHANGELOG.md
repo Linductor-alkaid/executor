@@ -11,6 +11,11 @@
 可重排的定时句柄；取消是协作请求而非抢占，取消计数进入独立生命周期字段而非
 failure 体系。
 
+串行执行上下文与总量有界 admission（Mira 台账 EXE-20260830-001/002/003 收敛，设计见
+`docs/design/serial_execution_context.md`、`docs/design/bounded_admission.md`）：
+`submit_on`/`submit_on_with_handle` 的 facade wrapper 重构为非阻塞共享状态；
+`max_in_flight_tasks` 为默认异步提交提供跨 scheduler 与本地队列的总量上限。
+
 ### 新增
 
 - **任务级协作取消（C1）**：新增 `include/executor/task_cancellation.hpp`
@@ -43,6 +48,38 @@ failure 体系。
   `tests/test_task_cancellation_fallback.cpp`。
 - **comm 指引（G1 轻量项）**：中英文"如何选择通信组件"指南新增
   "什么时候允许裸回调"一节，明确裸 `std::function` 回调的适用边界。
+- **串行执行上下文（S2）**：新增 `include/executor/serial_execution_context.hpp`
+  （`SerialExecutionContext`，`post`/`reserve`/`post_reserved`/`abandon`/`shutdown`，
+  FIFO ticket 语义）。`Executor::submit_on` / `submit_on_with_handle` 在其上提供
+  严格按提交顺序结算的 `std::future<T>` / `TimerSubmission<T>`；facade wrapper 为
+  非阻塞共享状态实现（派发/结算分离），多 worker 下不再互相饥饿（两 worker ×
+  10,000 突发约 1s 内全部结算），外部事件循环互操作见
+  `docs/external_event_loop_interop.md`。
+- **总量有界 admission（A1）**：`ExecutorConfig::max_in_flight_tasks`（默认 `0` =
+  不启用、零热路径开销）为 facade 默认异步提交（普通 / priority / tracked /
+  cancellable / batch / `submit_on*`）提供总在途上限；达到上限时提交不抛出，
+  future 立即以 `CapacityExhaustedException` 就绪，`FailureKind::CapacityExhausted`
+  事件与 `capacity_exhausted_count` 计数可观察；运行期 `set_max_in_flight_tasks()` /
+  `get_in_flight_submissions()` / `get_max_in_flight_tasks()` 可调可查。
+
+### 修复与改进
+
+- **P-001/P-002（停机竞态）**：`LockFreeTaskExecutor` 与 `RealtimeThreadExecutor`
+  以单原子准入门闩消除停机与提交交错的生命周期竞态（PR #180）；worker 线程内
+  自停止语义与 `stop_and_join()` 返回值契约同步澄清。
+- **P-003（LockFree 池容量）**：对象池按取整后的环容量统一分配——请求容量 5
+  （环取整为 8）时可用槽位 7，池与 `push_tasks_batch` 上限一致，非 2 的幂配置
+  不再让 `failed_pushes` / `queue_full_rejections` 失真。
+- **P-004（进程内存锁租约）**：`util::ProcessMemoryLockLease` 引用计数管理
+  `mlockall`/`munlockall`——**行为变化**：最后一个持有租约的实时执行器停止时
+  才解除进程锁；与进程内其他 `mlockall` 使用方共存更安全。
+- **P-008（Windows 处理器组）**：`cpu_affinity` 支持超过 64 逻辑 CPU 的
+  处理器组编号（`g*64+序号`），跨组配置明确拒绝（PR #181）。
+- **P-006/P-007（可观察性）**：`ThreadPool::get_status()` 空闲线程数饱和语义
+  与 resizer 竞态修复；GPU `validate_memory_range` 拒绝外部缓冲区，无锁队列
+  `size()`/`empty()` 近似语义钉住回归测试。
+- **测试与 CI**：admission/serial 独立测试 NDEBUG 安全化；慢 CI runner 上
+  计数与 tick 轮询有界化；forced-fallback 目标从全源码清单构建。
 
 ### 变更
 
