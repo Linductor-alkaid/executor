@@ -1,4 +1,6 @@
 #include "worker_local_queue.hpp"
+#include "../task/task.hpp"
+#include <utility>
 
 namespace executor {
 
@@ -15,18 +17,18 @@ WorkerLocalQueue::WorkerLocalQueue(size_t capacity)
 
 bool WorkerLocalQueue::push(const Task& task) {
     std::lock_guard<std::mutex> lock(mutex_);
-    
+
     size_t current_size = size_.load(std::memory_order_relaxed);
     size_t max_size = queue_.size();
-    
+
     // 检查容量限制（环形缓冲区已满）
     if (current_size >= max_size) {
         return false;
     }
-    
+
     // 使用环形缓冲区，在 back_index_ 位置构造（TaskWrapper 可拷贝）
     queue_[back_index_] = TaskWrapper(task);
-    
+
     // 更新后端索引（环形）
     back_index_ = (back_index_ + 1) % queue_.size();
     size_.store(current_size + 1, std::memory_order_relaxed);
@@ -34,7 +36,21 @@ bool WorkerLocalQueue::push(const Task& task) {
 }
 
 bool WorkerLocalQueue::push(Task&& task) {
-    return push(task);  // 委托给 const 版本
+    // PA-4: 真·移动版本（此前委托 const 拷贝版本，移动语义形同虚设）
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    size_t current_size = size_.load(std::memory_order_relaxed);
+    size_t max_size = queue_.size();
+
+    if (current_size >= max_size) {
+        return false;
+    }
+
+    move_task_fields(queue_[back_index_].task, std::move(task));
+
+    back_index_ = (back_index_ + 1) % queue_.size();
+    size_.store(current_size + 1, std::memory_order_relaxed);
+    return true;
 }
 
 size_t WorkerLocalQueue::push_batch(const Task* tasks, size_t n) {
@@ -53,25 +69,34 @@ size_t WorkerLocalQueue::push_batch(const Task* tasks, size_t n) {
     return pushed;
 }
 
+size_t WorkerLocalQueue::push_batch_move(std::unique_ptr<Task>* tasks, size_t n) {
+    if (!tasks || n == 0) return 0;
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t max_size = queue_.size();
+    size_t pushed = 0;
+    for (size_t i = 0; i < n; ++i) {
+        size_t current_size = size_.load(std::memory_order_relaxed);
+        if (current_size >= max_size) break;
+        // PA-4: 字段级移动进环形槽位，旧槽位残留被直接覆盖
+        move_task_fields(queue_[back_index_].task, std::move(*tasks[i]));
+        tasks[i].reset();
+        back_index_ = (back_index_ + 1) % queue_.size();
+        size_.store(current_size + 1, std::memory_order_relaxed);
+        ++pushed;
+    }
+    return pushed;
+}
+
 bool WorkerLocalQueue::pop(Task& task) {
     std::lock_guard<std::mutex> lock(mutex_);
-    
+
     if (size_.load(std::memory_order_relaxed) == 0) {
         return false;
     }
-    
-    // 从队列前端弹出（使用环形缓冲区）
-    // 手动复制 Task 字段（因为 Task 包含 atomic，不能直接拷贝）
-    const Task& front_task = queue_[front_index_].task;
-    task.task_id = front_task.task_id;
-    task.priority = front_task.priority;
-    task.function = front_task.function;
-    task.on_timeout = front_task.on_timeout;
-    task.submit_time_ns = front_task.submit_time_ns;
-    task.timeout_ms = front_task.timeout_ms;
-    task.dependencies = front_task.dependencies;
-    task.cancelled.store(front_task.cancelled.load(std::memory_order_acquire), std::memory_order_release);
-    
+
+    // PA-4: 从队列前端移出（字段级移动，槽位只剩可析构空壳，下次 push 覆盖）
+    move_task_fields(task, std::move(queue_[front_index_].task));
+
     // 更新前端索引（环形）
     front_index_ = (front_index_ + 1) % queue_.size();
     size_.store(size_.load(std::memory_order_relaxed) - 1, std::memory_order_relaxed);
@@ -124,15 +149,8 @@ bool WorkerLocalQueue::steal(Task& task) {
     const size_t buf_size = queue_.size();
     size_t steal_index = (back_index_ + buf_size - 1) % buf_size;
 
-    const Task& back_task = queue_[steal_index].task;
-    task.task_id = back_task.task_id;
-    task.priority = back_task.priority;
-    task.function = back_task.function;
-    task.on_timeout = back_task.on_timeout;
-    task.submit_time_ns = back_task.submit_time_ns;
-    task.timeout_ms = back_task.timeout_ms;
-    task.dependencies = back_task.dependencies;
-    task.cancelled.store(back_task.cancelled.load(std::memory_order_acquire), std::memory_order_release);
+    // PA-4: 从队列后端移出（字段级移动）
+    move_task_fields(task, std::move(queue_[steal_index].task));
 
     // 更新后端索引（环形回退一步）
     back_index_ = steal_index;

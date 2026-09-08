@@ -5,6 +5,7 @@
 #include <mutex>
 #include <atomic>
 #include <cstddef>
+#include <memory>
 
 namespace executor {
 
@@ -61,12 +62,24 @@ public:
 
     /**
      * @brief 批量推入任务（一次加锁）
-     * 
+     *
      * @param tasks 任务数组
      * @param n 任务数量
      * @return 实际推入的数量（队列满时停止）
      */
     size_t push_batch(const Task* tasks, size_t n);
+
+    /**
+     * @brief 批量推入任务（移动版本，一次加锁）
+     *
+     * PA-4：dispatch_batch 经此入口将任务字段级移动进环形缓冲区，
+     * 消除每个任务 2 个 std::function + string 的复制。
+     *
+     * @param tasks 任务所有权数组（字段被移动消耗）
+     * @param n 任务数量
+     * @return 实际推入的数量（队列满时停止，剩余元素仍由调用方持有）
+     */
+    size_t push_batch_move(std::unique_ptr<Task>* tasks, size_t n);
 
     /**
      * @brief 弹出任务（由工作线程调用，从队列前端弹出）

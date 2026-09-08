@@ -2,8 +2,46 @@
 
 #include "executor/types.hpp"
 #include <string>
+#include <utility>
 
 namespace executor {
+
+/**
+ * @brief 字段级移动 Task（dst <- src）
+ *
+ * Task 含 std::atomic<bool> 不可聚合移动，提交 -> 调度 -> 分发 -> 本地队列
+ * -> 弹出全链路（PA-4）统一经此助手做字段级移动，避免逐跳复制
+ * std::function / string / vector。priority 等标量按值拷贝且不清空源，
+ * 允许调用方在移动后继续读取这些标量。
+ */
+inline void move_task_fields(Task& dst, Task&& src) noexcept {
+    dst.task_id = std::move(src.task_id);
+    dst.priority = src.priority;
+    dst.function = std::move(src.function);
+    dst.on_timeout = std::move(src.on_timeout);
+    dst.submit_time_ns = src.submit_time_ns;
+    dst.timeout_ms = src.timeout_ms;
+    dst.dependencies = std::move(src.dependencies);
+    dst.cancelled.store(src.cancelled.load(std::memory_order_acquire),
+                        std::memory_order_release);
+}
+
+/**
+ * @brief 字段级拷贝 Task（dst <- src）
+ *
+ * 同 move_task_fields 的拷贝语义版本，供仍需共享所有权的路径使用。
+ */
+inline void copy_task_fields(Task& dst, const Task& src) {
+    dst.task_id = src.task_id;
+    dst.priority = src.priority;
+    dst.function = src.function;
+    dst.on_timeout = src.on_timeout;
+    dst.submit_time_ns = src.submit_time_ns;
+    dst.timeout_ms = src.timeout_ms;
+    dst.dependencies = src.dependencies;
+    dst.cancelled.store(src.cancelled.load(std::memory_order_acquire),
+                        std::memory_order_release);
+}
 
 /**
  * @brief Task 比较操作符（用于优先级队列）

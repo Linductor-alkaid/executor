@@ -95,6 +95,20 @@ public:
     std::vector<WorkerLoad> get_all_loads() const;
 
     /**
+     * @brief 无分配地选出总负载最高的工作线程（用于工作窃取选 victim）
+     *
+     * PA-13：steal 路径原实现经 get_all_loads() 拷贝整个 vector，再构造
+     * pair vector 并 sort，每次窃取尝试 2 次堆分配。此方法在内部
+     * shared_lock 下做一次 O(n) 扫描，零分配。
+     *
+     * @param exclude_worker 跳过的工作线程ID（窃取者自身）
+     * @param queue_count 调用方观察到的本地队列数；与负载表大小不一致
+     *        （resize 竞态窗口）时返回 SIZE_MAX，调用方走随机回退
+     * @return 总负载最高且大于 0 的工作线程ID；无候选返回 SIZE_MAX
+     */
+    size_t highest_load_victim(size_t exclude_worker, size_t queue_count) const;
+
+    /**
      * @brief 设置负载均衡策略
      * 
      * @param strategy 策略类型
