@@ -21,9 +21,9 @@ void make_task(Task& task, const std::string& id, std::atomic<int>& completed) {
     };
 }
 
-std::shared_ptr<std::vector<WorkerQueueImpl>> make_queues(size_t count,
+std::unique_ptr<std::vector<WorkerQueueImpl>> make_queues(size_t count,
                                                            size_t capacity) {
-    auto queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+    auto queues = std::make_unique<std::vector<WorkerQueueImpl>>();
     queues->reserve(count);
     for (size_t i = 0; i < count; ++i) {
         queues->emplace_back(capacity);

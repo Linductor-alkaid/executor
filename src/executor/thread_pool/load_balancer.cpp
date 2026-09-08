@@ -123,6 +123,27 @@ std::vector<LoadBalancer::WorkerLoad> LoadBalancer::get_all_loads() const {
     return worker_loads_;
 }
 
+size_t LoadBalancer::highest_load_victim(size_t exclude_worker, size_t queue_count) const {
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
+    const size_t num_workers = worker_loads_.size();
+    if (num_workers != queue_count || num_workers <= 1) {
+        return static_cast<size_t>(-1);
+    }
+
+    size_t victim = static_cast<size_t>(-1);
+    size_t best_load = 0;
+    for (size_t i = 0; i < num_workers; ++i) {
+        if (i == exclude_worker) continue;
+        size_t total_load = worker_loads_[i].queue_size + worker_loads_[i].active_tasks;
+        if (total_load > best_load) {
+            best_load = total_load;
+            victim = i;
+        }
+    }
+    return victim;
+}
+
 void LoadBalancer::set_strategy(Strategy strategy) {
     // 260610P010: relaxed 写足矣(setter 不会跟其它内存操作组成 happens-before 链)
     strategy_.store(strategy, std::memory_order_relaxed);

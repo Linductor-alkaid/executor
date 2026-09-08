@@ -32,23 +32,23 @@ facade/监控的单点修复，可独立小步合入；阶段 P5 为 GPU 路径�
 
 | 编号 | 严重度 | 摘要 | 位置（2026-09-08 快照） | 阶段 |
 | --- | --- | --- | --- | --- |
-| PA-1 | H | 每次提交两获全局 `mutex_` + `notify_all` 惊群 | `thread_pool/thread_pool.cpp:963-983,752-755` | P1 |
-| PA-2 | H | worker 等待谓词持全局锁做 steal/dequeue（含分配+排序） | `thread_pool.cpp:218-241` | P1 |
-| PA-3 | H | `dispatch_batch` 每次派发 4-6 次堆分配，判空前即分配 | `thread_pool/task_dispatcher.hpp:199-219` | P1 |
-| PA-4 | H | Task 从提交到执行复制 4-5 次（每次复制 2 个 std::function） | `priority_scheduler.cpp:8-30`、`task_dispatcher.hpp:21-31`、`worker_local_queue.cpp:28,66-73` | P1 |
+| PA-1 | H | ✅ 每次提交两获全局 `mutex_` + `notify_all` 惊群 | `thread_pool/thread_pool.cpp:963-983,752-755` | P1 |
+| PA-2 | H | ✅ worker 等待谓词持全局锁做 steal/dequeue（含分配+排序） | `thread_pool.cpp:218-241` | P1 |
+| PA-3 | H | ✅ `dispatch_batch` 每次派发 4-6 次堆分配，判空前即分配 | `thread_pool/task_dispatcher.hpp:199-219` | P1 |
+| PA-4 | H | ✅ Task 从提交到执行复制 4-5 次（每次复制 2 个 std::function） | `priority_scheduler.cpp:8-30`、`task_dispatcher.hpp:21-31`、`worker_local_queue.cpp:28,66-73` | P1 |
 | PA-5 | H | `ObjectPool` 带互斥锁；LockFree 提交/RT 消费串行化，RT 路径有优先级反转 | `src/util/object_pool.hpp:60,80`；`lockfree_task_executor.cpp:108,117,389`；`realtime_thread_executor.cpp:416,548` | P2 |
 | PA-6 | H | facade tracked 提交/完成路径 `task_graph_mutex_` + `notify_all` 每任务 3 次 | `executor.cpp:308-427`、`executor.hpp:1837-1849` | P4 |
 | PA-7 | H | `LockFreeWorkerQueue` push 每次 `new Task`，pop/steal/size 共用 `consume_mx_` | `thread_pool/lockfree_worker_queue.hpp:33-134` | P2 |
 | PA-8 | M | LockFree worker 空闲永驻 1µs-sleep 轮询（约 10⁶ syscall/s/核） | `lockfree_task_executor.cpp:408-418` | P2 |
-| PA-9 | M | `std::atomic_load(shared_ptr*)` 每次 worker 迭代/派发/提交（libstdc++ 库级自旋锁） | `thread_pool.cpp:200,227,248,276`、`task_dispatcher.hpp:256` | P1 |
+| PA-9 | M | ✅ `std::atomic_load(shared_ptr*)` 每次 worker 迭代/派发/提交（libstdc++ 库级自旋锁） | `thread_pool.cpp:200,227,248,276`、`task_dispatcher.hpp:256` | P1 |
 | PA-10 | M | LoadBalancer 写锁每任务一次（所有 worker 串行完成） | `thread_pool.cpp:274-280`、`load_balancer.cpp:87-96` | P4 |
 | PA-11 | M | `ready_approx_`/`reserved_approx_` 全局缓存行 RMW（仅服务近似 size） | `util/lockfree_queue.hpp:132-133,543` | P4 |
 | PA-12 | M | ThreadPool 统计原子与 LockFree `push_gate_`/计数器未按缓存行隔离 | `thread_pool.hpp:463-468`、`lockfree_task_executor.hpp:257-263` | P4 |
-| PA-13 | M | steal 路径每次分配 2 vector + sort | `thread_pool.cpp:797-829` | P1 |
+| PA-13 | M | ✅ steal 路径每次分配 2 vector + sort | `thread_pool.cpp:797-829` | P1 |
 | PA-14 | M | `try_submit_batch` 全局锁内逐任务调 monitor 回调 | `thread_pool.cpp:1085-1114` | P4 |
 | PA-15 | M | facade 每次提交前置 `default_async_mutex_` + `thread_pool_mutex_` 两跳 | `executor_manager.cpp:167-182`、`thread_pool_executor.cpp:141-153` | P4 |
 | PA-16 | M | `submit_batch_priority` 逐个循环，批次 API 零摊销；worker 队列 `push_batch` 同样逐项 | `executor.hpp:2532-2534`、`lockfree_worker_queue.hpp:79` | P4 |
-| PA-17 | M | `should_exit` 每迭代锁 mutex + 线性扫（谓词内嵌套） | `thread_pool.cpp:874-878`（调用点 191,222,239,285） | P1 |
+| PA-17 | M | ✅ `should_exit` 每迭代锁 mutex + 线性扫（谓词内嵌套） | `thread_pool.cpp:874-878`（调用点 191,222,239,285） | P1 |
 | PA-18 | H | timer 线程永久 1kHz 轮询（libtsan workaround 被当成生产设计） | `timer.hpp:736-748` | P3 |
 | PA-19 | H | comm 阻塞原语全为无上界 yield 自旋 + 每迭代读时钟（无 futex/cv 驻停） | `comm/phase_gate.hpp:317-337,457-475`、`comm/channel.hpp:37-91`、`comm/snapshot_store.hpp:81-92`、`comm/double_buffer.hpp:221-227` | P3 |
 | PA-20 | M | comm 每消息无条件 2 次时钟读；`CommStats` 默认全开（每消息约 6 RMW） | `comm/bounded_queue.hpp:111,145-149`、`comm/types.hpp:118,201-202`、`double_buffer.hpp:24-25`、`task_options.hpp:103-104`、`types.hpp:196-197` | P3 |
@@ -100,34 +100,70 @@ facade/监控的单点修复，可独立小步合入；阶段 P5 为 GPU 路径�
 
 ---
 
-## 阶段 P1：线程池提交热路径三连 + Task 复制链（PA-1/2/3/4、PA-9/13/17）
+## 阶段 P1：线程池提交热路径三连 + Task 复制链（PA-1/2/3/4、PA-9/13/17）✅ 已完成
+
+落地实现（2026-09-09，与下述基准数据同批）：worker 驻停从「`mutex_` +
+`condition_` 重谓词」改为 32 位驻停代次计数 + C++20 `std::atomic::wait`
+（Linux futex 直达路径；**必须 32 位**——libstdc++ 仅对 4 字节标量走
+futex，64 位会落入内部 mutex+condvar waiter 池）。实现要点：
+
+- 代次在完整空扫描【之前】采样，`wait` 的原子 check-and-block 保证
+  两个方向（bump 在采样前/后）均无丢失唤醒窗口，内存序
+  acquire/release 已足够（推导见 `thread_pool.cpp` worker_thread 注释）。
+- stop_ 下的 worker 退出加「退出守门」：持 `dispatcher_mutex_` 复核代次
+  未变才退出，排除任务处于 dispatch 搬运途中（已离开 scheduler、未落地
+  local）被永久滞留的窗口——TSAN 放大下该窗口曾稳定复现
+  （`test_thread_pool` delayed-worker shutdown 用例）。
+- notify_one 需要配套「接力唤醒」：worker 拿到任务时再唤醒一个同伴，
+  并行度按 1→2→4… 指数恢复；否则单 notify_one 会把多 worker 执行
+  串行化（满载下唤醒延迟逐任务叠加，曾表现为满载挂死级慢）。
+- 提交路径不再内联 `dispatch(1)`：满载下内联派发与 worker 的自由扫描
+  互相抢 dispatcher/scheduler/queue 锁，锁交接的调度延迟逐任务叠加。
 
 ### 任务
 
-- [ ] PA-2：等待谓词瘦身为单原子"有活可干"检查（代次计数或非空标志），把
+- [x] PA-2：等待谓词瘦身为单原子"有活可干"检查（代次计数或非空标志），把
   pop/steal/dequeue 全部移出谓词与 `mutex_` 临界区。
-- [ ] PA-1：提交路径消除双重加锁——解锁后再 notify；单任务 `notify_one`，仅批次用
+- [x] PA-1：提交路径消除双重加锁——解锁后再 notify；单任务 `notify_one`，仅批次用
   `notify_all`；评估按优先级分队列 condvar。
-- [ ] PA-3：`dispatch_batch` 先查 `scheduler_.size()` 再分配；锁包装与批缓冲区复用
+- [x] PA-3：`dispatch_batch` 先查 `scheduler_.size()` 再分配；锁包装与批缓冲区复用
   （成员或 thread_local 便签），`by_worker` 提升为可复用便签。
-- [ ] PA-4：Task 全链路改 `unique_ptr<Task>` 移动传递（enqueue → dequeue → dispatch →
+- [x] PA-4：Task 全链路改 `unique_ptr<Task>` 移动传递（enqueue → dequeue → dispatch →
   本地队列 → pop），消除逐跳 std::function/string/vector 复制。
-- [ ] PA-9：`local_queues_` 改 C++20 `std::atomic<std::shared_ptr>` 或发布不可变裸指针
+- [x] PA-9：`local_queues_` 改 C++20 `std::atomic<std::shared_ptr>` 或发布不可变裸指针
   + epoch，消除 libstdc++ `atomic_load(shared_ptr*)` 的库级自旋锁。
-- [ ] PA-13：steal 选 victim 改固定大小栈数组 O(n) 扫描（去掉 vector 分配 + sort）。
-- [ ] PA-17：`should_exit` 快路径改原子标志（空集早退），仅在缩容窗口走锁。
+- [x] PA-13：steal 选 victim 改固定大小栈数组 O(n) 扫描（去掉 vector 分配 + sort）。
+- [x] PA-17：`should_exit` 快路径改原子标志（空集早退），仅在缩容窗口走锁。
 
 ### 验收
 
-- [ ] 多生产者（8 线程）提交吞吐与单任务延迟基准对比基线（`benchmark_baseline`、
+- [x] 多生产者（8 线程）提交吞吐与单任务延迟基准对比基线（`benchmark_baseline`、
   `benchmark_batch_scales`）有可测量改善；无回归。
-- [ ] 既有全部 CTest 通过；TSAN 全量无新增报告（gcc-11 libtsan clockwait 误报按既有
-  清单甄别）。
-- [ ] worker 等待语义不变：任务到达后有限时间内被唤醒（唤醒风暴回归测试）。
+  14 核桌面（Intel Ultra 5 225H，gcc 13 Release，3 次取中位）：
+  - `benchmark_baseline`：提交吞吐 125.5k → 565.4k tasks/s（4.50x），
+    e2e 120.2k → 416.7k（3.47x）。
+  - `benchmark_batch_submit_concurrent`：loop submit 2.2x~4.7x
+    （2T 138.9k→333.3k、8T 92.6k→434.8k、16T 85.5k→312.5k、
+    32T 86.8k→344.3k），多生产者扩展曲线从随线程数恶化变为平坦；
+    batch 路径 2.2x~4.2x。
+  - `benchmark_thread_pool_hotpath`（本阶段新增，直连 ThreadPool）：
+    1 生产者 28.1k → 380.3k（13.5x）；唤醒 p50 19.2µs → 18.3µs，
+    4T+ 唤醒 p99 185.6µs → 37.3µs、336.7µs → 103.7µs。
+  - 口径说明：`benchmark_baseline` 的 round_trip_latency p99 从 0.37µs
+    升至 ~10.9µs——基线提交慢 4.5 倍，任务在 get 前早已执行完，
+    旧值接近零是排队被提交耗时掩盖的假象；新值是真实的「尾部任务
+    等执行」延迟，绝对值仍在 10µs 量级的正常池尾延迟范围。
+- [x] 既有全部 CTest 通过；TSAN 全量无新增报告（gcc-11 libtsan clockwait 误报按既有
+  清单甄别）。本地 gcc-13 全量 117/117、TSAN 专项 14/14、lockfree 双模式
+  117/117、12 核满载下 `test_serial_context_stress` 3/3 通过。
+- [x] worker 等待语义不变：任务到达后有限时间内被唤醒（唤醒风暴回归测试）。
 
 ### 测试
 
-- [ ] 新增多生产者争用基准与唤醒延迟分布测试，注册 CTest。
+- [x] 新增多生产者争用基准与唤醒延迟分布测试，注册 CTest
+  （`benchmark_thread_pool_hotpath`：1~16 生产者争用吞吐 + 间隔采样式
+  wake-to-exec 延迟分布 p50/p95/p99/max，文本与 JSON 双输出）。
+
 
 ---
 
@@ -263,8 +299,10 @@ facade/监控的单点修复，可独立小步合入；阶段 P5 为 GPU 路径�
 
 ## 风险与待决项
 
-- [ ] P1 谓词瘦身后的唤醒及时性：代次计数方案的内存序（acquire/release 是否足够）
-  与虚假唤醒窗口需要设计说明。
+- [x] P1 谓词瘦身后的唤醒及时性：代次计数方案的内存序（acquire/release 是否足够）
+  与虚假唤醒窗口需要设计说明。→ 已随 P1 落地：acquire/release 足够，推导与
+  32 位 futex 前置条件、接力唤醒、退出守门的设计说明见阶段 P1 小节与
+  `thread_pool.cpp` 注释。
 - [ ] P2 无锁池的 tag 宽度与容量上限（注释中旧实现移除的原因需考古确认）。
 - [ ] P3 timer 驻停与 libtsan workaround 的条件编译边界（CI 的 TSAN 任务必须仍走
   分片轮询路径）。

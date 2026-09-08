@@ -22,6 +22,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <shared_mutex>
 #include <condition_variable>
@@ -62,6 +63,10 @@ public:
 
     size_t push_batch(const Task* tasks, size_t n) {
         return queue_->push_batch(tasks, n);
+    }
+
+    size_t push_batch_move(std::unique_ptr<Task>* tasks, size_t n) {
+        return queue_->push_batch_move(tasks, n);
     }
 
     bool pop(Task& task) {
@@ -369,11 +374,11 @@ private:
     /**
      * @brief Wake workers after tasks have moved to an executable queue.
      *
-     * Synchronizes with the mutex used by the worker condition-variable
-     * predicate so a notification cannot land between the predicate check
-     * and the worker actually blocking.
+     * PA-1/PA-2: 递增驻停代次计数并唤醒。wake_all 为 true 时唤醒全部
+     * （批次/停止/缩容），否则只唤醒一个（单任务提交）。atomic wait
+     * 的原子 check-and-block 保证 notify 早于 wait 到达也不丢失。
      */
-    void notify_workers_after_queue_change();
+    void signal_work_added(bool wake_all);
 
     /**
      * @brief Dispatch pending scheduler tasks if the dispatcher is still alive.
@@ -434,8 +439,12 @@ private:
     // 负载均衡器
     std::unique_ptr<LoadBalancer> load_balancer_;
 
-    // 工作线程本地队列
-    std::shared_ptr<std::vector<WorkerQueueImpl>> local_queues_;
+    // 工作线程本地队列（PA-9: 由 local_queues_mutex_ 全权保护——reader 持
+    // shared_lock、writer 持 unique_lock 的配对已覆盖读写两侧，不再需要
+    // shared_ptr + std::atomic_load 的间接层。libstdc++ 的自由函数
+    // atomic_load(shared_ptr*) 走全局自旋锁表，所有 shared_ptr 共享一池，
+    // 热路径上每次 worker 迭代/派发都要串行化经过它。）
+    std::unique_ptr<std::vector<WorkerQueueImpl>> local_queues_;
     // 260610P012: 专门保护 local_queues_ 的 shared_mutex
     // - steal / worker 持 shared_lock(并发读)
     // - resize / shutdown 持 unique_lock(排他写)
@@ -457,6 +466,18 @@ private:
 
     // 停止标志
     std::atomic<bool> stop_{false};
+
+    // PA-2: 工作线程驻停代次计数。任何让任务变得可执行的路径
+    // （调度器入队 / 本地队列搬运 / resize 迁移）以及 stop_/缩容退出
+    // 集变化，都必须 fetch_add(release) 后 notify_one/notify_all。
+    // worker 侧在完整空扫描【之前】acquire 采样 seen，然后
+    // wake_seq_.wait(seen)：若代次在采样后变化（扫描期间或驻停前有
+    // 新任务落位），wait 在阻塞前的原子复核立即返回；若在阻塞后变化，
+    // notify 唤醒。两个方向的丢失唤醒窗口都不存在——这是 C++20
+    // atomic wait 相比 condition_variable+mutex 的根本优势
+    // （check-and-block 相对原子值原子）。
+    // 独占缓存行：所有 worker 驻停/唤醒都 RMW 这个字（PA-12 关联）。
+    alignas(64) std::atomic<uint32_t> wake_seq_{0};
 
     // 统计信息
     mutable std::mutex stats_mutex_;
@@ -503,6 +524,11 @@ private:
     // 待退出的线程ID集合（用于缩容）
     mutable std::mutex exit_threads_mutex_;
     std::vector<size_t> exit_threads_;
+    // PA-17: exit_threads_ 的元素计数。稳态（空集）下 should_exit 走
+    // 原子 load 快速路径，不获取 exit_threads_mutex_——此前 worker 每次
+    // 主循环迭代 4 个调用点全部锁 mutex + 线性扫描。计数在锁内与
+    // vector 同步维护：写路径先改 vector 再 store 计数。
+    mutable std::atomic<size_t> exit_threads_count_{0};
 
     // 监控线程（用于动态扩缩容）
     std::thread resize_monitor_thread_;

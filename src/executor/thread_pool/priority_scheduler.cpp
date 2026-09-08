@@ -2,32 +2,21 @@
 #include <algorithm>
 #include <memory>
 #include <mutex>
+#include <utility>
 
 namespace executor {
 
-void PriorityScheduler::copy_task_out(const std::unique_ptr<Task>& src, Task& out) {
+void PriorityScheduler::move_task_out(const std::unique_ptr<Task>& src, Task& out) {
     if (!src) return;
-    out.task_id = src->task_id;
-    out.priority = src->priority;
-    out.function = src->function;
-    out.on_timeout = src->on_timeout;
-    out.submit_time_ns = src->submit_time_ns;
-    out.timeout_ms = src->timeout_ms;
-    out.dependencies = src->dependencies;
-    out.cancelled.store(src->cancelled.load(std::memory_order_acquire), std::memory_order_release);
+    // 出队即消费：const unique_ptr 指向的 Task 此后不再被读取，
+    // 字段级移出后仅剩可析构空壳。
+    move_task_fields(out, std::move(*src));
 }
 
 void PriorityScheduler::enqueue(const Task& task) {
     // 创建unique_ptr<Task>（复制字段）
     auto task_ptr = std::make_unique<Task>();
-    task_ptr->task_id = task.task_id;
-    task_ptr->priority = task.priority;
-    task_ptr->function = task.function;
-    task_ptr->on_timeout = task.on_timeout;
-    task_ptr->submit_time_ns = task.submit_time_ns;
-    task_ptr->timeout_ms = task.timeout_ms;
-    task_ptr->dependencies = task.dependencies;
-    task_ptr->cancelled.store(task.cancelled.load(std::memory_order_acquire), std::memory_order_release);
+    copy_task_fields(*task_ptr, task);
 
     TaskPtrCompare cmp;
 
@@ -61,6 +50,82 @@ void PriorityScheduler::enqueue(const Task& task) {
     }
 }
 
+void PriorityScheduler::enqueue(Task&& task) {
+    // PA-4: 移动版本 —— 字段级移动进 unique_ptr<Task>，无 function/string 复制。
+    // priority 标量在 move_task_fields 移动后保持原值，可安全用于选队列。
+    TaskPriority priority = task.priority;
+    auto task_ptr = std::make_unique<Task>();
+    move_task_fields(*task_ptr, std::move(task));
+
+    TaskPtrCompare cmp;
+
+    switch (priority) {
+        case TaskPriority::CRITICAL: {
+            std::lock_guard<std::mutex> lock(critical_mutex_);
+            critical_queue_.push_back(std::move(task_ptr));
+            std::push_heap(critical_queue_.begin(), critical_queue_.end(), cmp);
+            break;
+        }
+        case TaskPriority::HIGH: {
+            std::lock_guard<std::mutex> lock(high_mutex_);
+            high_queue_.push_back(std::move(task_ptr));
+            std::push_heap(high_queue_.begin(), high_queue_.end(), cmp);
+            break;
+        }
+        case TaskPriority::NORMAL: {
+            std::lock_guard<std::mutex> lock(normal_mutex_);
+            normal_queue_.push_back(std::move(task_ptr));
+            std::push_heap(normal_queue_.begin(), normal_queue_.end(), cmp);
+            break;
+        }
+        case TaskPriority::LOW: {
+            std::lock_guard<std::mutex> lock(low_mutex_);
+            low_queue_.push_back(std::move(task_ptr));
+            std::push_heap(low_queue_.begin(), low_queue_.end(), cmp);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+size_t PriorityScheduler::enqueue_batch(std::unique_ptr<Task>* tasks, size_t n) {
+    if (!tasks || n == 0) return 0;
+
+    TaskPtrCompare cmp;
+
+    // 每个优先级队列仅加锁一次，直接接管 unique_ptr 所有权（零字段复制）。
+    auto push_class = [&](TaskQueue& queue, TaskPriority p) -> size_t {
+        size_t count = 0;
+        for (size_t i = 0; i < n; ++i) {
+            if (!tasks[i] || tasks[i]->priority != p) continue;
+            queue.push_back(std::move(tasks[i]));
+            std::push_heap(queue.begin(), queue.end(), cmp);
+            ++count;
+        }
+        return count;
+    };
+
+    size_t total = 0;
+    {
+        std::lock_guard<std::mutex> lock(critical_mutex_);
+        total += push_class(critical_queue_, TaskPriority::CRITICAL);
+    }
+    {
+        std::lock_guard<std::mutex> lock(high_mutex_);
+        total += push_class(high_queue_, TaskPriority::HIGH);
+    }
+    {
+        std::lock_guard<std::mutex> lock(normal_mutex_);
+        total += push_class(normal_queue_, TaskPriority::NORMAL);
+    }
+    {
+        std::lock_guard<std::mutex> lock(low_mutex_);
+        total += push_class(low_queue_, TaskPriority::LOW);
+    }
+    return total;
+}
+
 bool PriorityScheduler::dequeue(Task& task) {
     TaskPtrCompare cmp;
     std::unique_ptr<Task> task_ptr;
@@ -74,7 +139,7 @@ bool PriorityScheduler::dequeue(Task& task) {
         }
     }
     if (task_ptr) {
-        copy_task_out(task_ptr, task);
+        move_task_out(task_ptr, task);
         return true;
     }
 
@@ -87,7 +152,7 @@ bool PriorityScheduler::dequeue(Task& task) {
         }
     }
     if (task_ptr) {
-        copy_task_out(task_ptr, task);
+        move_task_out(task_ptr, task);
         return true;
     }
 
@@ -100,7 +165,7 @@ bool PriorityScheduler::dequeue(Task& task) {
         }
     }
     if (task_ptr) {
-        copy_task_out(task_ptr, task);
+        move_task_out(task_ptr, task);
         return true;
     }
 
@@ -113,14 +178,14 @@ bool PriorityScheduler::dequeue(Task& task) {
         }
     }
     if (task_ptr) {
-        copy_task_out(task_ptr, task);
+        move_task_out(task_ptr, task);
         return true;
     }
 
     return false;
 }
 
-size_t PriorityScheduler::dequeue_batch(Task* out, size_t max_tasks) {
+size_t PriorityScheduler::dequeue_batch(std::unique_ptr<Task>* out, size_t max_tasks) {
     if (max_tasks == 0 || !out) return 0;
     TaskPtrCompare cmp;
     size_t count = 0;
@@ -131,7 +196,7 @@ size_t PriorityScheduler::dequeue_batch(Task* out, size_t max_tasks) {
             std::pop_heap(queue.begin(), queue.end(), cmp);
             std::unique_ptr<Task> ptr = std::move(queue.back());
             queue.pop_back();
-            copy_task_out(ptr, out[count]);
+            out[count] = std::move(ptr);
             ++count;
         }
     };

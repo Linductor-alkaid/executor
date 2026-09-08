@@ -62,6 +62,28 @@ failure 体系。
   事件与 `capacity_exhausted_count` 计数可观察；运行期 `set_max_in_flight_tasks()` /
   `get_in_flight_submissions()` / `get_max_in_flight_tasks()` 可调可查。
 
+### 性能
+
+- **线程池提交热路径重构（性能审查 PA-1/2/3/4、PA-9/13/17，2026-09 收敛计划
+  阶段 P1）**：worker 空闲驻停从「全局 `mutex_` + `condition_` 重谓词（谓词内做
+  steal/dequeue，含堆分配与排序）」改为 32 位驻停代次计数 + C++20
+  `std::atomic::wait`（Linux futex 直达）；提交路径单任务 `notify_one` +
+  worker 接力唤醒（并行度指数恢复，惊群消除），批次 `notify_all`；Task 全链路
+  （enqueue → dequeue → dispatch → 本地队列 → pop）改 `unique_ptr` 所有权/字段级
+  移动，消除逐跳 std::function/string/vector 复制；`dispatch_batch` 消除每次
+  派发的 4-6 次堆分配（成员便签 + 计数排序分段）；`local_queues_` 去除
+  libstdc++ `atomic_load(shared_ptr*)` 库级自旋锁（改为读写锁保护下的裸指针
+  快照）；steal victim 选择无分配化（`LoadBalancer::highest_load_victim`）；
+  `should_exit` 原子空集快速路径。停机正确性同步加固：worker 的 stop_ 退出加
+  「退出守门」（持 dispatcher 锁复核代次），排除任务处于搬运途中被永久滞留的
+  窗口。基准（14 核桌面，gcc 13 Release，3 次取中位）：单生产者提交吞吐
+  125.5k → 565.4k tasks/s（4.5x），e2e 3.5x，多生产者（2-32 线程）2.2-4.7x
+  且扩展曲线平坦化，直连 ThreadPool 的单生产者吞吐 13.5x、唤醒 p99（4T+）
+  3-5x 改善。新增 `benchmark_thread_pool_hotpath`（多生产者争用吞吐 +
+  wake-to-exec 延迟分布）。设计说明（32 位 futex 前置条件、代次采样时机、
+  接力唤醒与退出守门的推导）见
+  `docs/todolists/performance_audit_2026-09_plan.md` 阶段 P1 小节。
+
 ### 修复与改进
 
 - **P-001/P-002（停机竞态）**：`LockFreeTaskExecutor` 与 `RealtimeThreadExecutor`

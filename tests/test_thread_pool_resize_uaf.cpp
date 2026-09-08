@@ -223,6 +223,7 @@ static bool test_get_status_during_resize() {
 struct StubQueue {
     bool push(const Task&) { return false; }
     size_t push_batch(const Task*, size_t n) { (void)n; return 0; }
+    size_t push_batch_move(std::unique_ptr<Task>*, size_t n) { (void)n; return 0; }
     size_t size() const { return 0; }
     bool pop(Task&) { return false; }
     bool steal(Task&) { return false; }
@@ -249,7 +250,7 @@ static bool test_dispatch_batch_resize_zero_workers() {
     auto balancer_ptr = std::make_unique<LoadBalancer>(1);
     PriorityScheduler scheduler;
 
-    auto queues = std::make_shared<std::vector<StubQueue>>();
+    auto queues = std::make_unique<std::vector<StubQueue>>();
     queues->emplace_back();
 
     std::shared_mutex lq_mutex;
@@ -289,11 +290,10 @@ static bool test_dispatch_batch_resize_zero_workers() {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     std::cout.flush();
 
-    // Inside the unique_lock window: atomically replace the local queue
-    // snapshot with an empty vector, matching the real resize model.
-    std::atomic_store_explicit(&queues,
-                               std::make_shared<std::vector<StubQueue>>(),
-                               std::memory_order_release);
+    // Inside the unique_lock window: replace the local queue snapshot with
+    // an empty vector under the writer lock, matching the real resize model
+    // (PA-9: local_queues_ is a unique_ptr guarded by local_queues_mutex_).
+    queues = std::make_unique<std::vector<StubQueue>>();
     std::cout << "  main thread: replaced local_queues_, size="
               << queues->size() << std::endl;
     std::cout.flush();

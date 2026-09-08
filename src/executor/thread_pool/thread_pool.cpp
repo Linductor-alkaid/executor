@@ -6,6 +6,7 @@
 #include <limits>
 #include <random>
 #include <new>
+#include <utility>
 #include <vector>
 
 namespace executor {
@@ -22,16 +23,16 @@ ThreadPool::~ThreadPool() {
 
 bool ThreadPool::initialize(const ThreadPoolConfig& config) {
     std::unique_lock<std::mutex> lock(mutex_);
-    
+
     if (initialized_.load()) {
         return false;  // 已经初始化过
     }
-    
+
     // 验证配置
     if (config.min_threads == 0 || config.min_threads > config.max_threads) {
         return false;
     }
-    
+
     config_ = config;
     constexpr int64_t kMaxTaskTimeoutMs =
         std::numeric_limits<int64_t>::max() / 1'000'000;
@@ -56,25 +57,33 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
         }
 
         // 初始化工作线程本地队列
-        auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
-        new_queues->reserve(config_.min_threads);
-        for (size_t i = 0; i < config_.min_threads; ++i) {
+        // P-260617-002 / PA-9: 全程持 local_queues_mutex_ 的 unique_lock
+        // 发布（此刻尚无 reader，加锁是为了与后续所有访问保持同一配对语义）。
+        {
+            std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
+            auto new_queues = std::make_unique<std::vector<WorkerQueueImpl>>();
+            new_queues->reserve(config_.min_threads);
+            for (size_t i = 0; i < config_.min_threads; ++i) {
 #ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
-            if (worker_queue_create_hook_for_test_) {
-                worker_queue_create_hook_for_test_(i);
-            }
+                if (worker_queue_create_hook_for_test_) {
+                    worker_queue_create_hook_for_test_(i);
+                }
 #endif
-            new_queues->emplace_back(config_.queue_capacity);
+                new_queues->emplace_back(config_.queue_capacity);
+            }
+            local_queues_ = std::move(new_queues);
         }
-        std::atomic_store_explicit(&local_queues_, new_queues, std::memory_order_release);
 
         // 初始化任务分发器（TaskDispatcher 是模板类，需要显式指定实例化类型）
         // P-260617-002: 传入 local_queues_mutex_ 指针,dispatcher 内部 dispatch
         // 路径会持 shared_lock，与 resize 路径的 unique_lock 配对防 UAF。
+        // PA-2: 同时传入驻停代次计数，dispatcher 的每个"任务变得可执行"
+        // 终态（成功搬运 / 回灌）都会递增并 notify。
         {
             std::lock_guard<std::mutex> dispatcher_lock(dispatcher_mutex_);
             dispatcher_ = std::make_unique<TaskDispatcher<WorkerQueueImpl>>(
-                *load_balancer_, scheduler_, &local_queues_, &local_queues_mutex_
+                *load_balancer_, scheduler_, &local_queues_, &local_queues_mutex_,
+                &wake_seq_, config_.enable_work_stealing
             );
         }
 
@@ -110,6 +119,7 @@ void ThreadPool::rollback_initialization_failure() {
     resize_monitor_stop_.store(true, std::memory_order_release);
     resize_monitor_cv_.notify_all();
     condition_.notify_all();
+    signal_work_added(true);
 
     if (resize_monitor_thread_.joinable()) {
         resize_monitor_thread_.join();
@@ -135,12 +145,12 @@ void ThreadPool::rollback_initialization_failure() {
     {
         std::lock_guard<std::mutex> exit_lock(exit_threads_mutex_);
         exit_threads_.clear();
+        exit_threads_count_.store(0, std::memory_order_release);
     }
 
     {
         std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-        auto empty_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
-        std::atomic_store_explicit(&local_queues_, empty_queues, std::memory_order_release);
+        local_queues_.reset();
     }
 
     resize_monitor_stop_.store(false);
@@ -182,23 +192,35 @@ void ThreadPool::worker_thread(size_t worker_id) {
         }
     }
 
-    while (true) {
-        Task task;
-        bool has_task = false;
+    // PA-4: Task husk 在整个 worker 生命周期复用，每次执行 move-out 后
+    // 只剩可析构空壳，无逐任务分配。
+    Task task;
 
+    while (true) {
         if ((stop_.load(std::memory_order_acquire) &&
              !initialized_.load(std::memory_order_acquire)) ||
             should_exit(worker_id)) {
             break;
         }
 
+        // PA-2: 代次必须在完整空扫描【之前】采样。推导：
+        //  - bump 发生在采样之后 -> wait 阻塞前的原子复核发现值变化，
+        //    立即返回重扫；
+        //  - bump 发生在采样之前 -> 入队又 happened-before bump（程序序），
+        //    bump happened-before 采样（原子全序），采样 sequenced-before
+        //    扫描 -> 扫描透过队列锁必然看到该任务，不会驻停。
+        // 两个方向都不存在丢失唤醒窗口。wait 允许虚假唤醒，醒来重扫即可。
+        const uint32_t seen = wake_seq_.load(std::memory_order_acquire);
+
+        bool has_task = false;
+
         // 1. 优先从本地队列获取任务
         // P-260617-002: 持 shared_lock(local_queues_mutex_)，与 resize/shutdown
         // 路径的 unique_lock 配对，防止 vector reallocation 期间悬空访问。
         {
             std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-            auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
-            if (queues && worker_id < queues->size() && (*queues)[worker_id].pop(task)) {
+            if (local_queues_ && worker_id < local_queues_->size() &&
+                (*local_queues_)[worker_id].pop(task)) {
                 has_task = true;
             }
         }
@@ -209,51 +231,21 @@ void ThreadPool::worker_thread(size_t worker_id) {
             has_task = try_steal_task(worker_id, task);
         }
 
-        // 3. 若无任务，加锁后等待；谓词内再次检查本地队列、窃取、全局队列、退出条件
-        // P-260617-002: 谓词持 shared_lock(local_queues_mutex_)。try_steal_task
-        // 拆为公开入口(持 shared_lock)与 impl(假设调用方已持)两个版本，谓词
-        // 调 impl 避免 std::shared_mutex 重入 UB。unique_lock(mutex_) 与
-        // shared_lock(shared_mutex) 是不同互斥量，不存在互感知。
+        // 3. 直接从全局调度器出队执行（PA-2: 原先只在持 mutex_ 的等待
+        // 谓词内做，现已移出一切临界区）
         if (!has_task) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            condition_.wait(lock, [this, &has_task, &task, worker_id]() {
-                if ((stop_.load(std::memory_order_acquire) &&
-                     !initialized_.load(std::memory_order_acquire)) ||
-                    should_exit(worker_id)) {
-                    return true;
-                }
-
-                std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-                auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
-                if (queues && worker_id < queues->size() && (*queues)[worker_id].pop(task)) {
-                    has_task = true;
-                    return true;
-                }
-                if (config_.enable_work_stealing) {
-                    // 调 impl: 当前线程已持 shared_lock，impl 不会再获取
-                    has_task = try_steal_task_impl(worker_id, task);
-                    if (has_task) return true;
-                }
-                has_task = scheduler_.dequeue(task);
-                if (has_task) return true;
-                if (stop_.load() || should_exit(worker_id)) return true;
-                return false;
-            });
-            // 被 notify 唤醒但谓词未取到任务时，再试一次本地队列（可能刚被分发）
-            // 即使 stop_ 为 true，也要检查本地队列以排空任务
-            // P-260617-002: predicate 内的 lq_lock 已随 lambda 析构，
-            // 此处重新加 shared_lock 后再访问。
-            if (!has_task) {
-                std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-                auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
-                if (queues && worker_id < queues->size()) {
-                    has_task = (*queues)[worker_id].pop(task);
-                }
-            }
+            has_task = scheduler_.dequeue(task);
         }
 
-        // 执行任务（即使 stop_ 为 true，也要执行已获取的任务以排空队列）
         if (has_task) {
+            // PA-1: 接力唤醒。notify_one 语义下被唤醒的只有本 worker，
+            // 同伴仍在驻停；拿到任务意味着队列刚产出工作，极可能还有
+            // 剩余。立即再唤醒一个同伴，并行度按 1->2->4... 指数恢复，
+            // 比旧 notify_all 的全群惊群温和，又避免了单 notify_one 把
+            // 多 worker 执行串行化（满载下唤醒延迟逐任务叠加）。
+            signal_work_added(false);
+
+            // 执行任务（即使 stop_ 为 true，也要执行已获取的任务以排空队列）
             // 检查任务是否已取消
             if (!is_task_cancelled(task)) {
                 // P-001 (2026-06-22): RAII guard guarantees active_threads_
@@ -273,28 +265,56 @@ void ThreadPool::worker_thread(size_t worker_id) {
             // P-260617-002: size() 必须持 shared_lock 访问 local_queues_
             if (load_balancer_) {
                 std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-                auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
-                if (queues && worker_id < queues->size()) {
-                    size_t queue_size = (*queues)[worker_id].size();
+                if (local_queues_ && worker_id < local_queues_->size()) {
+                    size_t queue_size = (*local_queues_)[worker_id].size();
                     load_balancer_->update_load(worker_id, queue_size, 0);
                 }
             }
+        } else {
+            // 完整扫描确认无任务。
+            if (stop_.load(std::memory_order_acquire)) {
+                // PA-2 退出守门（严格排空语义）。stop_ 下的退出必须排除
+                // “任务正处于 dispatch 搬运途中”的窗口：空扫描发生的瞬间，
+                // 任务可能已离开 scheduler 又尚未落地 local 队列（在
+                // dispatch_batch 的出队/推送缓冲之间），此刻退出会把任务
+                // 永久滞留在无 worker 执行的队列里。
+                //
+                // dispatcher_mutex_ 与 dispatch_batch 的搬运全程互斥：
+                // 持锁下复核代次仍等于扫描前的采样值，即扫描开始以来
+                // 没有任何任务位置变化（每次入队/搬运/迁移都 bump 代次），
+                // 空扫描的结论仍然成立——此刻任务集合封闭且为空（新提交
+                // 已被 stop_ 拒绝）。锁释放后的 dispatch 只会从空 scheduler
+                // 搬出 0 个任务。代次有变则 continue 重扫。
+                std::lock_guard<std::mutex> dlock(dispatcher_mutex_);
+                if (wake_seq_.load(std::memory_order_acquire) == seen) {
+                    break;
+                }
+                continue;
+            }
+            if (should_exit(worker_id)) {
+                // 缩容退出不要求排空：resize_local_queues 已把被移除
+                // worker 的本地队列迁回 scheduler，剩余消费由保留的
+                // worker 负责。
+                break;
+            }
+
+            // PA-2: 代次驻停（futex）。醒来后回到循环顶部重新采样+扫描。
+            wake_seq_.wait(seen, std::memory_order_acquire);
+            continue;
         }
 
         // 检查是否需要退出（缩容时）
-        if (should_exit(worker_id) || (stop_.load() && !has_task)) {
+        if (should_exit(worker_id)) {
             break;
         }
 
         // 触发任务分发（从全局调度器分发到本地队列）
         // P-260617-002: dispatcher 内部 dispatch_batch 自身已持 shared_lock，
         // 此处不能再加 shared_lock（std::shared_mutex 不可重入 -> UB）。
-        if (!stop_.load()) {
-            size_t dispatched = dispatch_pending_tasks(5);  // 批量分发，减少锁竞争
-            // 如果成功分发了任务，唤醒等待的线程
-            if (dispatched > 0) {
-                notify_workers_after_queue_change();
-            }
+        // PA-1: 成功搬运的唤醒由 dispatch_batch 内部完成（PA-36: 不再
+        // 由调用方重复 notify_all）。
+        if (!stop_.load(std::memory_order_acquire)) {
+            (void)dispatch_pending_tasks(5);  // 批量分发，减少锁竞争
         }
     }
 }
@@ -415,7 +435,7 @@ void ThreadPool::update_statistics(int64_t execution_time_ns, bool success, bool
 
 ThreadPoolStatus ThreadPool::get_status() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    
+
     ThreadPoolStatus status;
     status.total_threads = workers_.size();
     status.active_threads = active_threads_.load(std::memory_order_relaxed);
@@ -426,25 +446,24 @@ ThreadPoolStatus ThreadPool::get_status() const {
     status.idle_threads = (status.active_threads <= status.total_threads)
                               ? (status.total_threads - status.active_threads)
                               : 0;
-    
+
     // 队列大小 = 全局调度器 + 所有本地队列
     // P-260617-002: 持 shared_lock 防止与并发 resize 数据竞争
     size_t local_queue_size = 0;
     {
         std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-        auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
-        if (queues) {
-            for (const auto& queue : *queues) {
+        if (local_queues_) {
+            for (const auto& queue : *local_queues_) {
                 local_queue_size += queue.size();
             }
         }
     }
     status.queue_size = scheduler_.size() + local_queue_size;
-    
+
     status.total_tasks = total_tasks_.load(std::memory_order_relaxed);
     status.completed_tasks = completed_tasks_.load(std::memory_order_relaxed);
     status.failed_tasks = failed_tasks_.load(std::memory_order_relaxed);
-    
+
     // 计算平均任务执行时间
     size_t completed = completed_tasks_.load(std::memory_order_relaxed);
     if (completed > 0) {
@@ -453,10 +472,10 @@ ThreadPoolStatus ThreadPool::get_status() const {
     } else {
         status.avg_task_time_ms = 0.0;
     }
-    
+
     // CPU使用率暂不实现（需要系统调用）
     status.cpu_usage_percent = 0.0;
-    
+
     return status;
 }
 
@@ -477,6 +496,9 @@ ShutdownResult ThreadPool::shutdown(bool wait_for_tasks) {
                 stop_.store(true);
             }
             condition_.notify_all();
+            // PA-2: 唤醒驻停中的 worker（atomic wait 驻停不再监听
+            // condition_），让它们观察到 stop_ 后排空退出。
+            signal_work_added(true);
             notify_completion_waiters();
             return ShutdownResult::RequestedFromWorker;
         }
@@ -506,6 +528,7 @@ ShutdownResult ThreadPool::shutdown(bool wait_for_tasks) {
         stop_.store(true);
     }
     condition_.notify_all();
+    signal_work_added(true);
     notify_completion_waiters();
 
     if (wait_for_tasks) {
@@ -523,6 +546,7 @@ ShutdownResult ThreadPool::shutdown(bool wait_for_tasks) {
 
     // 唤醒所有等待的线程
     condition_.notify_all();
+    signal_work_added(true);
 
     // A concurrent resize may be joining a subset of workers. Serialize the
     // final join/clear sequence with it so each std::thread has one owner.
@@ -546,8 +570,7 @@ ShutdownResult ThreadPool::shutdown(bool wait_for_tasks) {
     // 保持配对语义（reader 一律持 shared_lock，写者一律持 unique_lock）。
     {
         std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-        auto empty_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
-        std::atomic_store_explicit(&local_queues_, empty_queues, std::memory_order_release);
+        local_queues_.reset();
     }
 
     {
@@ -563,31 +586,32 @@ bool ThreadPool::resize_local_queues(size_t new_num_queues) {
         return false;
     }
 
-    auto new_queues = std::make_shared<std::vector<WorkerQueueImpl>>();
+    auto new_queues = std::make_unique<std::vector<WorkerQueueImpl>>();
     new_queues->reserve(new_num_queues);
     for (size_t i = 0; i < new_num_queues; ++i) {
         new_queues->emplace_back(config_.queue_capacity);
     }
 
     std::unique_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-    auto old_queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
-    if (old_queues) {
-        for (auto& queue : *old_queues) {
+    if (local_queues_) {
+        for (auto& queue : *local_queues_) {
             Task task;
             while (queue.pop(task)) {
-                scheduler_.enqueue(task);
+                scheduler_.enqueue(std::move(task));
             }
         }
     }
 
-    std::atomic_store_explicit(&local_queues_, new_queues, std::memory_order_release);
+    local_queues_ = std::move(new_queues);
 
     if (load_balancer_) {
         load_balancer_->resize(new_num_queues);
     }
 
     lq_lock.unlock();
-    notify_workers_after_queue_change();
+    // PA-2: 迁移回 scheduler 的任务是"变得可执行"的事件，唤醒全部驻停
+    // worker（resize 语境，保守 notify_all）。
+    signal_work_added(true);
     notify_completion_waiters();
     return true;
 }
@@ -646,8 +670,13 @@ bool ThreadPool::resize(size_t new_size) {
     {
         std::lock_guard<std::mutex> exit_lock(exit_threads_mutex_);
         exit_threads_.insert(exit_threads_.end(), removed_ids.begin(), removed_ids.end());
+        // PA-17: 锁内同步维护计数，释放 should_exit 的原子快速路径。
+        exit_threads_count_.store(exit_threads_.size(), std::memory_order_release);
     }
     condition_.notify_all();
+    // PA-2: 被标记退出的 worker 可能正驻停在 wake_seq_ 上，必须经代次
+    // 计数唤醒才能观察到 exit_threads_ 变化。
+    signal_work_added(true);
 
     // Do not hold mutex_ while joining: an idle worker needs it to wake and
     // evaluate should_exit().  We retain resize_mutex_ for the full protocol.
@@ -670,6 +699,7 @@ bool ThreadPool::resize(size_t new_size) {
                 exit_threads_.erase(it);
             }
         }
+        exit_threads_count_.store(exit_threads_.size(), std::memory_order_release);
     }
     notify_completion_waiters();
     return true;
@@ -691,10 +721,8 @@ bool ThreadPool::try_wait_for_completion(std::chrono::milliseconds timeout) {
         // raced with a full/contended worker queue. Keep dispatching while
         // waiting so completion cannot depend on a worker-side dispatch path
         // that has already observed stop_.
-        size_t dispatched = dispatch_pending_tasks(64);
-        if (dispatched > 0) {
-            notify_workers_after_queue_change();
-        }
+        // PA-1: dispatch 成功后的唤醒由 dispatch_batch 内部完成。
+        (void)dispatch_pending_tasks(64);
 
         lock.lock();
 
@@ -727,9 +755,8 @@ bool ThreadPool::is_completion_ready() const {
     size_t local_queue_total = 0;
     {
         std::shared_lock<std::shared_mutex> lq_lock(local_queues_mutex_);
-        auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
-        if (queues) {
-            for (const auto& queue : *queues) {
+        if (local_queues_) {
+            for (const auto& queue : *local_queues_) {
                 local_queue_total += queue.size();
             }
         }
@@ -749,9 +776,17 @@ void ThreadPool::notify_completion_waiters() {
     completion_cv_.notify_all();
 }
 
-void ThreadPool::notify_workers_after_queue_change() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    condition_.notify_all();
+void ThreadPool::signal_work_added(bool wake_all) {
+    // PA-1/PA-2: 提交/搬运路径的唤醒不再经过 mutex_ + condition_。
+    // 旧 notify_workers_after_queue_change 每次提交要第二次获取全局
+    // mutex_ 再 notify_all（惊群）；现在唤醒 = 一次代次 RMW + futex
+    // notify，单任务 notify_one、批次/停止/缩容 notify_all。
+    wake_seq_.fetch_add(1, std::memory_order_release);
+    if (wake_all) {
+        wake_seq_.notify_all();
+    } else {
+        wake_seq_.notify_one();
+    }
 }
 
 size_t ThreadPool::dispatch_pending_tasks(size_t max_tasks) {
@@ -786,71 +821,35 @@ bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
     // P-260617-002: 调用方必须已持 shared_lock(local_queues_mutex_)。
     // 内部不再获取该锁。worker_thread 谓词中已持 shared_lock 时调用此函数
     // 不会重入，避免 std::shared_mutex 重入 UB。
-    auto queues = std::atomic_load_explicit(&local_queues_, std::memory_order_acquire);
-    if (!queues || queues->size() <= 1) {
+    if (!local_queues_ || local_queues_->size() <= 1) {
         return false;  // 只有一个线程，无法窃取
     }
 
-    // 尝试使用基于负载的智能窃取策略
+    // PA-13: 无分配的最高负载 victim 选择。原实现每次窃取尝试经
+    // get_all_loads() 拷贝整个负载 vector、再构造 pair vector 并 sort
+    // （2 次堆分配 + O(n log n)），仅为了优先偷负载最高者。
+    // 最高负载者尝试失败后落到下方随机扫描，仍会遍历全部其他队列，
+    // 窃取成功率不受影响。
     if (load_balancer_) {
-        // 获取所有线程的负载信息
-        std::vector<LoadBalancer::WorkerLoad> loads = load_balancer_->get_all_loads();
-
-        if (loads.size() == queues->size()) {
-            // 创建线程ID和负载的配对，用于排序
-            std::vector<std::pair<size_t, size_t>> worker_loads;
-            worker_loads.reserve(queues->size());
-
-            for (size_t i = 0; i < queues->size(); ++i) {
-                if (i != worker_id) {  // 跳过自己
-                    // 计算总负载：队列大小 + 活跃任务数
-                    size_t total_load = loads[i].queue_size + loads[i].active_tasks;
-                    worker_loads.emplace_back(i, total_load);
-                }
-            }
-
-            // 检查是否所有线程负载相同
-            bool all_same_load = true;
-            if (!worker_loads.empty()) {
-                size_t first_load = worker_loads[0].second;
-                for (const auto& wl : worker_loads) {
-                    if (wl.second != first_load) {
-                        all_same_load = false;
-                        break;
-                    }
-                }
-            }
-
-            // 如果负载不同，按负载从高到低排序，优先窃取负载高的线程
-            if (!all_same_load && !worker_loads.empty()) {
-                std::sort(worker_loads.begin(), worker_loads.end(),
-                    [](const std::pair<size_t, size_t>& a, const std::pair<size_t, size_t>& b) {
-                        return a.second > b.second;  // 降序排序
-                    });
-
-                // 按排序顺序尝试窃取
-                for (const auto& wl : worker_loads) {
-                    size_t target_id = wl.first;
-                    if ((*queues)[target_id].steal(task)) {
-                        // 更新目标线程的负载信息
-                        size_t queue_size = (*queues)[target_id].size();
-                        load_balancer_->update_load(target_id, queue_size, 0);
-                        return true;
-                    }
-                }
-            }
+        size_t victim = load_balancer_->highest_load_victim(
+            worker_id, local_queues_->size());
+        if (victim != static_cast<size_t>(-1) &&
+            (*local_queues_)[victim].steal(task)) {
+            size_t queue_size = (*local_queues_)[victim].size();
+            load_balancer_->update_load(victim, queue_size, 0);
+            return true;
         }
     }
 
     // 回退到随机策略（如果无法获取负载信息或所有线程负载相同）
     // 使用 thread_local 随机数生成器（首次使用时会自动初始化）
     static thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<size_t> dist(0, queues->size() - 1);
+    std::uniform_int_distribution<size_t> dist(0, local_queues_->size() - 1);
     size_t start_index = dist(rng);
 
     // 尝试从其他线程窃取任务
-    for (size_t i = 0; i < queues->size(); ++i) {
-        size_t target_id = (start_index + i) % queues->size();
+    for (size_t i = 0; i < local_queues_->size(); ++i) {
+        size_t target_id = (start_index + i) % local_queues_->size();
 
         // 跳过自己
         if (target_id == worker_id) {
@@ -858,10 +857,10 @@ bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
         }
 
         // 尝试窃取
-        if ((*queues)[target_id].steal(task)) {
+        if ((*local_queues_)[target_id].steal(task)) {
             // 更新目标线程的负载信息
             if (load_balancer_) {
-                size_t queue_size = (*queues)[target_id].size();
+                size_t queue_size = (*local_queues_)[target_id].size();
                 load_balancer_->update_load(target_id, queue_size, 0);
             }
             return true;
@@ -872,8 +871,14 @@ bool ThreadPool::try_steal_task_impl(size_t worker_id, Task& task) {
 }
 
 bool ThreadPool::should_exit(size_t worker_id) const {
+    // PA-17: 稳态快速路径。缩容窗口之外 exit_threads_ 恒空，一次原子
+    // load 即可返回；此前每个 worker 每次主循环迭代 4 个调用点全部
+    // 获取 exit_threads_mutex_ 并线性扫描。
+    if (exit_threads_count_.load(std::memory_order_acquire) == 0) {
+        return false;
+    }
     std::lock_guard<std::mutex> lock(exit_threads_mutex_);
-    return std::find(exit_threads_.begin(), exit_threads_.end(), worker_id) 
+    return std::find(exit_threads_.begin(), exit_threads_.end(), worker_id)
            != exit_threads_.end();
 }
 
@@ -886,18 +891,18 @@ void ThreadPool::resize_monitor_thread() {
             break;
         }
         lock.unlock();
-        
+
         // 更新线程池状态信息
         ThreadPoolStatus status = get_status();
-        
+
         // 计算平均等待时间（简化实现，使用队列大小估算）
         double avg_wait_time_ms = 0.0;
         if (status.queue_size > 0 && status.total_threads > 0) {
             // 假设每个任务平均执行时间，估算等待时间
-            avg_wait_time_ms = (static_cast<double>(status.queue_size) * status.avg_task_time_ms) 
+            avg_wait_time_ms = (static_cast<double>(status.queue_size) * status.avg_task_time_ms)
                                / static_cast<double>(status.total_threads);
         }
-        
+
         if (resizer_) {
             resizer_->update_status(
                 status.queue_size,
@@ -905,7 +910,7 @@ void ThreadPool::resize_monitor_thread() {
                 status.total_threads,
                 avg_wait_time_ms
             );
-            
+
             // 检查并执行扩缩容
             resizer_->check_and_resize();
         }
@@ -957,6 +962,14 @@ bool ThreadPool::try_submit(std::function<void()> task,
     ).count();
     executor_task.timeout_ms = config_.task_timeout_ms;
 
+    // PA-4: monitor 需要 task_id 时先拷出，入队即可移动消耗整个 Task。
+    auto* monitor = monitor_.load(std::memory_order_acquire);
+    const bool monitor_on = (monitor && monitor->is_enabled());
+    std::string monitor_id;
+    if (monitor_on) {
+        monitor_id = executor_task.task_id;
+    }
+
     // Keep mutex_ scoped to the ThreadPool state change. Dispatching may take
     // local queue / load-balancer / scheduler locks, so doing it after releasing
     // mutex_ avoids lock-order inversions with workers and shutdown.
@@ -966,21 +979,23 @@ bool ThreadPool::try_submit(std::function<void()> task,
             return false;
         }
 
-        scheduler_.enqueue(executor_task);
+        scheduler_.enqueue(std::move(executor_task));
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    if (auto* monitor = monitor_.load(std::memory_order_acquire);
-        monitor && monitor->is_enabled()) {
+    // PA-1: 入队即唤醒一个 worker。任务在 scheduler，任一被唤醒 worker
+    // 的出队扫描（local -> steal -> scheduler）必然拿到；提交路径不再
+    // 内联 dispatch(1) —— 满载下该内联派发与 worker 的自由扫描互相
+    // 抢 dispatcher/scheduler/queue 锁，锁交接的调度延迟逐任务叠加。
+    signal_work_added(false);
+
+    if (monitor_on) {
         try {
-            monitor->record_task_queued(executor_task.task_id, "default", "default");
+            monitor->record_task_queued(monitor_id, "default", "default");
         } catch (...) {
             // Diagnostics must never turn an accepted task into a rejection.
         }
     }
-
-    dispatch_pending_tasks(1);
-    notify_workers_after_queue_change();
 
     return true;
 }
@@ -1021,27 +1036,33 @@ bool ThreadPool::try_submit_priority(
     ).count();
     executor_task.timeout_ms = config_.task_timeout_ms;
 
+    auto* monitor = monitor_.load(std::memory_order_acquire);
+    const bool monitor_on = (monitor && monitor->is_enabled());
+    std::string monitor_id;
+    if (monitor_on) {
+        monitor_id = executor_task.task_id;
+    }
+
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (stop_.load()) {
             return false;
         }
 
-        scheduler_.enqueue(executor_task);
+        scheduler_.enqueue(std::move(executor_task));
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    if (auto* monitor = monitor_.load(std::memory_order_acquire);
-        monitor && monitor->is_enabled()) {
+    // PA-1: 同 try_submit —— 入队后唤醒一个 worker，不内联派发。
+    signal_work_added(false);
+
+    if (monitor_on) {
         try {
-            monitor->record_task_queued(executor_task.task_id, "default", "default");
+            monitor->record_task_queued(monitor_id, "default", "default");
         } catch (...) {
             // Diagnostics must never turn an accepted task into a rejection.
         }
     }
-
-    dispatch_pending_tasks(1);
-    notify_workers_after_queue_change();
 
     return true;
 }
@@ -1073,13 +1094,39 @@ bool ThreadPool::try_submit_batch(
         }
     }
 
-    std::vector<std::string> task_ids;
-    task_ids.reserve(tasks.size());
-    for (size_t i = 0; i < tasks.size(); ++i) {
-        task_ids.push_back(generate_task_id());
+    // PA-4: 批量构造 Task（Task 含 atomic 不可移动构造，经 unique_ptr
+    // 传递所有权），锁内一次 enqueue_batch 整体入队（每个优先级队列
+    // 仅加锁一次，直接接管所有权）。
+    const size_t batch_size = tasks.size();
+    std::vector<std::unique_ptr<Task>> batched;
+    batched.reserve(batch_size);
+
+    auto* monitor = monitor_.load(std::memory_order_acquire);
+    const bool monitor_on = (monitor && monitor->is_enabled());
+    std::vector<std::string> monitor_ids;
+    if (monitor_on) {
+        monitor_ids.reserve(batch_size);
     }
 
-    size_t batch_size = tasks.size();
+    const int64_t submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+
+    for (size_t i = 0; i < batch_size; ++i) {
+        auto executor_task = std::make_unique<Task>();
+        executor_task->task_id = generate_task_id();
+        executor_task->priority = TaskPriority::NORMAL;
+        executor_task->function = std::move(tasks[i]);
+        if (i < on_timeout_handlers.size()) {
+            executor_task->on_timeout = std::move(on_timeout_handlers[i]);
+        }
+        executor_task->submit_time_ns = submit_time_ns;
+        executor_task->timeout_ms = config_.task_timeout_ms;
+        if (monitor_on) {
+            monitor_ids.push_back(executor_task->task_id);
+        }
+        batched.push_back(std::move(executor_task));
+    }
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1088,39 +1135,26 @@ bool ThreadPool::try_submit_batch(
             return false;  // 线程池已停止，拒绝任务
         }
 
-        // 批量创建并入队任务
-        for (size_t i = 0; i < tasks.size(); ++i) {
-            Task executor_task;
-            executor_task.task_id = std::move(task_ids[i]);
-            executor_task.priority = TaskPriority::NORMAL;
-            executor_task.function = std::move(tasks[i]);
-            if (i < on_timeout_handlers.size()) {
-                executor_task.on_timeout = std::move(on_timeout_handlers[i]);
-            }
-            executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()
-            ).count();
-            executor_task.timeout_ms = config_.task_timeout_ms;
-
-            scheduler_.enqueue(executor_task);
-            if (auto* monitor = monitor_.load(std::memory_order_acquire);
-                monitor && monitor->is_enabled()) {
-                try {
-                    monitor->record_task_queued(executor_task.task_id, "default", "default");
-                } catch (...) {
-                    // Diagnostics must never turn an accepted batch into a rejection.
-                }
-            }
-        }
-
+        scheduler_.enqueue_batch(batched.data(), batch_size);
         total_tasks_.fetch_add(batch_size, std::memory_order_relaxed);
     }
 
-    // 批量分发
-    dispatch_pending_tasks(batch_size);
+    // PA-1: 批次语义唤醒全部。
+    signal_work_added(true);
 
-    // 唤醒所有等待的工作线程
-    notify_workers_after_queue_change();
+    // PA-14(顺带): monitor 事件在全局锁外补记。
+    if (monitor_on) {
+        for (const auto& id : monitor_ids) {
+            try {
+                monitor->record_task_queued(id, "default", "default");
+            } catch (...) {
+                // Diagnostics must never turn an accepted batch into a rejection.
+            }
+        }
+    }
+
+    // 批量分发（dispatch_batch 内部按搬运结果唤醒）
+    dispatch_pending_tasks(batch_size);
 
     return true;
 }

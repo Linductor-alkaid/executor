@@ -86,6 +86,24 @@ public:
         return pushed;
     }
 
+    // PA-4: 批量移动版本。直接接管调用方 unique_ptr<Task> 的所有权，
+    // 零新分配、零字段复制（本队列内部即按 Task* 存储）。
+    // 未推入的元素所有权仍归调用方，由调用方处理。
+    size_t push_batch_move(std::unique_ptr<Task>* tasks, size_t n) {
+        if (!tasks || n == 0) return 0;
+
+        size_t pushed = 0;
+        for (size_t i = 0; i < n; ++i) {
+            uintptr_t ptr = reinterpret_cast<uintptr_t>(tasks[i].get());
+            if (!main_queue_.push(ptr)) {
+                break;
+            }
+            tasks[i].release();
+            ++pushed;
+        }
+        return pushed;
+    }
+
     bool pop(Task& task) {
         std::lock_guard<std::mutex> lock(consume_mx_);
 

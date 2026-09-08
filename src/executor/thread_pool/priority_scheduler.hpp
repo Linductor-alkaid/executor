@@ -41,12 +41,35 @@ public:
 
     /**
      * @brief 添加任务到优先级队列
-     * 
+     *
      * 根据任务的优先级将任务放入对应的队列。
-     * 
+     *
      * @param task 任务对象（会被复制为unique_ptr）
      */
     void enqueue(const Task& task);
+
+    /**
+     * @brief 添加任务到优先级队列（移动版本）
+     *
+     * PA-4：提交热路径经此入口将 Task 字段级移动进调度器内部的
+     * unique_ptr<Task>，避免 std::function / string / vector 的逐跳复制。
+     *
+     * @param task 任务对象（字段被移动，priority 等标量仍可读）
+     */
+    void enqueue(Task&& task);
+
+    /**
+     * @brief 批量移动入队（每个出现的优先级队列仅加锁一次）
+     *
+     * PA-4：批量提交路径经此入口摊销锁获取，直接接管调用方
+     * unique_ptr<Task> 的所有权（零字段复制/移动）。tasks 中每个
+     * 元素被移走后置空。
+     *
+     * @param tasks 任务所有权数组（元素被移走消耗）
+     * @param n 任务数量
+     * @return 实际入队的任务数
+     */
+    size_t enqueue_batch(std::unique_ptr<Task>* tasks, size_t n);
 
     /**
      * @brief 从优先级队列获取任务（按优先级顺序）
@@ -61,16 +84,17 @@ public:
 
     /**
      * @brief 批量从优先级队列获取任务（按优先级顺序）
-     * 
+     *
      * 按优先级从高到低依次从各队列取任务，每个优先级队列仅加锁一次，
-     * 最多取出 max_tasks 个任务。调用方必须保证 out 指向至少 max_tasks 个
-     * 已构造的 Task 对象（如 vector::resize 后传入 data()）。
-     * 
+     * 最多取出 max_tasks 个任务。PA-4: 任务字段级移动到 out 指向的
+     * unique_ptr<Task> 中（Task 含 atomic 不可移动构造，调用方提供
+     * 已构造的槽位）。
+     *
      * @param out 用于接收任务的缓冲区，写入 out[0..return-1]
      * @param max_tasks 最多取出的任务数
      * @return 实际取出的任务数
      */
-    size_t dequeue_batch(Task* out, size_t max_tasks);
+    size_t dequeue_batch(std::unique_ptr<Task>* out, size_t max_tasks);
 
     /**
      * @brief 获取队列总大小
@@ -117,8 +141,8 @@ private:
     mutable std::mutex normal_mutex_;
     mutable std::mutex low_mutex_;
 
-    /** 从 unique_ptr<Task> 拷贝到 Task&，供 dequeue 复用 */
-    static void copy_task_out(const std::unique_ptr<Task>& src, Task& out);
+    /** 从 unique_ptr<Task> 移动出到 Task&，供 dequeue/dequeue_batch 复用（PA-4） */
+    static void move_task_out(const std::unique_ptr<Task>& src, Task& out);
 };
 
 } // namespace executor
