@@ -162,19 +162,19 @@
 ## 阶段 16：使用手册网站
 
 - [x] 完成 [Executor 使用手册网站规划](../design/user_guide_website.md)
-- [ ] 执行 [Executor 使用手册网站实施计划](user_guide_website_plan.md)
+- [x] 执行 [Executor 使用手册网站实施计划](user_guide_website_plan.md)（网站已建成并随各阶段同步更新）
 
 ---
 
 ## 阶段 17：Android 平台适配
 
-- [ ] 评审 [Android 适配方案](../design/android_port.md)
-- [ ] 执行 [Android 适配实施计划](android_port_plan.md)
-- [ ] 完成 Android CPU-only 交叉编译 CI（NDK，arm64-v8a / x86_64，static / shared，API 21）
-- [ ] 完成 `executor::StopToken` 兼容层与 Blocking I/O 生命周期迁移
-- [ ] 完成 Android best-effort 调度语义和线程数 / cpuset 自适应
+- [x] 评审 [Android 适配方案](../design/android_port.md)
+- [x] 执行 [Android 适配实施计划](android_port_plan.md)（一期 154 项完成）
+- [x] 完成 Android CPU-only 交叉编译 CI（NDK，arm64-v8a / x86_64，static / shared，API 21）
+- [x] 完成 `executor::StopToken` 兼容层与 Blocking I/O 生命周期迁移
+- [x] 完成 Android best-effort 调度语义和线程数 / cpuset 自适应
 - [ ] 完成 arm64 设备 smoke test、Blocking I/O 与 MPSC 弱内存序压力验证
-- [ ] 完成 Android 打包与集成文档（NDK CMake / AGP / Prefab / `c++_shared`）
+- [x] 完成 Android 打包与集成文档（NDK CMake / AGP / Prefab / `c++_shared`）
 
 ---
 
@@ -182,11 +182,11 @@
 
 输入来源：heyaki 反馈台账（2026-08-29 盘点）P1-1/P1-2/P1-3；P2-1/P2-2 延后重估。
 
-- [ ] 执行 [客户端反馈缺口收敛更新计划](client_feedback_update_plan.md)
-- [ ] 完成任务级协作取消令牌（P1-3）：排队/运行中取消语义、取消可观测
-- [ ] 完成可绑定生命周期的定时句柄（P1-2）：cancel/reschedule、Scoped 句柄销毁即取消、
-  纳入监控（外部 strand 绑定由 T2/S2 门控）
-- [ ] 完成外部事件循环互操作指南（P1-1 第一步），并依据评审结论决定序列化上下文 API 是否落地
+- [x] 执行 [客户端反馈缺口收敛更新计划](client_feedback_update_plan.md)（C1/T1/S1/S2/D1/D2 已完成）
+- [x] 完成任务级协作取消令牌（P1-3）：排队/运行中取消语义、取消可观测
+- [x] 完成可绑定生命周期的定时句柄（P1-2）：cancel/reschedule、Scoped 句柄销毁即取消、
+  纳入监控（外部 strand 绑定由 T2/S2 门控；S2 已由阶段 19 落地）
+- [x] 完成外部事件循环互操作指南（P1-1 第一步），并依据评审结论决定序列化上下文 API 是否落地（SerialExecutionContext 已随阶段 19 合入）
 - [ ] P2-1/P2-2 重估门：待 heyaki M6/M7 消息与文件传输压测后定形
 
 ---
@@ -204,3 +204,21 @@
   可配置总容量、可区分 capacity rejection、终态恰好一次释放
 - [x] 完成 API/迁移/README/网站同步，并回写 Mira 台账状态（Proposed → Accepted，
   引用 issue #178/#179 与上游 master 提交 def5200）
+
+---
+
+## 阶段 20：性能审查收敛（热路径锁竞争、无锁承诺兑现、文档同步）
+
+输入来源：2026-09-08 master `e0924c4` 四路性能与文档审查（核心线程池热路径 /
+comm·timer·取消原语 / GPU·监控路径 / 文档同步），问题登记 PA-1 ~ PA-36，
+逐条含 file:line 证据。
+
+- [x] 执行 [性能审查收敛计划](performance_audit_2026-09_plan.md)（阶段 D0 文档同步
+  随本批完成；P1 线程池热路径三连、P2 无锁兑现、P3/P4 定时器·comm·facade·监控、
+  P5 GPU 待排期）
+- [ ] P1：线程池提交热路径三连（全局锁 + 持锁谓词 + 每次派发堆分配）与 Task 复制链
+- [ ] P2：ObjectPool 无锁化与 RT 优先级反转消除、LockFreeWorkerQueue 兑现
+- [ ] P3：timer 1kHz 轮询改条件编译驻停、comm 阻塞原语退避、Topic RCU、
+  取消/周期 tick 热路径分配
+- [ ] P4：task graph 分片、默认执行器原子快照、TaskMonitor 先查再锁
+- [ ] P5：GPU 持锁阻塞调用挪出、loader 函数表缓存、pinned memory、optimizer 去留
