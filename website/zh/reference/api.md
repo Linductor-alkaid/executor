@@ -18,6 +18,8 @@ description: 公开 API 的模块入口与稳定性边界。
 | 失败与等待 | failure callback/status、recent failures、`wait_for_completion[_ex]`、完成状态 | [失败可观察性](/zh/reliability/failure-observability)、[有界等待](/zh/tutorial/waiting-and-status) | 失败、等待与类型章节。 |
 | 监控 | `enable_monitoring`、采样率、任务统计 | [监控与采样](/zh/reliability/monitoring) | 监控 API 章节。 |
 | 通信 | `executor::comm`：channel、mailbox、snapshot、phase | [通信组件选型](/zh/guides/choosing-communication) | 通信 API 章节。 |
+| 取消与定时 | `submit_cancellable*`、`request_task_cancel`、`TimerHandle`、`ScopedTimerHandle` | [取消与定时](/zh/realtime-and-communication/cancellation-and-timers) | 取消与定时 API 章节。 |
+| 串行派发与总量 admission | `submit_on[_with_handle]`、`SerialExecutionContext`、`max_in_flight_tasks`、`CapacityExhaustedException` | [容量与告警](/zh/realtime-and-communication/capacity-and-alerting)、[事件循环互操作](/zh/guides/event-loop-interop) | admission 与串行派发章节。 |
 | 实时 | 注册/启动 `_ex`、push、状态、任务列表 | [实时控制循环](/zh/realtime-and-communication/realtime-control) | 实时任务 API。 |
 | GPU | 注册 `_ex`、`submit_gpu`、状态、`submit_auto`、scheduler | [GPU 专题](/zh/gpu/) | GPU API 与构建文档。 |
 | 有界 dispatch 与 worker | `dispatch_auto`、`DispatchResult`、`start_worker`、`WorkerHandle` | [提交接口选型](/zh/guides/choosing-submit-api)、[Blocking I/O worker](/zh/realtime-and-communication/blocking-io-workers) | 路由与 Blocking I/O API。 |
@@ -35,6 +37,11 @@ description: 公开 API 的模块入口与稳定性边界。
 | failure、recent buffer、等待、完成快照 | 可靠性与等待教程 | `FailureKind`、`WaitResult` 与状态字段。 |
 | 监控与统计 | 监控与采样 | 采样率和统计开销。 |
 | realtime 注册、push、列表与状态 | 实时控制教程 | 权限降级、周期预算和拒绝计数。 |
+| `submit_cancellable*`、`request_task_cancel`、`get_cancellation_status` | 取消与定时教程 | 协作语义、registry 容量与取消计数。 |
+| `submit_delayed_with_handle`、`submit_periodic_with_handle`、`TimerHandle` / `ScopedTimerHandle` | 取消与定时教程 | cancel/reschedule、终态与定时计数。 |
+| `submit_on`、`submit_on_with_handle`、`SerialExecutionContext` | 事件循环互操作指南 | FIFO ticket 顺序、非阻塞派发与 shutdown 拒绝。 |
+| `max_in_flight_tasks`、`set/get_max_in_flight_tasks`、`get_in_flight_submissions` | 容量与告警 | 覆盖路径、capacity 拒绝语义与计数。 |
+| `register_lockfree_executor` / `start_` / `stop_` / `get_lockfree_executor_names` | 提交接口选型、高级与原理 | 后端生命周期；`dispatch_auto` 的 `accepted` 只代表队列接收。 |
 | 有界 dispatch、Blocking worker | 执行模型与路由边界 | admission 不等于完成、worker 生命周期。 |
 | GPU 注册、提交、状态、自动调度 | GPU 教程 | 后端可用性、stream 与硬件验证。 |
 | 直接 manager / executor 指针 | 高级接口 | 所有权、并发和生命周期责任。 |
