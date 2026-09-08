@@ -350,7 +350,7 @@ if (!admission.accepted) {
 }
 ```
 
-- `LowLatency` 与 `RealtimeQueue` 必须显式指定 `preferred_executor` 且后端已运行；不会因 deadline、priority 或队列水位自动选择。
+- `LowLatency` 与 `RealtimeQueue` 必须显式指定 `preferred_executor` 且后端已运行；不会因 deadline、priority 或队列水位自动选择。`LowLatency` 后端的注册/启动/停止见 §5.9（`register_lockfree_executor` / `start_lockfree_executor`）。
 - `dispatch_auto()` 的接收结果不是完成通知。实时任务的 drop/backpressure 继续由 `RealtimeExecutorStatus` 计数和 failure event 观察。
 - `get_last_routing_decision()`、`get_recent_routing_decisions()` 与 `set_routing_callback()` 提供独立的路由解释；`ExecutorFailureEvent` 仍用于实际拒绝和执行失败。
 - `get_executor_capabilities()` 返回所有已注册后端的建议性状态快照，只用于显示/预检；实际投递仍可能因并发 stop 或满队列被拒绝。
@@ -493,6 +493,7 @@ ex.initialize(config);
 // 运行期可调（不驱逐已接纳任务）：
 ex.set_max_in_flight_tasks(512);
 size_t in_flight = ex.get_in_flight_submissions();
+size_t current_cap = ex.get_max_in_flight_tasks();  // 当前生效上限（0 = 未启用）
 ```
 
 - **拒绝语义**：达到上限时提交不抛出，对应 future 立即以
@@ -1150,6 +1151,36 @@ exec.stop_and_join();  // 返回 true，完成 join
 
 详细示例见 [examples/lockfree_task_executor_example.cpp](../examples/lockfree_task_executor_example.cpp)。
 
+### 5.9 Facade 注册与生命周期（LowLatency 后端）
+
+`LockFreeTaskExecutor` 不参与 facade 的默认路由；`dispatch_auto` 的
+`ExecutionIntent::LowLatency` 需要一个**已启动**的具名无锁执行器作为
+`preferred_executor`。注册与生命周期经 facade 完成：
+
+```cpp
+auto lf = std::make_unique<executor::LockFreeTaskExecutor>(4096 /*capacity*/);
+ex.register_lockfree_executor("logging", std::move(lf));  // 转移所有权
+ex.start_lockfree_executor("logging");                    // 启动消费者线程
+
+executor::TaskOptions opt;
+opt.intent = executor::ExecutionIntent::LowLatency;
+opt.preferred_executor = "logging";
+auto r = ex.dispatch_auto(opt, [] { write_log(); });     // accepted = 队列已接收
+
+ex.stop_lockfree_executor("logging");                     // 停止并等待 drain
+```
+
+| API | 语义 |
+|-----|------|
+| `register_lockfree_executor(name, std::unique_ptr<LockFreeTaskExecutor>)` | 注册并转移所有权；重名/空指针拒绝并记 `SubmitRejected` failure 事件 |
+| `start_lockfree_executor(name)` | 启动消费者线程；不存在、已在运行或已停止返回 `false` 并记 failure 事件 |
+| `stop_lockfree_executor(name)` | 请求停止并等待；可安全重复调用 |
+| `get_lockfree_executor_names()` | 已注册执行器名称列表 |
+
+不存在 `Executor::submit_lockfree`。低延迟提交统一走 `dispatch_auto`（§3.7）；
+`accepted` 仅表示有界队列已接收，不代表任务完成。需要持有快照的集成代码使用
+`ExecutorManager::get_lockfree_executor_snapshot(name)`（§9 高级接口）。
+
 ---
 
 ## 6. 监控 API
@@ -1312,7 +1343,7 @@ executor 库遵循以下原则 (P019 三阶段 + P019C companion):
 ### 7.3 状态与统计类型
 
 - **AsyncExecutorStatus**：`name`、`is_running`、`active_tasks`、`completed_tasks`、`failed_tasks`、`queue_size`、`avg_task_time_ms`。`failed_tasks` 表示底层异步执行器已执行并以失败结束的任务数；通过 `Executor` facade 提交的用户任务异常也会让 wrapper 重新抛出，因此会计入该字段，同时计入 facade 的 `ExecutorFailureStatus::task_exception_count`。执行前软超时使用独立 timeout 计数，不计入 `failed_tasks`。
-- **ThreadPoolStatus**：`include/executor/config.hpp:67` 仍定义此结构（与 `AsyncExecutorStatus` 字段几乎重合），并且仍是底层 `ThreadPool::get_status()` 的返回类型；`ThreadPoolExecutor::get_status()` 会读取它并映射为 `AsyncExecutorStatus`。通过 `Executor` facade 或异步执行器编写的新代码优先使用 `AsyncExecutorStatus`；直接使用底层 `ThreadPool` 时仍应按 `ThreadPoolStatus` 处理。若未来要弃用或移除该类型，需要先提供替代的底层状态 API，并在声明处添加 deprecation 标记。
+- **ThreadPoolStatus**：`include/executor/config.hpp:90` 仍定义此结构（与 `AsyncExecutorStatus` 字段几乎重合），并且仍是底层 `ThreadPool::get_status()` 的返回类型；`ThreadPoolExecutor::get_status()` 会读取它并映射为 `AsyncExecutorStatus`。通过 `Executor` facade 或异步执行器编写的新代码优先使用 `AsyncExecutorStatus`；直接使用底层 `ThreadPool` 时仍应按 `ThreadPoolStatus` 处理。若未来要弃用或移除该类型，需要先提供替代的底层状态 API，并在声明处添加 deprecation 标记。
 - **RealtimeExecutorStatus**：
   - `name` (std::string)：执行器名称。
   - `is_running` (bool)：是否运行中。
@@ -1773,7 +1804,7 @@ gpu::GpuExecutorStatus get_gpu_executor_status(const std::string& name) const;
 - **内存**：`allocate_device_memory`、`free_device_memory`；`copy_to_device`、`copy_to_host`、`copy_device_to_device`（均支持异步与流 ID）。`async=false` 在返回前完成指定流中的复制；`async=true` 仅入队，调用方必须在操作完成前保持相关设备缓冲区有效（主机参与的异步复制还必须保持主机缓冲区有效），随后通过 `synchronize_stream`、`synchronize` 或 `wait_for_completion` 等待完成。
 - **统一内存**：`allocate_unified_memory`、`free_unified_memory`、`prefetch_memory`（host / device 方向均可）
 - **P2P 传输**：`copy_from_peer`（跨 GPU 设备对等拷贝）
-- **批量执行**：`submit_kernels_batch`（一次性提交一组 kernel+config，返回等长 `std::vector<std::future<void>>`；关停时每个输入均保证返回一个 future，详见 P-001 commit）
+- **批量执行**：`submit_kernels_batch`（一次性提交一组 kernel+config，返回等长 `std::vector<std::future<void>>`；关停时每个输入均保证返回一个 future——CUDA 侧已入队的 kernel 继续排空，OpenCL 侧未被 worker 取出的以 `ExecutorStopping` 就绪，见上文 stop() 队列契约）
 - **流**：`create_stream`、`destroy_stream`、`synchronize_stream`、`add_stream_callback`。`add_stream_callback` 当前仅支持 CUDA；调用前使用 `supports_stream_callback()` 查询，OpenCL 会返回 `false`，并在 `get_status().last_error_message` 中说明该能力尚未实现（计划通过 `cl_event` 轮询跟进）。
 - **执行**：`submit_kernel(kernel, config)`（返回 `std::future<void>`）、`synchronize`、`wait_for_completion`
 - **状态**：`get_name`、`get_device_info`、`get_status`、`start`、`stop`

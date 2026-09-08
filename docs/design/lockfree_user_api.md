@@ -171,37 +171,50 @@ namespace executor {
 
 class LockFreeTaskExecutor {
 public:
-    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024);
+    explicit LockFreeTaskExecutor(size_t queue_capacity = 1024,
+                                  size_t backoff_multiplier = 2,
+                                  bool enable_stats = false);
     ~LockFreeTaskExecutor();
 
     bool start();
     void stop();
+    bool stop_and_join();   // 外部线程返回 true；worker 内自停止返回 false
     bool is_running() const;
 
     bool push_task(std::function<void()> task);
+    bool push_tasks_batch(std::vector<std::function<void()>> tasks);  // 全收或全拒
 
     size_t pending_count() const;
     uint64_t processed_count() const;
+    uint64_t exception_count() const;
+    uint64_t rejected_empty_count() const;
 };
 
 } // namespace executor
 ```
 
-### 集成到 Executor Facade（可选）
+### 集成到 Executor Facade（已落地）
+
+实际签名见 `include/executor/executor.hpp` 与 `include/executor/executor_manager.hpp`：
 
 ```cpp
 class Executor {
 public:
-    // 注册无锁任务执行器
-    bool register_lockfree_executor(const std::string& name, size_t capacity = 1024);
+    // 注册（转移所有权；重名或空指针拒绝并记 failure 事件）
+    bool register_lockfree_executor(const std::string& name,
+                                    std::unique_ptr<LockFreeTaskExecutor> executor);
+    bool start_lockfree_executor(const std::string& name);
+    void stop_lockfree_executor(const std::string& name);
+    std::vector<std::string> get_lockfree_executor_names() const;
 
-    // 提交无锁任务
-    bool submit_lockfree(const std::string& name, std::function<void()> task);
-
-    // 获取无锁执行器
-    LockFreeTaskExecutor* get_lockfree_executor(const std::string& name);
+    // LowLatency 路由目标：accepted 仅表示有界队列已接收，不代表完成
+    DispatchResult dispatch_auto(TaskOptions options, std::function<void()> task);
 };
 ```
+
+`ExecutorManager` 侧另有 `try_push_lockfree_task(name, task)`（非持有查询用
+`get_lockfree_executor_snapshot`）。注意：不存在 `Executor::submit_lockfree`；
+低延迟提交统一经 `dispatch_auto` + `TaskOptions{LowLatency}`。
 
 ## 使用示例
 
@@ -221,8 +234,14 @@ logger.push_task([msg = get_log_message()]() {
 
 ### 示例 2：传感器数据处理
 
+> 注意：`executor::util::LockFreeQueue` 位于 `src/executor/util/lockfree_queue.hpp`，
+> 是**内部实现头文件**，未随 `include/executor/` 安装，不构成公开 API。需要队列
+> 语义的公开入口是 `executor::comm` 的 channel / mailbox（`include/executor/comm/`）
+> 或 `LockFreeTaskExecutor`。以下示例保留为设计参考。
+
 ```cpp
-#include <executor/util/lockfree_queue.hpp>
+// 内部头文件，仅核心库/测试可编译；应用代码请勿依赖
+#include "util/lockfree_queue.hpp"
 
 struct SensorData { int64_t ts; float value; };
 
