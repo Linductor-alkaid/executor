@@ -643,6 +643,11 @@ WorkerHandle start_worker(BlockingWorkerSpec spec);
 - 支持多个线程并发调用 `push_task()`
 - 单个消费者线程处理任务
 - 使用 CAS (Compare-And-Swap) 保证线程安全
+- 提交路径除队列与对象池自身的原子操作外无任何互斥锁（对象池为 tagged
+  索引 freelist，无锁 acquire/release）
+- 消费者线程空闲时进入 futex 驻停：长期空闲的执行器 CPU 占用近零；
+  间隔数百微秒的零星任务由退避缓冲带轮询捡起，任务提交后由生产者
+  定向唤醒
 - 完全向后兼容单生产者场景
 
 **限制**：

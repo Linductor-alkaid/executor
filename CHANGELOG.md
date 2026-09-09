@@ -64,6 +64,28 @@ failure 体系。
 
 ### 性能
 
+- **无锁组件兑现与 RT 优先级反转消除（性能审查 PA-5/7/8，2026-09 收敛计划
+  阶段 P2）**：`ObjectPool` 改 tagged Treiber 索引 freelist（`(tag:32 |
+  index:32)` 单字 head，ABA 由 tag 封闭；消费者 `release_bulk` 整链单 CAS
+  splice；双重释放检测改为 per-node state CAS，语义不变）——
+  `LockFreeTaskExecutor` 提交路径与 RT 线程逐任务 `release` 不再共享互斥锁，
+  RT 路径优先级反转面消除；`LockFreeQueue` 消费侧 MPMC 化（前沿连续
+  Published run 单 CAS 认领），`LockFreeWorkerQueue` 的 pop/steal/size 去
+  `consume_mx_`（steal 与 pop 同为 FIFO 最老端，恰好一次交付），`size()`
+  改无锁近似值；LockFree worker 空闲从 1µs-sleep 永久轮询（约 10⁶
+  syscall/s/核）改为「PAUSE → yield → 10µs-sleep 缓冲带 → futex 驻停」，
+  驻停编码进 32 位 `wake_seq_`（bit0=驻停位 + 唤醒计数，生产者 push 后
+  无条件 `fetch_add(2)`、返回值带驻停位才 `notify_one`，忙碌路径零
+  syscall），空闲 executor 进程 CPU 实测 0.0ms/500ms。实现期修复两个
+  深挖出的并发陷阱（条件唤醒标志被 StoreLoad 重排打穿致挂死；CAS 循环
+  带陈旧期望值重试致偶发线程饿死 20 秒+）。基准（同机同条件 3 次取中位）：
+  mpsc 吞吐 1P +86%、8P +289%、16P +482%、32P +399%；RT 执行器提交延迟
+  -21%；RT 1ms 周期 jitter p50 78.7→16.8µs；已知取舍：2-4 生产者 mpsc
+  吞吐 -23%~-24%（Treiber 单链低生产者数下的缓存行往返，详见计划文档
+  P2 小节归因实验与后续条目）。新增 `test_object_pool_lockfree_stress`
+  （多生产者锤击 + RT 延迟分布 + 空闲 CPU 守护 + 驻停唤醒守护）。设计
+  推导与基准全表见
+  `docs/todolists/performance_audit_2026-09_plan.md` 阶段 P2 小节。
 - **线程池提交热路径重构（性能审查 PA-1/2/3/4、PA-9/13/17，2026-09 收敛计划
   阶段 P1）**：worker 空闲驻停从「全局 `mutex_` + `condition_` 重谓词（谓词内做
   steal/dequeue，含堆分配与排序）」改为 32 位驻停代次计数 + C++20

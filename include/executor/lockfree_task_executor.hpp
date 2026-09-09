@@ -232,6 +232,8 @@ private:
     bool enter_push();
     void leave_push();
     void worker_thread();
+    size_t park_worker(TaskWrapper** batch, size_t batch_size);
+    void wake_worker_if_parking();
     QueueStats make_queue_stats(const util::LockFreeQueueStats& raw) const;
 
     std::unique_ptr<util::LockFreeQueue<TaskWrapper*>> queue_;
@@ -269,6 +271,25 @@ private:
     std::mutex exception_handler_mutex_;
     std::function<void(std::exception_ptr)> exception_handler_;
     uint32_t idle_count_{0};  // only accessed from worker_thread
+
+    // PA-8: 空闲驻停（替代原 1µs-sleep 永久轮询，约 10⁶ syscall/s/核）。
+    // wake_seq_ 必须是 32 位：libstdc++ 仅对 4 字节标量走 futex 直达路径，
+    // 64 位会落入内部 mutex+condvar waiter 池（与 ThreadPool P1 相同结论）。
+    //
+    // 编码：bit0 = 驻停标志（仅 worker 置位/清除），bit1..30 = 唤醒计数
+    // （生产者每次 push 成功后 fetch_add(2) 无条件递增）。生产者的 RMW
+    // 是全序操作（x86 lock 指令排空 store buffer）：push 的发布存储必然
+    // 先于该 RMW 全局可见——worker 端要么置位后终扫看到任务，要么
+    // wait 的原子复核看到计数变化，两者不可能同时错过（条件 load 检查
+    // 会被 StoreLoad 重排打穿，故驻停标志必须并入被 RMW 的同一字）。
+    // 通知条件式：仅当 RMW 返回值带驻停位才 notify_one，忙碌路径
+    // 零 syscall、一次 lock xadd。
+    static constexpr uint32_t kParkedBit = uint32_t{1} << 0;
+    alignas(64) std::atomic<uint32_t> wake_seq_{0};
+    // set_before_publish_hook 安装的用户回调与上下文；队列里装的是
+    // 会先唤醒驻停 worker 的 trampoline（见 .cpp）。
+    BeforePublishHook user_before_publish_hook_{nullptr};
+    void* user_before_publish_context_{nullptr};
 };
 
 } // namespace executor

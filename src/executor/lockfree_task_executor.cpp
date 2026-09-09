@@ -78,6 +78,10 @@ bool LockFreeTaskExecutor::stop_and_join() {
             std::this_thread::yield();
         }
         running_.store(false, std::memory_order_release);
+        // PA-8: 唤醒可能驻停在 futex 上的 worker，否则 join 会一直等待。
+        // fetch_add(2) 保留 bit0 驻停位语义。
+        wake_seq_.fetch_add(2, std::memory_order_release);
+        wake_seq_.notify_all();
         if (worker_.joinable()) {
             joiner = std::move(worker_);
         }
@@ -117,10 +121,16 @@ bool LockFreeTaskExecutor::push_task(std::function<void()> task) {
     if (!queue_->push(wrapper)) {
         task_pool_->release(wrapper);
         leave_push();
+        // PA-8: 失败的提交同样意味着队列可能需要消费者维护——被取消的
+        // 槽位（预留取消/批量回滚）要等消费者物理推进后才重新可用，
+        // 而驻停的 worker 不会自发发现这一点。
+        wake_worker_if_parking();
         return false;
     }
 
     leave_push();
+    // PA-8: worker 空闲驻停时的定向唤醒。忙碌路径只付出一次 acquire load。
+    wake_worker_if_parking();
     return true;
 }
 
@@ -204,12 +214,16 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
         bool ok = queue_->push_batch_exact(ptrs.data(), count);
         if (ok) {
             pushed = count;
+            wake_worker_if_parking();
         } else {
             // An unsuccessful exact batch is completely non-observable, so
             // every acquired wrapper remains ours to return to the pool.
             for (size_t i = 0; i < count; ++i) {
                 task_pool_->release(ptrs[i]);
             }
+            // PA-8: 失败路径已把预留槽位置为 Cancelled；驻停的 worker
+            // 需要被唤醒才会推进前沿、释放这些槽位。
+            wake_worker_if_parking();
         }
 
         return ok;
@@ -304,7 +318,26 @@ LockFreeTaskExecutor::QueueStats LockFreeTaskExecutor::get_status_snapshot() con
 }
 
 void LockFreeTaskExecutor::set_before_publish_hook(BeforePublishHook hook, void* context) {
-    queue_->set_before_publish_hook(hook, context);
+    // PA-8: hook 是"生产者可能在提交窗口内停滞"的信号（诊断/恢复契约）。
+    // worker 驻停后不再轮询，pop 侧的 scan-ahead 取消与 Reserved 前沿
+    // 恢复需要消费者活动触发——这里装一层 trampoline，进入 hook 前
+    // 定向唤醒驻停的 worker，保证停滞窗口内消费者至少完成一轮 pop
+    // 维护。无 hook 时零开销（trampoline 不安装）。
+    user_before_publish_hook_ = hook;
+    user_before_publish_context_ = context;
+    if (hook == nullptr) {
+        queue_->set_before_publish_hook(nullptr, nullptr);
+        return;
+    }
+    queue_->set_before_publish_hook(
+        [](void* self) {
+            auto* exec = static_cast<LockFreeTaskExecutor*>(self);
+            exec->wake_worker_if_parking();
+            if (exec->user_before_publish_hook_) {
+                exec->user_before_publish_hook_(exec->user_before_publish_context_);
+            }
+        },
+        this);
 }
 
 void LockFreeTaskExecutor::set_before_batch_allocation_hook_for_test(
@@ -361,8 +394,47 @@ void LockFreeTaskExecutor::worker_thread() {
     while (true) {
         size_t popped = queue_->pop_batch(batch.data(), BATCH_SIZE);
 
+        if (popped == 0) {
+            if (!running_.load(std::memory_order_acquire)) {
+                break;
+            }
+
+            // PA-8: Hybrid backoff: PAUSE spin → yield → 10µs-sleep 轮询
+            // 缓冲带 → futex 驻停。原实现为永久 1µs-sleep 轮询，空闲时
+            // 约 10⁶ syscall/s/核；驻停后空闲 CPU 占用近零。
+            //
+            // 缓冲带（10µs × 50 ≈ 500µs）不是可省的过渡：它把「间隔
+            // 数百微秒的零星任务」负载钉在轮询捡起路径上——超载机器上
+            // 刚被 futex 唤醒的线程要排在持续 runnable 的轮询线程后面，
+            // 直接驻停会把这类负载的提交→执行尾延迟从 ~60µs 推到
+            // ~150µs+（100µs 级承诺见 benchmark_lockfree_task_executor）。
+            // 只有真正长期空闲（≥~0.6ms 无任务）才进入零 CPU 驻停。
+            static constexpr uint32_t kPauseSpins  = 32;
+            static constexpr uint32_t kYieldThresh = 64;
+            static constexpr uint32_t kSleepThresh = kYieldThresh + 50;
+            idle_count_++;
+            if (idle_count_ <= kPauseSpins) {
+                EXECUTOR_PAUSE();
+            } else if (idle_count_ <= kYieldThresh) {
+                std::this_thread::yield();
+            } else if (idle_count_ <= kSleepThresh) {
+                std::this_thread::sleep_for(std::chrono::microseconds(10));
+            } else {
+                // park_worker 的置位后终扫可能直接带回任务（跳过一次
+                // 无谓的驻停+唤醒往返），带回时立即落入下方处理路径。
+                popped = park_worker(batch.data(), BATCH_SIZE);
+                if (popped > 0) {
+                    idle_count_ = 0;
+                }
+            }
+            if (popped == 0) {
+                continue;
+            }
+        }
+
         if (popped > 0) {
             bool self_stop_interrupted_batch = false;
+            size_t executed = 0;
             for (size_t i = 0; i < popped; ++i) {
                 try {
                     batch[i]->func();
@@ -386,37 +458,24 @@ void LockFreeTaskExecutor::worker_thread() {
                         }
                     }
                 }
-                task_pool_->release(batch[i]);
+                ++executed;
                 if (!running_.load(std::memory_order_acquire) &&
                     self_stop_requested_.load(std::memory_order_acquire)) {
-                    for (size_t remaining = i + 1; remaining < popped; ++remaining) {
-                        task_pool_->release(batch[remaining]);
-                    }
+                    // 批内自停：已执行的批量回收，剩余的也立即归还。
+                    task_pool_->release_bulk(batch.data(), executed);
+                    task_pool_->release_bulk(batch.data() + executed,
+                                             popped - executed);
                     processed_count_.fetch_add(i + 1, std::memory_order_relaxed);
                     self_stop_interrupted_batch = true;
                     break;
                 }
             }
             if (!self_stop_interrupted_batch) {
+                // PA-5: 整批一次 splice 回池（一次 head CAS），消费者侧对
+                // 生产者热字 head_ 的往返从每任务一次摊薄为每批一次。
+                task_pool_->release_bulk(batch.data(), popped);
                 processed_count_.fetch_add(popped, std::memory_order_relaxed);
             }
-        } else {
-            if (!running_.load(std::memory_order_acquire)) {
-                break;
-            }
-
-            // Hybrid backoff: PAUSE spin → yield → 1µs sleep
-            static constexpr uint32_t kPauseSpins  = 32;
-            static constexpr uint32_t kSleepThresh = 1000;
-            idle_count_++;
-            if (idle_count_ <= kPauseSpins) {
-                EXECUTOR_PAUSE();
-            } else if (idle_count_ <= kSleepThresh) {
-                std::this_thread::yield();
-            } else {
-                std::this_thread::sleep_for(std::chrono::microseconds(1));
-            }
-            continue;
         }
         idle_count_ = 0;
     }
@@ -426,7 +485,7 @@ void LockFreeTaskExecutor::worker_thread() {
     }
 
     // 处理剩余任务
-    size_t popped;
+    size_t popped = 0;
     while ((popped = queue_->pop_batch(batch.data(), BATCH_SIZE)) > 0) {
         for (size_t i = 0; i < popped; ++i) {
             try {
@@ -446,9 +505,48 @@ void LockFreeTaskExecutor::worker_thread() {
                     }
                 }
             }
-            task_pool_->release(batch[i]);
         }
+        task_pool_->release_bulk(batch.data(), popped);
         processed_count_.fetch_add(popped, std::memory_order_relaxed);
+    }
+}
+
+size_t LockFreeTaskExecutor::park_worker(TaskWrapper** batch, size_t batch_size) {
+    // PA-8 丢失唤醒封闭推导（与 ThreadPool P1 的代次驻停同构）：
+    //  - bump 发生在置位(2)读取的计数值之后 -> wait 的原子 check-and-block
+    //    发现值变化，立即返回重扫；
+    //  - bump 发生在置位(2)之前 -> 入队 happened-before bump（生产者
+    //    程序序 + RMW 全序），bump happened-before 置位所读的计数值
+    //    （wake_seq_ 原子全序），置位 sequenced-before 终扫(3) -> 终扫
+    //    透过队列原子必然看到该任务，不会驻停。
+    // 两个方向都不存在丢失唤醒窗口；若生产者的 bump 读到置位后的值，
+    // 其返回值带驻停位，notify_one 兜底。wait 允许虚假唤醒，醒来重扫。
+    //
+    // (1) 读当前计数，构造驻停值（bit0 置位，计数保留）。
+    const uint32_t current = wake_seq_.load(std::memory_order_acquire);
+    const uint32_t parked_value = current | kParkedBit;
+    // (2) 发布驻停值。
+    wake_seq_.store(parked_value, std::memory_order_release);
+    // (3) 置位后终扫：看到任务则直接带回，不驻停。
+    size_t popped = queue_->pop_batch(batch, batch_size);
+    if (popped > 0) {
+        wake_seq_.fetch_and(~kParkedBit, std::memory_order_release);
+        return popped;
+    }
+    // (4) futex 驻停（32 位 wake_seq_ 走 libstdc++ futex 直达路径）。
+    // 停滞生产者的恢复（scan-ahead 取消未决预留）不经过 push 成功路径，
+    // 由 set_before_publish_hook 的 trampoline 在进入停滞窗口前定向唤醒。
+    wake_seq_.wait(parked_value, std::memory_order_acquire);
+    wake_seq_.fetch_and(~kParkedBit, std::memory_order_release);
+    return 0;
+}
+
+void LockFreeTaskExecutor::wake_worker_if_parking() {
+    // 无条件 RMW（全序、排空 store buffer——条件 load 检查会被 StoreLoad
+    // 重排打穿）。仅当返回值带驻停位才发 futex notify：忙碌路径零 syscall。
+    const uint32_t previous = wake_seq_.fetch_add(2, std::memory_order_release);
+    if (previous & kParkedBit) {
+        wake_seq_.notify_one();
     }
 }
 
