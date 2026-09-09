@@ -5,7 +5,6 @@
 #include <atomic>
 #include <utility>
 #include <memory>
-#include <mutex>
 #include <vector>
 #include <cstdint>
 #include <exception>
@@ -16,13 +15,17 @@ namespace executor {
 /**
  * @brief 无锁工作线程本地队列
  *
- * 使用 LockFreeQueue (MPSC) + unique_ptr 包装实现高性能 push/pop。
+ * 使用 LockFreeQueue (MPMC) + unique_ptr 包装实现高性能 push/pop。
  * Task 包含 std::function 和 atomic，不是 trivially copyable，
  * 因此使用 uintptr_t 存储指针，绕过类型限制。
  *
- * LockFreeQueue 是 MPSC 队列，消费端没有 CAS 抢占语义。为避免 owner pop
- * 和 work-stealing steal 同时消费同一槽位，pop/steal 在本包装层用 mutex
- * 串行化；push 路径仍不加该锁。
+ * PA-7: 消费互斥已移除。底层队列的 pop 侧改为 CAS 认领（见
+ * LockFreeQueue::pop_impl），owner 的 pop() 与其他 worker 的 steal()
+ * 可以并发消费且恰好一次；steal 与 pop 同为 FIFO 最老端出队
+ * （测试钉死 steal 必须取最老任务，而非 Chase-Lev 的另一端）。
+ * 旧的共享 steal_buffer_ 批量预取也一并移除：它需要消费者间互斥，
+ * 且其"减少锁获取次数"的唯一收益随互斥的消失而消失。
+ * size() 现为队列自身的无锁近似值，不再获取任何锁。
  */
 class LockFreeWorkerQueue {
 public:
@@ -105,16 +108,6 @@ public:
     }
 
     bool pop(Task& task) {
-        std::lock_guard<std::mutex> lock(consume_mx_);
-
-        if (!steal_buffer_.empty()) {
-            uintptr_t ptr = steal_buffer_.back();
-            steal_buffer_.pop_back();
-            std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
-            move_task(task, std::move(*task_ptr));
-            return true;
-        }
-
         uintptr_t ptr;
         if (!main_queue_.pop(ptr)) {
             return false;
@@ -124,33 +117,13 @@ public:
         return true;
     }
 
+    // PA-7: 窃取与 pop 走同一条 CAS 认领出队路径，无锁、FIFO 最老端。
     bool steal(Task& task) {
-        std::lock_guard<std::mutex> lock(consume_mx_);
-
-        if (steal_buffer_.empty()) {
-            constexpr size_t STEAL_BATCH = 16;
-            uintptr_t ptrs[STEAL_BATCH];
-            size_t stolen = main_queue_.pop_batch(ptrs, STEAL_BATCH);
-
-            if (stolen == 0) {
-                return false;
-            }
-
-            for (size_t i = stolen; i > 0; --i) {
-                steal_buffer_.push_back(ptrs[i - 1]);
-            }
-        }
-
-        uintptr_t ptr = steal_buffer_.back();
-        steal_buffer_.pop_back();
-        std::unique_ptr<Task> task_ptr(reinterpret_cast<Task*>(ptr));
-        move_task(task, std::move(*task_ptr));
-        return true;
+        return pop(task);
     }
 
     size_t size() const {
-        std::lock_guard<std::mutex> lock(consume_mx_);
-        return main_queue_.size() + steal_buffer_.size();
+        return main_queue_.size();
     }
 
     bool empty() const {
@@ -160,17 +133,9 @@ public:
     void clear() {
         std::vector<std::unique_ptr<Task>> discarded;
 
-        {
-            std::lock_guard<std::mutex> lock(consume_mx_);
-
-            uintptr_t ptr;
-            while (main_queue_.pop(ptr)) {
-                discarded.emplace_back(reinterpret_cast<Task*>(ptr));
-            }
-            for (auto p : steal_buffer_) {
-                discarded.emplace_back(reinterpret_cast<Task*>(p));
-            }
-            steal_buffer_.clear();
+        uintptr_t ptr;
+        while (main_queue_.pop(ptr)) {
+            discarded.emplace_back(reinterpret_cast<Task*>(ptr));
         }
 
         for (auto& task : discarded) {
@@ -223,9 +188,6 @@ private:
     }
 
     util::LockFreeQueue<uintptr_t> main_queue_;
-
-    mutable std::mutex consume_mx_;
-    std::vector<uintptr_t> steal_buffer_;
 };
 
 } // namespace executor

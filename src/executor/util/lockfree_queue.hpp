@@ -60,9 +60,11 @@ struct LockFreeQueueStats {
 };
 
 /**
- * @brief 无锁队列（MPSC - 多生产者单消费者）
+ * @brief 无锁队列（MPMC - 多生产者多消费者）
  *
- * 使用序列号跟踪每个槽位状态，保证线程安全。
+ * 使用序列号跟踪每个槽位状态，保证线程安全。生产侧经 enqueue_pos_ CAS
+ * 预留槽位；消费侧（PA-7 起）经 dequeue_pos_ CAS 认领前沿，pop()/
+ * pop_batch() 可被多线程并发调用，恰好一次交付。
  *
  * @tparam T 队列元素类型，必须是可平凡复制的（trivially copyable）
  */
@@ -526,30 +528,77 @@ private:
         return false;
     }
 
+    // PA-7: multi-consumer consume side. The queue used to advance
+    // dequeue_pos_ with a blind load/store, which restricted pop() to a
+    // single consumer (LockFreeWorkerQueue serialized owner pop and thief
+    // steal behind a mutex). Consumers now CLAIM the frontier with a CAS:
+    // exactly one consumer can move dequeue_pos_ from pos to pos + run, so
+    // pop()/pop_batch() are safe to call concurrently and the mutex is gone.
+    //
+    // Claim protocol: verify the longest run of consecutively Published
+    // slots starting at the frontier, claim the whole run with ONE CAS, then
+    // consume it. Published slots never regress to a non-consumable state
+    // except by a consumer (producers only move slots toward Published), so
+    // a verified run stays valid across the CAS. Losing consumers simply
+    // reload the frontier. Producers cannot enter a claimed slot for the
+    // next lap until the claimant's sequence/state release stores land
+    // (reservation requires sequences_[i] == next-lap position).
     size_t pop_impl(T* items, size_t max_count, bool batch) {
         size_t popped = 0;
-        size_t pos = dequeue_pos_.load(std::memory_order_relaxed);
         const size_t enqueued = enqueue_pos_.load(std::memory_order_acquire);
 
-        while (pos < enqueued && popped < max_count) {
+        while (popped < max_count) {
+            size_t pos = dequeue_pos_.load(std::memory_order_acquire);
+            if (pos >= enqueued) break;
             const size_t index = pos & mask_;
             SlotState state = slot_state(index);
             if (state == SlotState::Published &&
                 sequences_[index].load(std::memory_order_acquire) == pos + 1) {
-                items[popped++] = buffer_[index];
-                sequences_[index].store(pos + capacity_, std::memory_order_release);
-                states_[index].store(state_tag(pos + capacity_, SlotState::Free),
-                                     std::memory_order_release);
-                ready_approx_.fetch_sub(1, std::memory_order_relaxed);
-                ++pos;
+                const size_t run_limit =
+                    std::min(max_count - popped, enqueued - pos);
+                size_t run = 1;
+                while (run < run_limit) {
+                    const size_t run_index = (pos + run) & mask_;
+                    if (slot_state(run_index) != SlotState::Published ||
+                        sequences_[run_index].load(std::memory_order_acquire) !=
+                            pos + run + 1) {
+                        break;
+                    }
+                    ++run;
+                }
+                if (!dequeue_pos_.compare_exchange_weak(
+                        pos, pos + run,
+                        std::memory_order_acq_rel, std::memory_order_acquire)) {
+                    continue;  // frontier moved under us; reload and retry
+                }
+                // The claimed range [pos, pos + run) is exclusively ours:
+                // other consumers can no longer reach these positions.
+                for (size_t k = 0; k < run; ++k) {
+                    const size_t claim_index = (pos + k) & mask_;
+                    items[popped++] = buffer_[claim_index];
+                    sequences_[claim_index].store(pos + k + capacity_,
+                                                  std::memory_order_release);
+                    states_[claim_index].store(
+                        state_tag(pos + k + capacity_, SlotState::Free),
+                        std::memory_order_release);
+                    ready_approx_.fetch_sub(1, std::memory_order_relaxed);
+                }
                 continue;
             }
             if (state == SlotState::Reserved) {
                 if (cancel_reservation(index, pos)) {
-                    sequences_[index].store(pos + capacity_, std::memory_order_release);
-                    states_[index].store(state_tag(pos + capacity_, SlotState::Free),
-                                         std::memory_order_release);
-                    ++pos;
+                    // Whoever wins the frontier CAS performs the cleanup;
+                    // cancel_reservation itself is CAS-guarded, so at most one
+                    // consumer reaches this branch with a cancelled slot.
+                    if (dequeue_pos_.compare_exchange_weak(
+                            pos, pos + 1,
+                            std::memory_order_acq_rel, std::memory_order_acquire)) {
+                        sequences_[index].store(pos + capacity_,
+                                                std::memory_order_release);
+                        states_[index].store(
+                            state_tag(pos + capacity_, SlotState::Free),
+                            std::memory_order_release);
+                    }
                     continue;
                 }
                 state = slot_state(index);
@@ -570,19 +619,19 @@ private:
                 break;
             }
             if (state == SlotState::Cancelled) {
-                sequences_[index].store(pos + capacity_, std::memory_order_release);
-                states_[index].store(state_tag(pos + capacity_, SlotState::Free),
-                                     std::memory_order_release);
-                ++pos;
+                if (dequeue_pos_.compare_exchange_weak(
+                        pos, pos + 1,
+                        std::memory_order_acq_rel, std::memory_order_acquire)) {
+                    sequences_[index].store(pos + capacity_,
+                                            std::memory_order_release);
+                    states_[index].store(state_tag(pos + capacity_, SlotState::Free),
+                                         std::memory_order_release);
+                }
                 continue;
             }
             if (state == SlotState::Free) break;
             // A producer has begun the non-interruptible data-write window.
             break;
-        }
-
-        if (pos != dequeue_pos_.load(std::memory_order_relaxed)) {
-            dequeue_pos_.store(pos, std::memory_order_release);
         }
         if (popped > 0) {
             if (stats_enabled_.load(std::memory_order_relaxed)) {

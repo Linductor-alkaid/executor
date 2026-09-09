@@ -36,10 +36,10 @@ facade/监控的单点修复，可独立小步合入；阶段 P5 为 GPU 路径�
 | PA-2 | H | ✅ worker 等待谓词持全局锁做 steal/dequeue（含分配+排序） | `thread_pool.cpp:218-241` | P1 |
 | PA-3 | H | ✅ `dispatch_batch` 每次派发 4-6 次堆分配，判空前即分配 | `thread_pool/task_dispatcher.hpp:199-219` | P1 |
 | PA-4 | H | ✅ Task 从提交到执行复制 4-5 次（每次复制 2 个 std::function） | `priority_scheduler.cpp:8-30`、`task_dispatcher.hpp:21-31`、`worker_local_queue.cpp:28,66-73` | P1 |
-| PA-5 | H | `ObjectPool` 带互斥锁；LockFree 提交/RT 消费串行化，RT 路径有优先级反转 | `src/util/object_pool.hpp:60,80`；`lockfree_task_executor.cpp:108,117,389`；`realtime_thread_executor.cpp:416,548` | P2 |
+| PA-5 | H | ✅ `ObjectPool` 带互斥锁；LockFree 提交/RT 消费串行化，RT 路径有优先级反转 | `src/util/object_pool.hpp:60,80`；`lockfree_task_executor.cpp:108,117,389`；`realtime_thread_executor.cpp:416,548` | P2 |
 | PA-6 | H | facade tracked 提交/完成路径 `task_graph_mutex_` + `notify_all` 每任务 3 次 | `executor.cpp:308-427`、`executor.hpp:1837-1849` | P4 |
-| PA-7 | H | `LockFreeWorkerQueue` push 每次 `new Task`，pop/steal/size 共用 `consume_mx_` | `thread_pool/lockfree_worker_queue.hpp:33-134` | P2 |
-| PA-8 | M | LockFree worker 空闲永驻 1µs-sleep 轮询（约 10⁶ syscall/s/核） | `lockfree_task_executor.cpp:408-418` | P2 |
+| PA-7 | H | ✅ `LockFreeWorkerQueue` push 每次 `new Task`，pop/steal/size 共用 `consume_mx_` | `thread_pool/lockfree_worker_queue.hpp:33-134` | P2 |
+| PA-8 | M | ✅ LockFree worker 空闲永驻 1µs-sleep 轮询（约 10⁶ syscall/s/核） | `lockfree_task_executor.cpp:408-418` | P2 |
 | PA-9 | M | ✅ `std::atomic_load(shared_ptr*)` 每次 worker 迭代/派发/提交（libstdc++ 库级自旋锁） | `thread_pool.cpp:200,227,248,276`、`task_dispatcher.hpp:256` | P1 |
 | PA-10 | M | LoadBalancer 写锁每任务一次（所有 worker 串行完成） | `thread_pool.cpp:274-280`、`load_balancer.cpp:87-96` | P4 |
 | PA-11 | M | `ready_approx_`/`reserved_approx_` 全局缓存行 RMW（仅服务近似 size） | `util/lockfree_queue.hpp:132-133,543` | P4 |
@@ -167,30 +167,103 @@ futex，64 位会落入内部 mutex+condvar waiter 池）。实现要点：
 
 ---
 
-## 阶段 P2：无锁组件兑现与 RT 优先级反转（PA-5/7/8）
+## 阶段 P2：无锁组件兑现与 RT 优先级反转（PA-5/7/8）✅ 已完成
+
+落地实现（2026-09-09）：
+
+- **PA-5**：`ObjectPool` 改 tagged Treiber 索引 freelist——head 为 64 位
+  `(tag:32 | index:32)` 单字，release 先写 `node->next` 再 CAS head（tag+1），
+  acquire 失败指数 PAUSE 退避后**重读期望值**再重试（见下述陷阱）；
+  `release_bulk` 把整链一次 splice 回池（消费者侧 head_ 往返每批一次）。
+  ABA 由 tag 封闭（同一 head 值经 release 后不可复现）。
+  双重释放检测从 `in_free_list` 布尔改为 per-node `state` CAS（1→0），
+  语义与旧 mutex 版一致（重取后的二次释放同为盲区）。容量上限
+  `kNilIndex-1`（构造期拒绝，含 0 容量原校验）。提交路径（LockFree
+  push_task/push_tasks_batch）与 RT 消费路径（process_tasks 每任务
+  release）不再共享任何 mutex，RT 优先级反转面消除。实现期深挖出两个
+  并发陷阱（修复均有注释与压力测试守护）：其一，生产者侧「条件 load
+  驻停标志」的唤醒会被 x86 StoreLoad 重排打穿（满载实测挂死），驻停
+  标志必须并入被生产者无条件 RMW 的同一字；其二，CAS 循环带退避前的
+  陈旧期望值重试在高争用下确定性失败，偶发参与者（RT 线程）曾饿死
+  20 秒+，每轮重试必须重读期望值。
+- **PA-7**：`LockFreeQueue` 消费侧 MPMC 化——`pop_impl` 从「load/store
+  dequeue_pos_」改为「验证前沿连续 Published run → 单 CAS 认领 [pos,
+  pos+run) → 独占消费」，Published 槽位不回退的性质保证验证跨 CAS 有效；
+  Reserved/Cancelled 前沿的维护性跳过与 BatchWriting scan-ahead 取消逻辑
+  原样保留（认领者负责清理，CAS 失败方重载前沿）。单消费者批量路径
+  仍为每批一次 CAS。`LockFreeWorkerQueue` 随之删除 `consume_mx_` 与共享
+  `steal_buffer_`（steal=pop，同 FIFO 最老端——测试钉死 steal 必须取最老
+  任务，Chase-Lev 的另一端窃取与该契约冲突，故未采用 deque 方案）；
+  `size()` 改用队列无锁近似值。
+- **PA-8**：LockFree worker 空闲退避改为 PAUSE(32) → yield(64) →
+  10µs-sleep ×50（缓冲带）→ futex 驻停。驻停编码进 32 位 `wake_seq_`
+  单字（bit0=驻停位，bit1..30=唤醒计数）：生产者 push 成功后**无条件**
+  `fetch_add(2)`（RMW 全序排空 store buffer——条件 load 检查会被
+  StoreLoad 重排打穿，曾实测挂死），返回值带驻停位才 `notify_one`，
+  忙碌路径零 syscall。缓冲带（≈500µs）钉住「数百 µs 间隔零星任务」的
+  尾延迟：超载机器上刚被 futex 唤醒的线程排在持续 runnable 的轮询线程
+  之后，无缓冲带时该负载 p99 从 ~60µs 恶化到 ~150µs+（对照实验实锤，
+  100µs 级承诺见 benchmark_lockfree_task_executor）。长期空闲（≥~0.6ms）
+  才进入零 CPU 驻停；实测空闲 500ms 窗口进程 CPU 0.0ms（旧轮询为
+  10⁶ syscall/s/核）。停滞生产者恢复（scan-ahead 取消）不经过 push 成功
+  路径，由 before_publish hook 的 trampoline 在进入停滞窗口前定向唤醒；
+  失败的提交（取消后槽位需消费者物理推进）同样定向唤醒。
 
 ### 任务
 
-- [ ] PA-5：`ObjectPool` 改无锁索引 freelist（连续数组 + index/tag 防 ABA；注释中已
-  记录旧无锁版本存在），或至少批量获取；同批消除 RT 线程经 `release` 的 mutex
-  （PA-5 的 RT 优先级反转面）。短期过渡可 `PTHREAD_PRIO_INHERIT`。
-- [ ] PA-7：`LockFreeWorkerQueue` 存 `unique_ptr<Task>` 进真正的 chase-lev deque；
-  `size()` 改用队列已有的无锁近似值，pop/steal 不再共用 `consume_mx_`。
-- [ ] PA-8：LockFree worker 空闲退避升级（1µs → 100µs~1ms 上限）或 eventfd/futex
-  驻停（生产者在空→非空转换时唤醒）。
+- [x] PA-5：`ObjectPool` 改无锁索引 freelist（连续数组 + index/tag 防 ABA）；
+  同批消除 RT 线程经 `release` 的 mutex（PA-5 的 RT 优先级反转面）。
+- [x] PA-7：pop/steal 不再共用 `consume_mx_`（消费侧 MPMC 化）；
+  `size()` 改用队列已有的无锁近似值。Chase-Lev 方案因与「steal 取最老
+  任务 + prefetch 对 pop/size 可见」的既定测试契约冲突而未采用（见上）。
+- [x] PA-8：LockFree worker 空闲退避升级为缓冲带 + futex 驻停（生产者在
+  push 路径 RMW 定向唤醒）。
 
 ### 验收
 
-- [ ] `docs/API.md` §5.4 的性能承诺与实现一致：MPSC 提交路径除队列自身原子操作外无
-  全局锁（以 TSAN/基准佐证）。
-- [ ] RT 周期抖动基准（`docs/optimization/realtime_precision_*.json` 口径）不劣化；
-  消除 RT 线程等待 pool mutex 的窗口。
-- [ ] 既有 lockfree/realtime 全部测试通过。
+- [x] `docs/API.md` §5.4 的性能承诺与实现一致：MPSC 提交路径除队列自身原子操作外无
+  全局锁（以 TSAN/基准佐证）。TSAN 对池/队列/驻停/窃取全部改动零告警；
+  提交路径 = admission RMW + 无锁池 acquire + 无锁队列 push + 唤醒 RMW，
+  无任何 mutex。
+- [x] RT 周期抖动基准（`docs/optimization/realtime_precision_*.json` 口径）不劣化；
+  消除 RT 线程等待 pool mutex 的窗口。1ms 周期 jitter p50 由 ~78.7µs 降至
+  ~16.8µs（gcc-13 Release 本机 3 次取中位；n=20/周期的该基准方差大，
+  逐轮 p50 为 24.7/21.6/140.5µs vs 基线 78.7/74.5/2280µs）。
+- [x] 既有 lockfree/realtime 全部测试通过（默认模式 140 项全量、lockfree 双模式
+  140 项全量、TSAN CI 同款 14/14 + 扩展并发集 21/21，均零 ThreadSanitizer
+  告警；满载 ctest -j4 下仅既有的 benchmark_lockfree_task_executor P99
+  抖动与 master 同负载同频率复现，对照实验确认非本批引入）。
+
+### 基准对比（14 核 Ultra 5 225H，gcc-13 Release，3 次取中位）
+
+| 指标 | 基线 | 本批 | 变化 |
+| --- | --- | --- | --- |
+| mpsc 吞吐 1 生产者 | 874k/s | 1.62M/s | +86% |
+| mpsc 吞吐 2 生产者 | 2.16M/s | 1.65M/s | **-24%（已知取舍，见下）** |
+| mpsc 吞吐 4 生产者 | 2.21M/s | 1.69M/s | **-23%（同上）** |
+| mpsc 吞吐 8 生产者 | 732k/s | 2.85M/s | +289% |
+| mpsc 吞吐 16 生产者 | 380k/s | 2.21M/s | +482% |
+| mpsc 吞吐 32 生产者 | 397k/s | 1.98M/s | +399% |
+| lockfree 执行器提交延迟 avg/p50 | 1217/1069ns | 994/1107ns | -18%/+4% |
+| RT 执行器提交延迟 | 274ns | 215ns | -21% |
+| RT 1ms 周期 jitter p50 | 78.7µs | 16.8µs | -79% |
+| 空闲 lockfree 执行器 CPU | ~10⁶ syscall/s | 0.0ms/500ms | ≈清零 |
+| lockfree 模式 thread pool 提交吞吐 1P | 470k/s | 500k/s | +6% |
+
+已知取舍：2-4 生产者的 mpsc 吞吐 -23%~-24%。归因实验（mutex 池 + 新队列/驻停
+= 恢复基线）确认瓶颈是 Treiber 单链 head_ 在低生产者数下的缓存行往返（mutex 的
+自适应自旋在该区间恰好占优）；实现中已做三项缓解（消费者 release_bulk 整链
+splice、CAS 失败指数 PAUSE 退避、每轮重试重读期望值防确定性饿死）。彻底恢复
+需要 per-thread 旁路缓存设计（与池容量语义的精确断言测试有冲突面），登记为
+后续独立条目，不在 P2 范围内。
 
 ### 测试
 
-- [ ] 新增 RT 消费者与多生产者并发 acquire/release 的压力测试（无锁池正确性 + RT
-  延迟分布）。
+- [x] 新增 RT 消费者与多生产者并发 acquire/release 的压力测试
+  （`test_object_pool_lockfree_stress`：6 生产者锤击 + RT 线程按 100µs 周期
+  采样 acquire→release 延迟分布；per-object CAS 标记断言无双重发放；
+  空闲 500ms 进程 CPU 上界守护（实测 0.0ms）；驻停唤醒分布
+  （p50 ~12µs）与丢失唤醒守护）。
 
 ---
 
@@ -303,7 +376,12 @@ futex，64 位会落入内部 mutex+condvar waiter 池）。实现要点：
   与虚假唤醒窗口需要设计说明。→ 已随 P1 落地：acquire/release 足够，推导与
   32 位 futex 前置条件、接力唤醒、退出守门的设计说明见阶段 P1 小节与
   `thread_pool.cpp` 注释。
-- [ ] P2 无锁池的 tag 宽度与容量上限（注释中旧实现移除的原因需考古确认）。
+- [x] P2 无锁池的 tag 宽度与容量上限（注释中旧实现移除的原因需考古确认）。
+  → 已考古：dc04c73（2026-04-09）移除的是**无 tag 的裸指针 CAS freelist**，
+  其 ABA 无法用载荷内 next 指针封闭；本批实现的 `(tag:32 | index:32)` 单字
+  head 中 tag 每次 release +1，同一 head 值经 release 后不可复现，ABA 窗口
+  封闭（tag 环绕需同一竞争窗口内 2³² 次 release，实践不可达）。容量上限
+  2³²-2（32 位 index 留 nil 哨兵），构造期拒绝越界。
 - [ ] P3 timer 驻停与 libtsan workaround 的条件编译边界（CI 的 TSAN 任务必须仍走
   分片轮询路径）。
 - [ ] P4 task graph 分片与既有"计数先于 future"不变式（PR #177）的交互评审。
