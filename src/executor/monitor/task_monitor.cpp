@@ -65,6 +65,16 @@ void TaskMonitor::record_task_terminal(const std::string& task_id) {
     in_flight_tasks_.erase(task_id);
 }
 
+TaskMonitor::~TaskMonitor() {
+    // 与最后一个持锁读者（线程池 worker 的 record_task_*）建立 happens-before。
+    // 析构若不取 mutex_，map 成员的无锁 clear 与 shutdown/析构竞态下 worker
+    // 尚未结束的持锁访问构成数据竞争（TSAN 报告；若 worker 真在临界区内则
+    // 是真实 UAF）。取锁后：worker 在临界区内则阻塞等待其退出；已退出则
+    // unlock→lock 边使成员析构 formallly 排序在最后一次访问之后。
+    // mutex_ 在类内声明先于各 map，逆序析构保证其最后销毁。
+    std::lock_guard<std::mutex> lock(mutex_);
+}
+
 void TaskMonitor::record_task_start(const std::string& task_id,
                                     const std::string& task_type) {
     if (!enabled_.load(std::memory_order_relaxed)) {
