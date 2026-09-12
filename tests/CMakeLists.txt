@@ -413,7 +413,14 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         )
     endif()
 
-    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(comm_(channel|double_buffer|mailbox|phase_gate|topic)|thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|thread_pool_monitor_concurrent_set|dispatcher_resize_under_load|concurrent_stop_submit|load_balancer_concurrent_resize|opencl_lifecycle|self_stop_handoff|lockfree_task_executor)$")
+    # benchmark_* 测试的延迟分位数断言对机器负载敏感：与其他 CPU 密集测试
+    # 并行调度时会因负载噪声产生环境性 flake（issue #188）。RUN_SERIAL 让
+    # ctest 独占调度该测试，消除并行负载误报。
+    if(TEST_NAME MATCHES "^benchmark_")
+        set_tests_properties(${TEST_NAME} PROPERTIES RUN_SERIAL TRUE)
+    endif()
+
+    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME MATCHES "^test_(comm_(channel|double_buffer|mailbox|phase_gate|topic)|thread_pool|thread_pool_resize_uaf|thread_pool_resize_status|thread_pool_monitor_concurrent_set|dispatcher_resize_under_load|concurrent_stop_submit|load_balancer_concurrent_resize|opencl_lifecycle|self_stop_handoff|lockfree_task_executor|lockfree_mpsc|batch_integration|executor_manager)$")
         set_tests_properties(${TEST_NAME} PROPERTIES
             TIMEOUT 180
         )

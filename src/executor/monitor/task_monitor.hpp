@@ -22,7 +22,12 @@ namespace monitor {
 class TaskMonitor {
 public:
     TaskMonitor() = default;
-    ~TaskMonitor() = default;
+    // 定义在 .cpp：析构前必须取 mutex_，与最后一个持锁读者（线程池 worker
+    // 的 record_task_*）建立 happens-before，否则 map 成员的无锁析构与
+    // shutdown 路径上 worker 的持锁访问构成数据竞争（TSAN 报告 + 潜在 UAF）。
+    // mutex_ 声明先于各 map，按逆序析构最后销毁，锁自身的生命周期覆盖
+    // 全部受保护成员。
+    ~TaskMonitor();
 
     TaskMonitor(const TaskMonitor&) = delete;
     TaskMonitor& operator=(const TaskMonitor&) = delete;

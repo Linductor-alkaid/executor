@@ -8,6 +8,19 @@
 #include <numeric>
 #include <cstdlib>
 
+// Sanitizer 构建下延迟断言无意义（插桩放大概率 10-100 倍，P99 必然超限），
+// benchmark 不作为 TSAN/UBSAN 门禁（issue #188）：测量照常执行并输出，但
+// 断言降级为提示。gcc 定义 __SANITIZE_THREAD__，clang 走 __has_feature。
+// 注意必须嵌套：gcc 下 __has_feature 不是宏，`#if` 表达式里出现
+// __has_feature(...) 是语法错误，&& 短路救不了解析阶段。
+#if defined(__SANITIZE_THREAD__)
+#define EXECUTOR_BENCH_UNDER_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer) || __has_feature(address_sanitizer)
+#define EXECUTOR_BENCH_UNDER_SANITIZER 1
+#endif
+#endif
+
 using namespace executor;
 using namespace std::chrono;
 
@@ -152,9 +165,15 @@ static bool latency_single_task() {
     std::cout << "  P99     : " << p99 << " µs  (limit: " << P99_LIMIT_US << " µs)\n";
 
     if (p99 >= P99_LIMIT_US) {
+#ifdef EXECUTOR_BENCH_UNDER_SANITIZER
+        std::cerr << "[latency_single_task] SKIP: P99 " << p99
+                  << " µs >= " << P99_LIMIT_US
+                  << " µs, but latency assertions are exempt under sanitizers\n";
+#else
         std::cerr << "[latency_single_task] FAIL: P99 " << p99
                   << " µs >= " << P99_LIMIT_US << " µs\n";
         return false;
+#endif
     }
     std::cout << "  PASS\n";
     return true;

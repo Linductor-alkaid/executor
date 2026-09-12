@@ -51,12 +51,15 @@ TEST_F(MPSCConcurrencyTest, MultipleProducersSingleConsumer) {
             for (int i = 0; i < tasks_per_producer; ++i) {
                 int task_id = p * tasks_per_producer + i;
 
-                // 重试直到成功提交
+                // 重试直到成功提交。计数与集合必须处于同一同步域：先持锁
+                // insert，再在临界区内递增计数（release）。主线程以 acquire
+                // 读到 total 时，happens-after 所有 insert，随后无锁读取
+                // executed_ids 才是无竞争的（此前计数先于 insert 递增，
+                // 最后一个任务可能尚未 insert，主线程即无锁读集合）。
                 while (!executor_->push_task([&, task_id]() {
-                    executed_count.fetch_add(1, std::memory_order_relaxed);
-
                     std::lock_guard<std::mutex> lock(result_mutex);
                     executed_ids.insert(task_id);
+                    executed_count.fetch_add(1, std::memory_order_release);
                 })) {
                     std::this_thread::yield();
                 }
@@ -69,9 +72,10 @@ TEST_F(MPSCConcurrencyTest, MultipleProducersSingleConsumer) {
         t.join();
     }
 
-    // 等待所有任务执行完成
+    // 等待所有任务执行完成。acquire 读与任务内 insert 后的 release 递增
+    // 配对，建立 happens-before（见上方 lambda 注释）。
     auto start = std::chrono::steady_clock::now();
-    while (executed_count.load() < total_tasks) {
+    while (executed_count.load(std::memory_order_acquire) < total_tasks) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
         // 超时检查（5秒）
@@ -188,9 +192,14 @@ TEST_F(MPSCConcurrencyTest, QueueFullBehavior) {
 TEST_F(MPSCConcurrencyTest, DataRaceDetection) {
     const int num_producers = 8;
     const int tasks_per_producer = 1000;
+    const int total_tasks = num_producers * tasks_per_producer;
 
-    std::vector<int> shared_data(num_producers * tasks_per_producer, 0);
+    std::vector<int> shared_data(total_tasks, 0);
     std::atomic<int> index{0};
+    // 完成计数：任务内写 shared_data 后 release 递增，主线程 acquire 读到
+    // total 后再读 shared_data，否则固定 sleep 与任务尾部写入并发（本测试
+    // 自身的竞争，会掩盖被测组件的真实问题）。
+    std::atomic<int> completed{0};
 
     std::vector<std::thread> producers;
 
@@ -199,9 +208,10 @@ TEST_F(MPSCConcurrencyTest, DataRaceDetection) {
             for (int i = 0; i < tasks_per_producer; ++i) {
                 while (!executor_->push_task([&]() {
                     int idx = index.fetch_add(1, std::memory_order_relaxed);
-                    if (idx < shared_data.size()) {
+                    if (idx < static_cast<int>(shared_data.size())) {
                         shared_data[idx] = 1;
                     }
+                    completed.fetch_add(1, std::memory_order_release);
                 })) {
                     std::this_thread::yield();
                 }
@@ -213,7 +223,13 @@ TEST_F(MPSCConcurrencyTest, DataRaceDetection) {
         t.join();
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (completed.load(std::memory_order_acquire) < total_tasks) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        ASSERT_TRUE(std::chrono::steady_clock::now() < deadline)
+            << "Timeout waiting for tasks. Completed: "
+            << completed.load(std::memory_order_acquire) << "/" << total_tasks;
+    }
 
     // 验证所有元素都被设置
     int count = 0;
