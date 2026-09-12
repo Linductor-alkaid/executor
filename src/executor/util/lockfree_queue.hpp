@@ -209,14 +209,25 @@ public:
                 }
             }
             if (available && enqueue_pos_.compare_exchange_weak(pos, pos + count, std::memory_order_relaxed)) {
-                for (size_t i = 0; i < count; ++i) {
-                    const size_t index = (pos + i) & mask_;
+                // Reserve in REVERSE order so the frontier slot (pos) is the
+                // last one to leave Free and is immediately followed by its
+                // begin_batch_write.  A consumer that observes the frontier
+                // Reserved and applies the stalled-producer cancellation
+                // heuristic (cancel_reservation) would otherwise spin its
+                // bounded yield budget while the producer legitimately
+                // reserves the other count-1 slots — under TSAN/sanitizer
+                // slowdowns that budget expires mid-loop and the batch is
+                // falsely killed as "stalled" (issue #187).  Reserving tail
+                // first keeps the frontier's cancellable window O(1).
+                for (size_t i = count; i > 0; --i) {
+                    const size_t slot = i - 1;
+                    const size_t index = (pos + slot) & mask_;
                     // Reserve the complete claimed range before any slot can
                     // enter the cancellable debug-hook window.  A consumer
                     // may then cancel stalled slots, but it can never advance
                     // into an unreserved Free slot in this batch.
-                    if (!reserve_slot(index, pos + i)) {
-                        record_push_failure(reservation_failure_reason(index, pos + i));
+                    if (!reserve_slot(index, pos + slot)) {
+                        record_push_failure(reservation_failure_reason(index, pos + slot));
                         cancel_batch_reservations(pos, count);
                         return false;
                     }
@@ -504,6 +515,16 @@ private:
             SlotState state = slot_state(index);
             if (state == SlotState::Published) return false;
             if (state == SlotState::Writing) return false;
+            // A BatchWriting slot belongs to a batch producer that already
+            // passed its cancellable hook window: the write itself is
+            // non-interruptible, so the owner is progressing by definition.
+            // Without this escape, a scan-ahead cancellation aimed at a
+            // mid-batch slot spins the full budget while the producer
+            // legitimately advances toward that slot, then kills the batch
+            // (issue #187).  A genuinely stalled batch producer blocks in
+            // its hook BEFORE the BatchWriting CAS, staying Reserved and
+            // therefore still cancellable.
+            if (state == SlotState::BatchWriting) return false;
             // A reserved slot normally belongs to a producer that is ready to
             // publish.  Pure CPU pauses can repeatedly run the consumer on a
             // saturated or single-core host and cancel that valid producer
