@@ -28,6 +28,8 @@
 | `EXECUTOR_LOCKFREE_QUEUE` | `OFF` | 是否将 worker 本地队列实现替换为 `LockFreeWorkerQueue`（定义 `USE_LOCKFREE_WORKER_QUEUE`） |
 | `EXECUTOR_ENABLE_TSAN` | `OFF` | 是否启用 ThreadSanitizer（`-fsanitize=thread`；仅 GCC/Clang，其他编译器配置时仅告警） |
 
+**TSAN 构建下的测试口径**：CI 的 thread-sanitizer job 只运行并发相关的测试子集（见 `.github/workflows/c-cpp.yml`），不含 benchmark。benchmark_* 测试带 `RUN_SERIAL` 属性（ctest 独占调度，避免并行负载放大延迟分位数抖动），且其延迟断言在 sanitizer 构建下自动豁免——插桩放大概率 10-100 倍，延迟数字不作为 TSAN 门禁。
+
 ---
 
 ## 3. 配置与构建
