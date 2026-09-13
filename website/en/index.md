@@ -33,7 +33,7 @@ executor.shutdown();
 
 ## Scope and boundaries
 
-Executor is not a coroutine runtime, a distributed messaging system, or a hard realtime OS. It cannot safely force arbitrary running C++ functions to terminate, and `submit_periodic()` is soft periodic work on the ordinary pool, not a dedicated realtime thread. See [what is Executor?](/en/getting-started/what-is-executor) for the complete boundary statement, including the 0.4.0 synchronization guarantees.
+Executor is not a coroutine runtime, a distributed messaging system, or a hard realtime OS. It cannot safely force arbitrary running C++ functions to terminate, and `submit_periodic()` is soft periodic work on the ordinary pool, not a dedicated realtime thread. See [what is Executor?](/en/getting-started/what-is-executor) for the complete boundary statement, including the synchronization guarantees introduced in 0.4.0.
 
 ## Continue from here
 
@@ -50,7 +50,7 @@ Executor is not a coroutine runtime, a distributed messaging system, or a hard r
 | Platform | Linux, Windows; Android CPU-only via NDK |
 | Language | C++20 |
 | Build system | CMake 3.16+ |
-| Version | `v0.4.0` |
+| Version | `v0.5.0` |
 | License | [MIT](https://github.com/Linductor-alkaid/executor/blob/master/LICENSE) |
 
-<div class="version-note">This guide corresponds to `v0.4.0`; later `master` capabilities become stable promises only after their release tag.</div>
+<div class="version-note">This guide corresponds to `v0.5.0`; later `master` capabilities become stable promises only after their release tag.</div>

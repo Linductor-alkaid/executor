@@ -7,7 +7,7 @@ description: Entry points for the development snapshot, releases, and API migrat
 
 ## Current scope
 
-The latest release record is `v0.4.0`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
+The latest release record is `v0.5.0`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
 
 | What to check | Source of truth |
 | --- | --- |
@@ -43,6 +43,30 @@ New code begins with `submit_auto(lambda)`, then enters a specialist path only w
 | Register and start an I/O worker separately | `start_worker(BlockingWorkerSpec)` | `WorkerHandle` retains wakeup, stop token, startup timeout, and exit reason. |
 
 Automatic routing does not infer callable real-time safety, thread safety, GPU-memory ownership, or I/O interruptibility. `get_executor_capabilities()` is only an advisory snapshot; each actual submission must still handle stop races and backpressure.
+
+## 0.5.0: task lifecycle semantics, Android phase one, and hot-path performance
+
+0.5.0 keeps the existing public submission API compatible while promoting task-level
+cooperative cancellation, cancellable and reschedulable timer handles, the serial
+execution context, and total bounded admission; Android CPU-only cross-compilation
+lands in phase one; the P1/P2 stages of the 2026-09 performance audit significantly
+improve submission throughput and realtime jitter. Release artifacts now include
+CI-built Linux amd64 debs (full build inside a CUDA devel container) and a Windows
+x64 static library.
+
+| Need | 0.5.0 entry | Boundary you still own |
+| --- | --- | --- |
+| Cancel a queued or running task | `submit_cancellable*` + `request_task_cancel()` | Cancellation is a cooperative request, not preemption; running tasks must check the injected `StopToken` and return promptly. |
+| Cancellable, reschedulable timers | `submit_delayed/periodic_*_with_handle` + `TimerHandle` | Expiry work dispatches to the ordinary pool and does not bind to external event loops (see the interop guide for asio strands). |
+| Strict submit-order settlement on one context | `submit_on` / `submit_on_with_handle` | Order only; one long task on a context still delays later tasks. |
+| Structured overload rejection | `ExecutorConfig::max_in_flight_tasks` | Defaults to `0` (disabled); at the bound the future completes with `CapacityExhaustedException` and must be handled. |
+| Parse status snapshot text | `ExecutorSnapshot` schema 3 | `cancellation`/`timers` fields are additive; parsers asserting column counts must relax. |
+| Android CPU-only cross-compilation | NDK r26c/r28b scripts and CI | Thread priority, affinity, `mlockall`, and timer slack stay best-effort; no hard realtime promise. |
+
+Migration notes for `ExecutorSnapshot` schema 2 → 3, the process memory-lock lease,
+and the shutdown cleanup of pending delayed tasks are in the
+["0.4.0 → 0.5.0"](https://github.com/Linductor-alkaid/executor/blob/master/docs/MIGRATION.md)
+section of MIGRATION.md.
 
 ## 0.4.0: fixed synchronization boundaries and communication observability
 

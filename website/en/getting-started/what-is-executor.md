@@ -37,7 +37,7 @@ Executor deliberately keeps the following boundaries:
 - `submit_periodic()` is soft periodic work on the ordinary thread pool, not a dedicated realtime thread.
 - `submit_priority()` changes ordinary queue order; it does not provide deadlines or preempt work already running.
 
-In 0.4.0, key communication synchronization paths use fixed storage and atomic implementations. “Synchronization lock-free” does not cover payload operations, callbacks, page faults, or OS scheduling. `Topic<T>` belongs to the ordinary control plane and is not a realtime primitive. See the [0.4.0 migration notes](/en/reference/version-and-migration) for exact guarantees.
+Since 0.4.0, key communication synchronization paths use fixed storage and atomic implementations. “Synchronization lock-free” does not cover payload operations, callbacks, page faults, or OS scheduling. `Topic<T>` belongs to the ordinary control plane and is not a realtime primitive. See the [0.4.0 migration notes](/en/reference/version-and-migration) for exact guarantees.
 
 If your program only has one or two long-lived threads with clear ownership, `std::jthread` may be simpler. Add Executor when it removes operational responsibility rather than merely hiding `std::thread` creation.
 
