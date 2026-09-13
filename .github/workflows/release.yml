@@ -51,7 +51,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-deb-amd64
-          path: dist/
+          # 只传归档产物：dist/ 里还保留了未压缩的发行目录树（头文件/库/
+          # CMake 配置），不应作为 release 资产。
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
           if-no-files-found: error
 
   windows-static-x64:
