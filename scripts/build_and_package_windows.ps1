@@ -4,7 +4,7 @@
 param(
     [string]$Version = "0.5.0",
     [string]$BuildType = "Release",
-    [string]$Generator = "Visual Studio 17 2022",
+    [string]$Generator = "",
     [string]$Architecture = "x64",
     [switch]$BuildStatic = $true,
     [switch]$BuildShared = $true,
