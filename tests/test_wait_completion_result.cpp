@@ -84,8 +84,12 @@ bool test_first_submission_does_not_miss_worker_wakeup() {
                     "executor should initialize");
 
         auto future = executor.submit([]() { return 7; });
+        // 断言的是"唤醒不丢失"而非时延上限：错过唤醒的提交在池存续期内
+        // 永远不会完成，等待 1s 仍能判定；反之饥饿的 Debug Windows runner
+        // 上一次 100ms 窗口不足以覆盖正常的调度+执行（PR #192 与 master
+        // 各环境性失败一次），属于误报。
         auto result =
-            executor.wait_for_completion_ex(std::chrono::milliseconds(100));
+            executor.wait_for_completion_ex(std::chrono::seconds(1));
 
         TEST_ASSERT(result.completed,
                     "first submission should not miss the worker wakeup");
