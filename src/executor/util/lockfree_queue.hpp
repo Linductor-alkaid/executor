@@ -510,8 +510,20 @@ private:
             : LockFreeQueueFailReason::Contention;
     }
 
-    bool cancel_reservation(size_t index, size_t position) {
-        for (size_t spin = 0; spin < reservation_wait_yields_; ++spin) {
+    // claimed_work: the number of slots the owning producer claimed in one
+    // enqueue_pos_ CAS (1 for single push, the batch size for push_batch_exact).
+    // A batch producer legitimately holds every claimed slot in Reserved while
+    // it advances through the reserve/write loops; the stall budget must scale
+    // with that work or a healthy producer preempted on a loaded/sanitized
+    // host is falsely cancelled mid-batch (issue #187 residual, seen on
+    // 2-vCPU gcc-11 Release TSAN runners). The multiplier is capped so a
+    // genuinely stalled producer with a huge claim still recovers in bounded
+    // time (64 * 1024 yields worst case, sub-second).
+    bool cancel_reservation(size_t index, size_t position, size_t claimed_work = 1) {
+        static constexpr size_t kMaxClaimMultiplier = 1024;
+        const size_t stall_yields =
+            reservation_wait_yields_ * std::min(claimed_work, kMaxClaimMultiplier);
+        for (size_t spin = 0; spin < stall_yields; ++spin) {
             SlotState state = slot_state(index);
             if (state == SlotState::Published) return false;
             if (state == SlotState::Writing) return false;
@@ -607,7 +619,10 @@ private:
                 continue;
             }
             if (state == SlotState::Reserved) {
-                if (cancel_reservation(index, pos)) {
+                // claimed_work = enqueued - pos: the frontier producer claimed
+                // the whole [pos, enqueued) range with one CAS (see
+                // cancel_reservation for why the stall budget scales with it).
+                if (cancel_reservation(index, pos, static_cast<size_t>(enqueued - pos))) {
                     // Whoever wins the frontier CAS performs the cleanup;
                     // cancel_reservation itself is CAS-guarded, so at most one
                     // consumer reaches this branch with a cancelled slot.
@@ -633,7 +648,8 @@ private:
                 for (size_t scan = pos + 1; scan < enqueued; ++scan) {
                     const size_t scan_index = scan & mask_;
                     if (slot_state(scan_index) == SlotState::Reserved) {
-                        (void)cancel_reservation(scan_index, scan);
+                        (void)cancel_reservation(scan_index, scan,
+                                                 static_cast<size_t>(enqueued - pos));
                         break;
                     }
                 }
