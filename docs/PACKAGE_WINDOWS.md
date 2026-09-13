@@ -24,11 +24,15 @@
 1. 构建静态库（Release 模式）
 2. 打包成发行版本（ZIP 格式）
 
+v0.5.0 起，推送 `v*` tag 会触发 `.github/workflows/release.yml` 在
+`windows-latest` runner 上构建 x64 静态库发行包（`executor-<版本>-windows-x64.zip`，
+CPU-only）并附到 GitHub Release；本地可用同一脚本复现。
+
 ### 自定义构建选项
 
 ```powershell
 .\scripts\build_and_package_windows.ps1 `
-    -Version "0.4.0" `
+    -Version "0.5.0" `
     -BuildType "Release" `
     -Generator "Visual Studio 17 2022" `
     -Architecture "x64" `
@@ -40,10 +44,11 @@
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-Version` | `0.4.0` | 版本号，用于打包命名 |
+| `-Version` | `0.5.0` | 版本号，用于打包命名 |
 | `-BuildType` | `Release` | 构建类型（Release/Debug） |
 | `-Generator` | `Visual Studio 17 2022` | CMake 生成器 |
 | `-Architecture` | `x64` | 目标架构（x64/x86） |
+| `-Arch` | 环境变量回退 | 打包名中的架构标识（`x64`/`arm64`）；留空时回退到 `$env:PROCESSOR_ARCHITECTURE` |
 | `-BuildStatic` | `$true` | 是否构建静态库 |
 | `-BuildShared` | `$true` | 是否构建动态库 |
 | `-BuildTests` | `$false` | 是否构建测试 |
@@ -72,7 +77,7 @@
 构建完成后，使用打包脚本创建发行包：
 
 ```powershell
-.\scripts\package_windows.ps1 -Version "0.4.0"
+.\scripts\package_windows.ps1 -Version "0.5.0"
 ```
 
 打包脚本会：
@@ -137,7 +142,7 @@ cmake --install build_shared --config Release
 打包后的目录结构如下：
 
 ```
-executor-0.4.0-windows-x64/
+executor-0.5.0-windows-x64/
 ├── static/                    # 静态库
 │   ├── lib/
 │   │   ├── executor.lib      # 静态库文件
@@ -170,7 +175,7 @@ executor-0.4.0-windows-x64/
 2. 在 CMake 配置时设置路径：
 
 ```powershell
-cmake -B build -DCMAKE_PREFIX_PATH=path\to\executor-0.4.0-windows-x64\static
+cmake -B build -DCMAKE_PREFIX_PATH=path\to\executor-0.5.0-windows-x64\static
 ```
 
 3. 在项目的 `CMakeLists.txt` 中：
@@ -186,7 +191,7 @@ target_link_libraries(your_target PRIVATE executor::executor)
 2. 在 CMake 配置时设置路径：
 
 ```powershell
-cmake -B build -DCMAKE_PREFIX_PATH=path\to\executor-0.4.0-windows-x64\shared
+cmake -B build -DCMAKE_PREFIX_PATH=path\to\executor-0.5.0-windows-x64\shared
 ```
 
 3. 在项目的 `CMakeLists.txt` 中：

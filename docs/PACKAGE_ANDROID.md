@@ -199,7 +199,7 @@ Java_com_example_app_NativeExecutor_shutdown(JNIEnv*, jobject) {
 若要把 executor 作为 AAR 分发给 AGP 消费者，建议结构：
 
 ```text
-executor-android-0.4.0.aar
+executor-android-0.5.0.aar
 ├── prefab/modules/executor/
 │   ├── module.json
 │   ├── include/executor/...

@@ -4,59 +4,20 @@
 
 ---
 
-## 升级到当前版本：串行派发安全与总量有界 admission
+## 从 0.4.0 升级到 0.5.0：任务生命周期语义与确定性边界
 
-本版本重构 `submit_on`/`submit_on_with_handle` 的派发包装为非阻塞共享状态
-（消除多 worker 饥饿与栈条件变量竞争），并新增 `max_in_flight_tasks` 总量
-有界 admission。所有既有提交 API 的签名与返回类型不变。
+0.5.0 保持既有公开提交 API 的签名与返回类型不变，但引入四个迁移主题：任务级
+协作取消与定时句柄、串行执行上下文与总量有界 admission、`ExecutorSnapshot`
+schema 2 → 3，以及若干可观察行为变化。Android CPU-only 交叉编译为新增平台
+能力，不影响既有桌面集成。
 
-### 移除串行派发兼容层（Mira EXE-20260830-002/003 临时方案）
-
-如果你的集成在 facade 之外自建了"reserve ticket + 非阻塞 post_reserved +
-业务 promise"的兼容层（例如 Mira `RuntimeBaseline` 的非阻塞 tracked dispatch），
-可以迁移回直接 `submit_on_with_handle()`：
-
-- 派发包装不再阻塞 worker 等待串行回调，多 worker 池下突发提交按 ticket
-  FIFO 有界时间内结算（两 worker × 10,000 突发在回归测试中约 1s 内完成）；
-- 同步状态由共享对象拥有，TSAN 下重复 10,000+ 次串行提交无
-  condition-variable lifetime race；
-- 迁移前置检查：依赖版本包含 `docs/design/serial_execution_context.md`
-  "派发与结算结构"一节；回归运行 `test_serial_execution_context`、
-  `test_serial_context_stress`。
-
-### 把应用侧在途计数迁移到 max_in_flight_tasks（Mira EXE-20260830-001 临时方案）
-
-如果你的集成在提交边界自建原子在途计数以获得拒绝语义（例如 Mira
-`RuntimeBaseline` 的有界 admission boundary），可改为原生配置：
-
-```cpp
-executor::ExecutorConfig config;
-config.max_in_flight_tasks = /* 原 max_in_flight */;
-```
-
-- 拒绝语义：future 立即以 `CapacityExhaustedException` 就绪 +
-  `FailureKind::CapacityExhausted` 事件（区别于 stopping 与 invalid input）；
-- 迁移后删除应用侧计数与拒绝转换逻辑；回归运行 `test_bounded_admission`；
-- 注意语义差异：原生容量按 Executor 内部结算点计算（覆盖 scheduler、本地
-  队列与执行中），不再按应用命令生命周期；`submit_delayed*`/`submit_periodic*`
-  不在覆盖范围（见 API.md §3.10）。
-
-### queue_capacity 语义澄清
-
-`ExecutorConfig::queue_capacity` 只构造每 worker 本地有界队列并驱动扩缩容
-阈值，**不是总量背压边界**；本地队列满时任务回退到 scheduler 全局队列。
-如果你的代码把 `queue_capacity` 当作拒绝边界使用，请改用
-`max_in_flight_tasks`。
-
----
-
-## 升级到上一版本：任务协作取消与定时句柄
+### 任务协作取消与定时句柄迁移
 
 本版本在 facade 上新增任务级协作取消（C1）与定时句柄（T1），并调整了两处可观察
 行为。既有 `submit()` / `submit_priority()` / `submit_with_handle()` /
 `submit_delayed()` / `submit_periodic()` / `cancel_task()` 的签名与返回类型不变。
 
-### 迁移到 TimerHandle：哪些自建定时可以迁移
+#### 迁移到 TimerHandle：哪些自建定时可以迁移
 
 满足以下全部条件的自建延迟/周期工作可以迁移到
 `submit_delayed_with_handle()` / `submit_periodic_with_handle()`（或带
@@ -74,7 +35,7 @@ config.max_in_flight_tasks = /* 原 max_in_flight */;
 定时器把到期工作派发到默认异步线程池，不提供 strand 所有权或同上下文销毁保证
 （见 [外部事件循环互操作指南](external_event_loop_interop.md) §5）。
 
-### 从私有 deadline 轮询迁移到 StopToken 协作取消
+#### 从私有 deadline 轮询迁移到 StopToken 协作取消
 
 原来在任务体内手写"检查 deadline / 检查取消标志 / 提前 return"的模式，可以迁移到：
 
@@ -93,7 +54,7 @@ auto submission = executor.submit_cancellable(
 （如不可中断的同步 I/O）的任务不会被取消打断，这类工作应使用 Blocking I/O
 worker 的 `run(StopToken)` + `wakeup()` 契约，或让阻塞调用本身可超时。
 
-### 可观察行为变化
+#### 可观察行为变化
 
 1. **shutdown 清理未到期 delayed 任务**：future 异常由
    `std::runtime_error("Timer stopped before delayed task execution")` +
@@ -108,6 +69,77 @@ worker 的 `run(StopToken)` + `wakeup()` 契约，或让阻塞调用本身可超
    `SubmitRejected` 的行为**保持不变**。
 
 ---
+
+### 串行派发安全与总量有界 admission
+
+本版本重构 `submit_on`/`submit_on_with_handle` 的派发包装为非阻塞共享状态
+（消除多 worker 饥饿与栈条件变量竞争），并新增 `max_in_flight_tasks` 总量
+有界 admission。所有既有提交 API 的签名与返回类型不变。
+
+#### 移除串行派发兼容层（Mira EXE-20260830-002/003 临时方案）
+
+如果你的集成在 facade 之外自建了"reserve ticket + 非阻塞 post_reserved +
+业务 promise"的兼容层（例如 Mira `RuntimeBaseline` 的非阻塞 tracked dispatch），
+可以迁移回直接 `submit_on_with_handle()`：
+
+- 派发包装不再阻塞 worker 等待串行回调，多 worker 池下突发提交按 ticket
+  FIFO 有界时间内结算（两 worker × 10,000 突发在回归测试中约 1s 内完成）；
+- 同步状态由共享对象拥有，TSAN 下重复 10,000+ 次串行提交无
+  condition-variable lifetime race；
+- 迁移前置检查：依赖版本包含 `docs/design/serial_execution_context.md`
+  "派发与结算结构"一节；回归运行 `test_serial_execution_context`、
+  `test_serial_context_stress`。
+
+#### 把应用侧在途计数迁移到 max_in_flight_tasks（Mira EXE-20260830-001 临时方案）
+
+如果你的集成在提交边界自建原子在途计数以获得拒绝语义（例如 Mira
+`RuntimeBaseline` 的有界 admission boundary），可改为原生配置：
+
+```cpp
+executor::ExecutorConfig config;
+config.max_in_flight_tasks = /* 原 max_in_flight */;
+```
+
+- 拒绝语义：future 立即以 `CapacityExhaustedException` 就绪 +
+  `FailureKind::CapacityExhausted` 事件（区别于 stopping 与 invalid input）；
+- 迁移后删除应用侧计数与拒绝转换逻辑；回归运行 `test_bounded_admission`；
+- 注意语义差异：原生容量按 Executor 内部结算点计算（覆盖 scheduler、本地
+  队列与执行中），不再按应用命令生命周期；`submit_delayed*`/`submit_periodic*`
+  不在覆盖范围（见 API.md §3.10）。
+
+#### queue_capacity 语义澄清
+
+`ExecutorConfig::queue_capacity` 只构造每 worker 本地有界队列并驱动扩缩容
+阈值，**不是总量背压边界**；本地队列满时任务回退到 scheduler 全局队列。
+如果你的代码把 `queue_capacity` 当作拒绝边界使用，请改用
+`max_in_flight_tasks`。
+
+---
+
+### ExecutorSnapshot schema 2 → 3
+
+- `ExecutorSnapshot::schema_version` 由 2 升至 3，新增 `cancellation`
+  （`CancellationStatus`）与 `timers`（`TimerStatusSummary`）独立字段与快照
+  文本行；字段为纯新增，未删除或改名既有字段。
+- 解析快照文本的下游工具需按新 schema 更新：按行前缀解析的实现通常只需
+  增加两行识别；按列数或字段总数断言的实现需要放宽。
+- 查询入口 `Executor::get_cancellation_status()` /
+  `get_timer_status_summary()` 与快照字段同源。
+
+### 行为变化清单
+
+- **进程内存锁租约（P-004）**：`util::ProcessMemoryLockLease` 引用计数管理
+  `mlockall`/`munlockall`——最后一个持有租约的实时执行器停止时才解除进程锁。
+  此前单独停止某个实时执行器即解锁；与进程内其他 `mlockall` 使用方共存更安全，
+  但依赖"停止即解锁"旧语义的部署需要复查。
+- **shutdown 清理未到期 delayed 任务**：future 异常由
+  `std::runtime_error("Timer stopped...")` + `SubmitRejected` failure 事件改为
+  `TaskCancelled(Shutdown)`，不再记录 failure 事件；按异常类型或 failure 计数
+  对该路径告警的调用方需要把检查迁移到 `TaskCancelled` 分类与定时计数。
+- **性能取舍提示**：无锁对象池在 2-4 生产者的 mpsc 吞吐较 0.4.0 下降约
+  23%-24%（Treiber 单链在低生产者数下的缓存行往返；1P 与 8P 以上显著提升，
+  见 CHANGELOG 0.5.0 性能小节）。低生产者数且对吞吐敏感的集成可评估线程池
+  执行器路径。
 
 ## 从 0.3.1 升级到 0.4.0：通信同步核心无锁化
 

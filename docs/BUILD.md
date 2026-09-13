@@ -256,7 +256,7 @@ ctest --test-dir build -L "unit|integration" --output-on-failure
 以当前工程创建源码归档，便于分发或发布：
 
 ```bash
-git archive --format=tar.gz --prefix=executor-0.4.0/ -o executor-0.4.0.tar.gz HEAD
+git archive --format=tar.gz --prefix=executor-0.5.0/ -o executor-0.5.0.tar.gz HEAD
 ```
 
 或仅打包 `include/`、`src/`、`cmake/`、`examples/`、`tests/`、`CMakeLists.txt`、`README.md`、`CHANGELOG.md`、`docs/` 等必要目录与文件（按需调整）。解压后按 [§3](#3-配置与构建) 配置与构建即可。

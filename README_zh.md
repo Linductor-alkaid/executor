@@ -100,7 +100,7 @@ Executor 有意保持以下边界：
 - `submit_periodic()` 是普通线程池上的软周期任务，不等同于专用实时线程。
 - 默认异步提交默认不限制总量在途数；需要结构化过载拒绝时显式配置 `max_in_flight_tasks`（覆盖普通/优先级/批量/串行等 facade 提交，不含 timer 派发与 realtime/GPU，见 `docs/API.md` §3.10）。`queue_capacity` 只是每 worker 本地队列参数，不是背压边界。
 
-0.4.0 的通信组件为关键同步路径提供固定存储和原子实现，但“同步无锁”不覆盖 payload 操作、callback、缺页或 OS 调度。`Topic<T>` 属于普通控制面，不是实时原语。精确保证见 [0.4.0 迁移说明](docs/MIGRATION.md)。
+自 0.4.0 起，通信组件为关键同步路径提供固定存储和原子实现，但“同步无锁”不覆盖 payload 操作、callback、缺页或 OS 调度。`Topic<T>` 属于普通控制面，不是实时原语。精确保证见[迁移说明](docs/MIGRATION.md)。
 
 ## 安装与集成
 
@@ -135,6 +135,6 @@ target_link_libraries(myapp PRIVATE executor::executor)
 
 ## 版本与许可
 
-当前版本：**v0.4.0**
+当前版本：**v0.5.0**
 
 Executor 使用 [MIT License](LICENSE)。

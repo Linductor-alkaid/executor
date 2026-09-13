@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+（暂无。）
+
+---
+
+## [0.5.0] - 2026-09-13
+
+0.5.0 以任务生命周期语义与跨平台落地为主线：facade 新增任务级协作取消与可取消、
+可重排的定时句柄，串行执行上下文与总量有界 admission 转正；Android 适配一期完成
+CPU-only 交叉编译与 ARM64 验证；2026-09 性能审查的 P1（线程池提交热路径）与
+P2（无锁组件兑现）两阶段重构合入，提交吞吐与 RT jitter 显著改善；停机/生命周期
+竞态（P-001~P-008）与 TSAN 可见的数据竞争面收敛。既有主要公开调用方式保持兼容；
+`ExecutorSnapshot` schema 2 → 3（纯新增字段）。
+
 任务协作取消与定时句柄（客户端反馈台账 P1-2/P1-3 收敛，设计见
 `docs/design/task_cancellation_and_timers.md`）：facade 新增任务级协作取消与可取消、
 可重排的定时句柄；取消是协作请求而非抢占，取消计数进入独立生命周期字段而非
@@ -119,6 +132,14 @@ failure 体系。
   才解除进程锁；与进程内其他 `mlockall` 使用方共存更安全。
 - **P-008（Windows 处理器组）**：`cpu_affinity` 支持超过 64 逻辑 CPU 的
   处理器组编号（`g*64+序号`），跨组配置明确拒绝（PR #181）。
+- **TSAN 收尾（issue #185–#188）**：`LockFreeQueue::push_batch_exact` 的批量预留
+  会被消费者"停滞生产者恢复"启发式误取消（TSAN 构建下空环确定性失败）——预留改
+  倒序使前沿槽可取消窗口缩至 O(1)，`cancel_reservation` 增加 BatchWriting 逃逸，
+  停滞恢复契约保持不变；`~TaskMonitor` 析构先取 `mutex_` 再成员析构，与最后一个
+  持锁读者建立 happens-before（消除 shutdown/析构路径 TSAN 报告与潜在 UAF）；
+  `test_lockfree_mpsc` 测试自身同步域修复；benchmark 测试 `RUN_SERIAL` +
+  sanitizer 构建下延迟断言豁免；TSAN CI 子集补 `test_lockfree_mpsc` /
+  `test_batch_integration` / `test_executor_manager`。
 - **P-006/P-007（可观察性）**：`ThreadPool::get_status()` 空闲线程数饱和语义
   与 resizer 竞态修复；GPU `validate_memory_range` 拒绝外部缓冲区，无锁队列
   `size()`/`empty()` 近似语义钉住回归测试。
@@ -133,15 +154,13 @@ failure 体系。
 - `ExecutorSnapshot::schema_version` 2 → 3（纯新增字段）；解析快照文本的下游
   工具需按新 schema 更新（迁移说明见 `docs/MIGRATION.md`）。
 
----
-
-## Android 适配一期
+### Android 适配一期
 
 Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉编译为静态库/共享库，
 并纳入官方模拟器与真实 ARM64 runner 的验证流程。Android 上的线程优先级、CPU 亲和性、
 `mlockall` 与 timer slack 均保持 best-effort，不承诺硬实时；CUDA/OpenCL 不进入一期。
 
-### 新增
+#### 新增
 
 - **Android CPU-only 构建支持**：新增 `if(ANDROID)` CMake 平台分支，bionic 下不再错误
   链接 `librt`，也不导出 `libatomic`；Android 构建默认关闭 GPU/CUDA，用户仍可显式覆盖。
@@ -160,7 +179,7 @@ Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉
   `c++_shared` 打包、JNI shutdown 生命周期与 Prefab/AAR 模板；中英文网站首页、构建页
   与平台部署核对页同步补充 Android CPU-only 能力边界。
 
-### 修复与改进
+#### 修复与改进
 
 - 修复 `test_multithread_mpsc` 在慢速 ARM64 模拟环境下消费者过早退出导致误报的测试逻辑。
 - Android 下实时调优路径统一为 best-effort：priority / affinity / mlock / timer slack
@@ -187,7 +206,7 @@ Android 适配一期：核心库可在 NDK 工具链下以 CPU-only 配置交叉
   新增回归测试 `tests/test_timer_thread_lifecycle_race.cpp`（旧实现下延迟任务
   future 永久悬挂 / `std::terminate`，测试确定性命中）。
 
-### 验证
+#### 验证
 
 - 官方 Android 模拟器（API 30 x86_64，KVM）：6/6 standalone 测试通过。
 - qemu-user + NDK bionic 静态 ARM64：6/6 测试通过。
