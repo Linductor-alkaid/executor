@@ -3,7 +3,10 @@
 
 param(
     [string]$BuildType = "Release",
-    [string]$Generator = "Visual Studio 17 2022",
+    # 生成器留空 = 使用 CMake 默认（自动跟随 runner/本机安装的 VS 版本）。
+    # GitHub windows-latest 镜像已升级到 Visual Studio 18 2026，钉死 VS17 2022
+    # 会在新镜像上报 "could not find any instance of Visual Studio"。
+    [string]$Generator = "",
     [string]$Architecture = "x64",
     [switch]$BuildStatic = $true,
     [switch]$BuildShared = $true,
@@ -52,14 +55,16 @@ if ($BuildStatic) {
     
     # Configure
     Write-Host "Configuring static library build..." -ForegroundColor Yellow
-    & cmake -B $StaticBuildDir `
-        -G "$Generator" `
-        -A $Architecture `
-        -DCMAKE_BUILD_TYPE=$BuildType `
-        -DEXECUTOR_BUILD_SHARED=OFF `
-        -DEXECUTOR_BUILD_TESTS=OFF `
-        -DEXECUTOR_BUILD_EXAMPLES=OFF `
-        -DCMAKE_INSTALL_PREFIX="$StaticBuildDir\install"
+    $CmakeArgs = @("-B", $StaticBuildDir)
+    if ($Generator) { $CmakeArgs += @("-G", $Generator, "-A", $Architecture) }
+    $CmakeArgs += @(
+        "-DCMAKE_BUILD_TYPE=$BuildType",
+        "-DEXECUTOR_BUILD_SHARED=OFF",
+        "-DEXECUTOR_BUILD_TESTS=OFF",
+        "-DEXECUTOR_BUILD_EXAMPLES=OFF",
+        "-DCMAKE_INSTALL_PREFIX=$StaticBuildDir\install"
+    )
+    & cmake @CmakeArgs
     
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Error: CMake configuration failed" -ForegroundColor Red
@@ -98,14 +103,16 @@ if ($BuildShared) {
     
     # Configure
     Write-Host "Configuring shared library build..." -ForegroundColor Yellow
-    & cmake -B $SharedBuildDir `
-        -G "$Generator" `
-        -A $Architecture `
-        -DCMAKE_BUILD_TYPE=$BuildType `
-        -DEXECUTOR_BUILD_SHARED=ON `
-        -DEXECUTOR_BUILD_TESTS=OFF `
-        -DEXECUTOR_BUILD_EXAMPLES=OFF `
-        -DCMAKE_INSTALL_PREFIX="$SharedBuildDir\install"
+    $CmakeArgs = @("-B", $SharedBuildDir)
+    if ($Generator) { $CmakeArgs += @("-G", $Generator, "-A", $Architecture) }
+    $CmakeArgs += @(
+        "-DCMAKE_BUILD_TYPE=$BuildType",
+        "-DEXECUTOR_BUILD_SHARED=ON",
+        "-DEXECUTOR_BUILD_TESTS=OFF",
+        "-DEXECUTOR_BUILD_EXAMPLES=OFF",
+        "-DCMAKE_INSTALL_PREFIX=$SharedBuildDir\install"
+    )
+    & cmake @CmakeArgs
     
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Error: CMake configuration failed" -ForegroundColor Red

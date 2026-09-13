@@ -64,9 +64,12 @@ jobs:
         shell: pwsh
         run: |
           $Version = "${{ github.ref_name }}" -replace '^v', ''
+          # Generator 留空：跟随 runner 的默认 VS（镜像已升级到 VS 18 2026，
+          # 钉死 VS17 2022 会因实例不存在而配置失败）。
           & .\scripts\build_and_package_windows.ps1 `
             -Version $Version `
             -BuildType Release `
+            -Generator "" `
             -BuildStatic:$true `
             -BuildShared:$false `
             -Arch x64

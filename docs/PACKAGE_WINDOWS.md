@@ -34,7 +34,7 @@ CPU-only）并附到 GitHub Release；本地可用同一脚本复现。
 .\scripts\build_and_package_windows.ps1 `
     -Version "0.5.0" `
     -BuildType "Release" `
-    -Generator "Visual Studio 17 2022" `
+    -Generator "" `
     -Architecture "x64" `
     -BuildStatic:$true `
     -BuildShared:$false
@@ -46,7 +46,7 @@ CPU-only）并附到 GitHub Release；本地可用同一脚本复现。
 |------|--------|------|
 | `-Version` | `0.5.0` | 版本号，用于打包命名 |
 | `-BuildType` | `Release` | 构建类型（Release/Debug） |
-| `-Generator` | `Visual Studio 17 2022` | CMake 生成器 |
+| `-Generator` | 空（自动选择） | CMake 生成器；留空跟随 CMake 默认（自动适配本机/runner 安装的 VS，例如 VS 2022 或 VS 2026） |
 | `-Architecture` | `x64` | 目标架构（x64/x86） |
 | `-Arch` | 环境变量回退 | 打包名中的架构标识（`x64`/`arm64`）；留空时回退到 `$env:PROCESSOR_ARCHITECTURE` |
 | `-BuildStatic` | `$true` | 是否构建静态库 |
