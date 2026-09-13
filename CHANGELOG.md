@@ -6,7 +6,16 @@
 
 ## [Unreleased]
 
-（暂无。）
+### 修复与改进
+
+- **#187 残余窗口封口（批量预留误取消）**：v0.5.0 的倒序预留 + BatchWriting
+  逃逸把误取消窗口缩到极窄，但在 2-vCPU CI runner 的 gcc-11 Release TSAN 下，
+  写入循环中段仍可被 scan-ahead 消费者在生产者线程被抢占期间按 64-yield 预算
+  误判停滞（`test_batch_integration` 间歇失败）。消费者侧取消预算现按认领批量
+  规模缩放（`reservation_wait_yields_ × min(claimed, 1024)`，claimed 即
+  `enqueue_pos_` 单次 CAS 认领的槽数）：健康批量生产者不再可能被误杀；真停滞
+  恢复延迟按批量线性、有界（最坏 64×1024 次 yield，亚秒级），停滞契约测试
+  （小批量 + hook 阻塞）不受影响。
 
 ---
 
