@@ -1,0 +1,125 @@
+# 正式版发布流水线（docs/RELEASE_CHECKLIST.md：稳定版以发布 tag 触发正式发布）。
+#
+# 触发：推送 v* tag（例如 git tag v0.5.0 && git push origin v0.5.0）。
+# 产物：
+#   - Linux amd64：tar.gz + libexecutor/libexecutor-dev deb（在 CUDA devel 容器内
+#     完整构建——编译期不需要 GPU，产物包含 CUDA 执行器，运行期 dlopen libcuda
+#     优雅降级，与手工发布 v0.4.0 的 deb 口径一致）；
+#   - Windows x64：静态库发行包（CPU-only，runner 无 CUDA 工具链，CMake 自动降级）；
+#   - GitHub Release：以 CHANGELOG.md 对应版本小节为发布说明，附全部产物。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  deb-amd64:
+    name: Package amd64 deb (CUDA devel container)
+    runs-on: ubuntu-22.04
+    container:
+      image: nvidia/cuda:12.4.1-devel-ubuntu22.04
+    steps:
+      - name: 安装构建依赖
+        run: |
+          # 镜像自带 nvcc 与宿主编译器；checkout 与打包还需要 git/cmake。
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git cmake ninja-build
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 构建 static+shared 并打包 tar.gz 与 deb
+        shell: bash
+        run: |
+          # deb 包 control 中的维护者字段：GitHub noreply 地址，可随 tag 重跑覆盖。
+          ./scripts/build_and_package_deb.sh \
+            --version "${GITHUB_REF_NAME#v}" \
+            --build-type Release \
+            --maintainer "Linductor-alkaid <Linductor-alkaid@users.noreply.github.com>"
+      - name: 验证产物
+        shell: bash
+        run: |
+          ls -l dist/
+          # dpkg-deb 元数据健全性检查（不安装，只验证 control 与文件树）。
+          for deb in dist/*.deb; do
+            dpkg-deb --info "$deb"
+            dpkg-deb --contents "$deb" > /dev/null
+          done
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-deb-amd64
+          path: dist/
+          if-no-files-found: error
+
+  windows-static-x64:
+    name: Package windows x64 static library
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 构建静态库并打包
+        shell: pwsh
+        run: |
+          $Version = "${{ github.ref_name }}" -replace '^v', ''
+          & .\scripts\build_and_package_windows.ps1 `
+            -Version $Version `
+            -BuildType Release `
+            -BuildStatic:$true `
+            -BuildShared:$false `
+            -Arch x64
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-ChildItem .\dist\
+          $PackageDir = "dist\executor-$Version-windows-x64"
+          if (-not (Test-Path (Join-Path $PackageDir 'static\lib'))) {
+            Write-Host "::error::static lib directory missing in package"
+            exit 1
+          }
+      - name: 压缩发行包
+        shell: pwsh
+        run: |
+          $Version = "${{ github.ref_name }}" -replace '^v', ''
+          Compress-Archive -Path "dist\executor-$Version-windows-x64" `
+            -DestinationPath "dist\executor-$Version-windows-x64.zip" -Force
+          Get-ChildItem .\dist\*.zip
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-static-x64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    needs: [deb-amd64, windows-static-x64]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 汇总产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - name: 从 CHANGELOG 提取发布说明
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          # 截取 "## [版本]" 到下一个 "## " 之间的小节（含首行、去掉结尾的下一节标题）。
+          sed -n "/^## \[$VER\]/,/^## /p" CHANGELOG.md | sed '$d' > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::CHANGELOG.md 中未找到 [${VER}] 小节"
+            exit 1
+          fi
+          head -5 release-notes.md
+          find artifacts -type f | sort
+      - name: 创建 Release 并上传产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p assets
+          find artifacts -type f -exec cp {} assets/ \;
+          gh release create "$GITHUB_REF_NAME" \
+            --title "executor $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            assets/*

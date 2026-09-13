@@ -2,9 +2,11 @@
 # 将构建好的库打包成发行版本
 
 param(
-    [string]$Version = "0.4.0",
+    [string]$Version = "0.5.0",
     [string]$BuildDir = "build_windows",
     [string]$OutputDir = "dist",
+    # 打包名中的架构标识（x64/arm64）；留空时回退到 $env:PROCESSOR_ARCHITECTURE。
+    [string]$Arch = "",
     [switch]$IncludeStatic = $true,
     [switch]$IncludeShared = $true
 )
@@ -27,7 +29,8 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ProjectRoot = Split-Path -Parent $ProjectRoot
 
 # Create output directories
-$PackageName = "executor-${Version}-windows-${env:PROCESSOR_ARCHITECTURE}"
+if (-not $Arch) { $Arch = $env:PROCESSOR_ARCHITECTURE }
+$PackageName = "executor-${Version}-windows-${Arch}"
 $PackageDir = Join-Path $OutputDir $PackageName
 $PackageDirStatic = Join-Path $PackageDir "static"
 $PackageDirShared = Join-Path $PackageDir "shared"
@@ -112,7 +115,7 @@ $UsageGuide = @"
 ## Version Information
 - Version: $Version
 - Platform: Windows
-- Architecture: $env:PROCESSOR_ARCHITECTURE
+- Architecture: $Arch
 
 ## Directory Structure
 
@@ -138,7 +141,7 @@ target_link_libraries(your_target PRIVATE executor::executor)
 
 Make sure to set the path when configuring CMake:
 \`\`\`bash
-cmake -DCMAKE_PREFIX_PATH=path/to/executor-$Version-windows-$env:PROCESSOR_ARCHITECTURE/static
+cmake -DCMAKE_PREFIX_PATH=path/to/executor-$Version-windows-$Arch/static
 \`\`\`
 
 ### Using Shared Library
@@ -150,7 +153,7 @@ target_link_libraries(your_target PRIVATE executor::executor)
 
 Make sure to set the path when configuring CMake:
 \`\`\`bash
-cmake -DCMAKE_PREFIX_PATH=path/to/executor-$Version-windows-$env:PROCESSOR_ARCHITECTURE/shared
+cmake -DCMAKE_PREFIX_PATH=path/to/executor-$Version-windows-$Arch/shared
 \`\`\`
 
 **Note**: When using shared library, ensure \`executor.dll\` is available at runtime:
