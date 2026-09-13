@@ -5,7 +5,7 @@
 set -e  # 遇到错误立即退出
 
 # 默认参数
-VERSION="${VERSION:-0.4.0}"
+VERSION="${VERSION:-0.5.0}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_STATIC="${BUILD_STATIC:-true}"
 BUILD_SHARED="${BUILD_SHARED:-true}"

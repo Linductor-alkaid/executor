@@ -7,7 +7,7 @@ description: 当前开发快照、发布版本和 API 迁移的入口。
 
 ## 当前版本说明
 
-项目 CMake 与最新发布记录的版本均为 `v0.4.0`。本站以该稳定版为基线，同时跟随 `master` 的后续开发；未在稳定 tag 中发布的能力不构成版本承诺。首发不维护历史版本站点；发布时应以 tag 重新核对页面。
+项目 CMake 与最新发布记录的版本均为 `v0.5.0`。本站以该稳定版为基线，同时跟随 `master` 的后续开发；未在稳定 tag 中发布的能力不构成版本承诺。首发不维护历史版本站点；发布时应以 tag 重新核对页面。
 
 | 需要确认什么 | 入口 |
 | --- | --- |
@@ -48,6 +48,26 @@ description: 当前开发快照、发布版本和 API 迁移的入口。
 | 分别注册、启动 I/O worker | `start_worker(BlockingWorkerSpec)` | `WorkerHandle` 保留 wakeup、stop token、启动超时和退出原因。 |
 
 自动路由不会推断 callable 的实时安全、线程安全、GPU 内存所有权或 I/O 可中断性。`get_executor_capabilities()` 只提供建议性状态快照；所有实际投递仍须处理停止竞争和背压。
+
+## 0.5.0：任务生命周期语义、Android 一期与热路径性能
+
+0.5.0 保持既有公开提交 API 兼容，把任务级协作取消、可取消可重排的定时句柄、
+串行执行上下文与总量有界 admission 转正；Android CPU-only 交叉编译纳入一期；
+2026-09 性能审查的 P1/P2 两阶段重构显著改善提交吞吐与实时 jitter。发布产物新增
+CI 自动打包的 Linux amd64 deb（CUDA devel 容器完整构建）与 Windows x64 静态库。
+
+| 需求 | 0.5.0 入口 | 仍需自行保证的边界 |
+| --- | --- | --- |
+| 取消排队中/运行中的任务 | `submit_cancellable*` + `request_task_cancel()` | 取消是协作请求而非抢占；运行中任务须检查注入的 `StopToken` 并及时返回。 |
+| 可取消、可重排的定时任务 | `submit_delayed/periodic_*_with_handle` + `TimerHandle` | 定时到期派发到普通线程池，不绑定外部事件循环（asio strand 场景见互操作指南）。 |
+| 同一执行上下文严格按提交顺序结算 | `submit_on` / `submit_on_with_handle` | 只保证顺序；同上下文单任务耗时过长仍会推迟后续任务。 |
+| 结构化过载拒绝 | `ExecutorConfig::max_in_flight_tasks` | 默认 `0` 不启用；达到上限时 future 以 `CapacityExhaustedException` 就绪，须自行处理。 |
+| 解析状态快照文本 | `ExecutorSnapshot` schema 3 | 新增 `cancellation`/`timers` 字段为纯新增；按列数或字段总数断言的解析器需要放宽。 |
+| Android CPU-only 交叉编译 | NDK r26c/r28b 脚本与 CI | 线程优先级、亲和性、`mlockall` 与 timer slack 均 best-effort，不承诺硬实时。 |
+
+迁移提示：`ExecutorSnapshot` schema 2 → 3、进程内存锁租约与 shutdown 清理
+delayed 任务的行为变化见仓库 [MIGRATION.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/MIGRATION.md)
+的“从 0.4.0 升级到 0.5.0”一节。
 
 ## 0.4.0：固定同步边界与通信可观测性
 

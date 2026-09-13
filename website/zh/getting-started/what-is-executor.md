@@ -102,7 +102,7 @@ try {
 
 ### “同步无锁”不等于整条路径无锁
 
-0.4.0 的通信组件为关键同步路径提供固定存储和原子实现，但“同步无锁”不覆盖 payload 操作、callback、缺页或 OS 调度。`Topic<T>` 属于普通控制面，不是实时原语。精确保证见 [0.4.0 迁移说明](/zh/reference/version-and-migration)。
+自 0.4.0 起，通信组件为关键同步路径提供固定存储和原子实现，但“同步无锁”不覆盖 payload 操作、callback、缺页或 OS 调度。`Topic<T>` 属于普通控制面，不是实时原语。精确保证见 [0.4.0 迁移说明](/zh/reference/version-and-migration)。
 
 ## 第一次接入的推荐顺序
 

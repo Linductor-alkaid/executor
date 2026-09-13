@@ -2,7 +2,7 @@
 # 一键构建静态库、动态库并打包成发行版本
 
 param(
-    [string]$Version = "0.4.0",
+    [string]$Version = "0.5.0",
     [string]$BuildType = "Release",
     [string]$Generator = "Visual Studio 17 2022",
     [string]$Architecture = "x64",
@@ -11,7 +11,9 @@ param(
     [switch]$BuildTests = $false,
     [switch]$BuildExamples = $false,
     [string]$BuildDir = "build_windows",
-    [string]$OutputDir = "dist"
+    [string]$OutputDir = "dist",
+    # 传递给 package_windows.ps1 的打包架构标识；留空时使用环境变量回退。
+    [string]$Arch = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +49,7 @@ Write-Host "Step 2/2: Packaging release..." -ForegroundColor Cyan
     -Version $Version `
     -BuildDir $BuildDir `
     -OutputDir $OutputDir `
+    -Arch $Arch `
     -IncludeStatic:$BuildStatic `
     -IncludeShared:$BuildShared
 

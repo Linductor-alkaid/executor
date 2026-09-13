@@ -101,7 +101,7 @@ Executor deliberately keeps the following boundaries:
 - Default async submission is unbounded by default; configure `max_in_flight_tasks` explicitly when structured overload rejection is required (covers facade submits including serial dispatch, but not timer firing or realtime/GPU — see `docs/API.md` §3.10). `queue_capacity` only sizes per-worker local queues and is not a backpressure bound.
 - Facade timer handles (`TimerHandle`) dispatch expiry work to the ordinary thread pool. They do not bind to external event loops (asio strands); timers that must execute and be destroyed on one strand stay application-managed. See the [external event loop interop guide](docs/external_event_loop_interop.md).
 
-In 0.4.0, key communication synchronization paths use fixed storage and atomic implementations. “Synchronization lock-free” does not cover payload operations, callbacks, page faults, or OS scheduling. `Topic<T>` belongs to the ordinary control plane and is not a realtime primitive. See the [0.4.0 migration notes](docs/MIGRATION.md) for exact guarantees.
+Since 0.4.0, key communication synchronization paths use fixed storage and atomic implementations. “Synchronization lock-free” does not cover payload operations, callbacks, page faults, or OS scheduling. `Topic<T>` belongs to the ordinary control plane and is not a realtime primitive. See the [migration notes](docs/MIGRATION.md) for exact guarantees.
 
 ## Install and Integrate
 
@@ -136,6 +136,6 @@ More runnable code is available in [examples](examples/) and [tutorial](examples
 
 ## Version and License
 
-Current version: **v0.4.0**
+Current version: **v0.5.0**
 
 Executor is available under the [MIT License](LICENSE).
