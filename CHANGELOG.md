@@ -8,6 +8,14 @@
 
 ### 修复与改进
 
+- **#194 benchmark_thread_pool_hotpath harness 数据竞争修复**：Phase 2 延迟采样的
+  任务闭包原先并发 `push_back` 同一 per-producer `std::vector`（同一 producer 的
+  任务可被任意 worker 执行），TSAN 构建下确定性报 data race 并因 vector 内部状态
+  损坏挂死（30s ctest 超时，重跑仍不终止）。现改为每样本一个预分配槽位，由
+  (producer, sample index) 唯一寻址：任务闭包只写自己独占的槽，采样路径零共享
+  容器写入；槽位在 `shutdown(true)` join 全部 worker 后单线程读取。修复后 TSAN
+  构建对该 benchmark 0 warning；Phase 1 吞吐压测的插桩减速（~20x，实测 220-276s）
+  通过 TSAN 构建下单独放宽 ctest 超时到 600s 收敛（库代码无涉）。
 - **#187 残余窗口封口（批量预留误取消）**：v0.5.0 的倒序预留 + BatchWriting
   逃逸把误取消窗口缩到极窄，但在 2-vCPU CI runner 的 gcc-11 Release TSAN 下，
   写入循环中段仍可被 scan-ahead 消费者在生产者线程被抢占期间按 64-yield 预算

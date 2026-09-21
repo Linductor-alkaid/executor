@@ -106,12 +106,6 @@ void run_producer_scale(const Config& cfg, unsigned producers) {
         std::exit(1);
     }
 
-    // Per-producer preallocated latency samples (phase 2): producers write
-    // disjoint vectors, workers only read the timestamp captured by value in
-    // the task closure. No synchronization on the sampling path.
-    std::vector<std::vector<double>> samples(producers);
-    for (auto& s : samples) s.reserve(256);
-
     // ---- Phase 1: saturated multi-producer submission throughput ----
     std::atomic<size_t> done{0};
     std::atomic<bool> go{false};
@@ -161,19 +155,25 @@ void run_producer_scale(const Config& cfg, unsigned producers) {
     constexpr auto kSampleSpacing = std::chrono::microseconds(200);
     std::atomic<size_t> latency_done{0};
 
+    // 每个样本一个预分配槽位，由 (producer, sample index) 唯一寻址：任务闭包
+    // 只写自己独占的槽，采样路径上没有任何共享容器写入（issue #194：多个
+    // worker 并发 push_back 同一 per-producer vector 是 harness 数据竞争）。
+    // 槽位在 shutdown(true) join 全部 worker 之后才被单线程读取。
+    const size_t latency_total = kLatencySamplesPerProducer * producers;
+    std::vector<double> slots(latency_total, 0.0);
+
     std::vector<std::thread> latency_producers;
     latency_producers.reserve(producers);
     for (unsigned p = 0; p < producers; ++p) {
         latency_producers.emplace_back([&, p]() {
-            auto& out = samples[p];
-            out.clear();
             for (size_t i = 0; i < kLatencySamplesPerProducer; ++i) {
                 const auto submit_time = std::chrono::steady_clock::now();
-                pool.try_submit([&latency_done, &out, submit_time]() noexcept {
+                double* slot = &slots[p * kLatencySamplesPerProducer + i];
+                pool.try_submit([&latency_done, slot, submit_time]() noexcept {
                     const auto exec_time = std::chrono::steady_clock::now();
-                    out.push_back(std::chrono::duration<double, std::micro>(
-                                      exec_time - submit_time)
-                                      .count());
+                    *slot = std::chrono::duration<double, std::micro>(
+                                exec_time - submit_time)
+                                .count();
                     latency_done.fetch_add(1, std::memory_order_relaxed);
                 });
                 std::this_thread::sleep_for(kSampleSpacing);
@@ -184,7 +184,6 @@ void run_producer_scale(const Config& cfg, unsigned producers) {
     pool.wait_for_completion();
     pool.shutdown(true);
 
-    const size_t latency_total = kLatencySamplesPerProducer * producers;
     if (latency_done.load() != latency_total) {
         std::fprintf(stderr,
                      "benchmark_thread_pool_hotpath: latency task loss (%zu/%zu)\n",
@@ -192,10 +191,7 @@ void run_producer_scale(const Config& cfg, unsigned producers) {
         std::exit(1);
     }
 
-    std::vector<double> flat;
-    flat.reserve(latency_total);
-    for (const auto& s : samples) flat.insert(flat.end(), s.begin(), s.end());
-    LatencyStats lat = compute_latency_stats(flat);
+    LatencyStats lat = compute_latency_stats(slots);
 
     if (cfg.json_output) {
         std::printf(

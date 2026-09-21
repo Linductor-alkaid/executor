@@ -426,6 +426,17 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         )
     endif()
 
+    # benchmark_thread_pool_hotpath 的 harness 数据竞争已修（#194：延迟采样改为
+    # 每样本独占预分配槽位），但 Phase 1 吞吐压测（默认 2 万任务 × 最多 16 生产
+    # 者）在 TSAN 插桩下减速 ~20x，全 6 档实测 220-276s（gcc 13.3 / 8 worker），
+    # 远超 30s 默认档。按 600s 放宽供 TSAN 全量树外取证使用；CI 的 TSAN job 只
+    # 跑白名单 test_* 目标，不含 benchmark，不受影响。
+    if(EXECUTOR_ENABLE_TSAN AND TEST_NAME STREQUAL "benchmark_thread_pool_hotpath")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            TIMEOUT 600
+        )
+    endif()
+
     # --coverage 插桩对时序敏感的池测试有 2-5 倍减速（与 TSan 放宽同理），
     # 2-vCPU runner 上偶发超出 30s 默认档；coverage 构建下放宽到 120s。
     if(EXECUTOR_ENABLE_COVERAGE AND TEST_NAME MATCHES "^test_(thread_pool|thread_pool_integration|monitor_integration)$")
