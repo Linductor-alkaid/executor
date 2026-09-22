@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+### 文档
+
+- **待办账实清理（v0.5.x 阶段 21 第一项）**：对 `docs/todolists/` 15 份计划文档
+  逐项审计核实（约 326 个未勾项 → 186，且剩余均为真遗留、显式门控（⏸）或
+  可重跑模板）。要点：主清单阶段 20 P1/P2 回填勾选（随 0.5.0 合入）并新增
+  阶段 21（dependency-driven scheduling，承接 performance_audit PA-6 的
+  调度侧唤醒深化）；lockfree_queue_optimization §6.2/§6.3 三处失实勾选勘误；
+  gpu_todolist 约 70 项回填勾选，§3.5 "pinned memory / optimizer" 两处已勾项
+  经审计证伪加勘误注记（对应 PA-30/PA-31）；android/client/mira 三份反馈计划
+  约 26 项漏勾回填、已决待决项回填，外部门控项（big.LITTLE 真机、heyaki
+  M6/M7、Mira 回填）显式标注；发布前人工核对项迁入 `docs/RELEASE_CHECKLIST.md`；
+  android 两项已定决策回写 `docs/design/android_port.md` 待决项；修复
+  `website/.vitepress/config.mjs` 中英导航版本标签滞后（v0.4.0 → v0.5.0）。
+
 ### 修复与改进
 
 - **#194 benchmark_thread_pool_hotpath harness 数据竞争修复**：Phase 2 延迟采样的

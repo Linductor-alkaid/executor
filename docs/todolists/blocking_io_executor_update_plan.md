@@ -90,6 +90,8 @@
 - [x] 验证 stop 幂等、并发 stop、析构清理、自停止和状态计数。
 - [ ] TSAN 测试生命周期状态读取与并发 stop；ASAN/LSAN 覆盖异常启动和停止路径。
   当前环境已完成 TSAN 编译与 ASAN 执行；TSAN runtime memory mapping 和 LSAN ptrace 扫描受宿主环境限制，留给 CI/目标机执行。
+  （2026-09-22 注记：CI TSAN job（c-cpp.yml）目标清单目前未含 test_blocking_io_executor，
+  存在缺口——补入或记录排除原因前本项无法关闭）
 
 ---
 
@@ -122,6 +124,8 @@
 - [x] 新增 I/O 注册失败和运行期 worker 异常的 facade 诊断隔离断言。
 - [x] 添加 timer、RT、I/O、async 同时存在的 mixed shutdown 测试；GPU 仍由可选后端测试覆盖。
 - [ ] 在 registry 操作和 stop 并发时运行 TSAN。
+  （2026-09-22 注记：与 I1 的 TSAN 项同属 CI 缺口——c-cpp.yml TSAN job 目标清单
+  未含 test_blocking_io_executor，补入或记录排除原因后关闭）
 
 ---
 
@@ -175,18 +179,26 @@
 
 ### 网站验证
 
-- [ ] 运行网站构建和链接检查，确认 base `/executor/` 下中英文新路由、sidebar、语言切换和交叉链接有效。
+- [x] 运行网站构建和链接检查，确认 base `/executor/` 下中英文新路由、sidebar、语言切换和交叉链接有效。
+  （docs.yml 每次 CI 运行 docs:check + docs:build，0.5.0 已发布，2026-09-22 回填）
 - [ ] 检查窄屏与宽屏下的长 API 名、表格和 code block 不溢出；不改变既有主题或页面信息架构。
+  （2026-09-22 迁移：人工视觉核对项移入 docs/RELEASE_CHECKLIST.md 发布核对流程）
 - [x] 确认每个 `<<< @` 指向存在的源码和稳定行段；示例修改时同步复查页面片段。
 - [x] 执行新教程的 CTest smoke test 与 Blocking I/O runtime 测试。
 - [ ] 在 release 文档检查中确认版本范围、API、迁移材料、教程、中文页、英文页和 translation status 同步。
+  （2026-09-22 迁移：发布核对项移入 docs/RELEASE_CHECKLIST.md，随每次发布重跑）
 
 ### 手册完成标准
 
-- [ ] 用户能判断“这是固定周期控制、有限异步工作，还是专属可阻塞 I/O”。
-- [ ] 用户知道 `stop_token` 不能独自中断底层 I/O，并能选择 wakeup fd 或有限 timeout。
-- [ ] 用户能把状态、命令和诊断分别接到正确的通信组件，并能观测 age、drop、error 和 shutdown。
-- [ ] 用户不会从手册推导出未承诺的硬实时、无锁或自动重连保证。
+- [x] 用户能判断“这是固定周期控制、有限异步工作，还是专属可阻塞 I/O”。
+  （blocking-io-workers.md 开篇三种模式判别，2026-09-22 回填）
+- [x] 用户知道 `stop_token` 不能独自中断底层 I/O，并能选择 wakeup fd 或有限 timeout。
+  （同页"stop token 本身不能中断任意外部等待……使用有限 timeout"，2026-09-22 回填）
+- [x] 用户能把状态、命令和诊断分别接到正确的通信组件，并能观测 age、drop、error 和 shutdown。
+  （本页未覆盖部分由 comm 专题页 channels/state-and-phases/observability 覆盖，
+  2026-09-22 回填）
+- [x] 用户不会从手册推导出未承诺的硬实时、无锁或自动重连保证。
+  （同页"本库刻意不决定……重连、设备安全动作"，2026-09-22 回填）
 
 ---
 
@@ -202,6 +214,11 @@
 
 ## 风险与待决项
 
-- [ ] 明确 I/O worker 的 ready 仅表示线程属性和 `run()` 入口已建立；transport 就绪、首帧接收和业务状态由使用方定义。
-- [ ] 评估全局 name registry 是否作为本计划的一部分落地；若延后，必须有跨 registry 冲突测试。
-- [ ] 保持 wakeup 平台无关：具体 fd、eventfd、pipe 或系统 API 由 worker 实现，不进入核心库公开 API。
+- [x] 明确 I/O worker 的 ready 仅表示线程属性和 `run()` 入口已建立；transport 就绪、首帧接收和业务状态由使用方定义。
+  （blocking-io-workers.md"ready 只表示 executor 线程设置完成"，2026-09-22 回填）
+- [x] 评估全局 name registry 是否作为本计划的一部分落地；若延后，必须有跨 registry 冲突测试。
+  （已按"延后 + 冲突测试"收敛：test_blocking_io_executor.cpp 跨执行器重名返回
+  DuplicateName；facade 侧检查见 executor.cpp，2026-09-22 回填）
+- [x] 保持 wakeup 平台无关：具体 fd、eventfd、pipe 或系统 API 由 worker 实现，不进入核心库公开 API。
+  （blocking_io.hpp 纯虚 `virtual void wakeup() noexcept = 0`，无平台原语泄漏，
+  2026-09-22 回填）

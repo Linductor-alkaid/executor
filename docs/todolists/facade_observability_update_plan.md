@@ -16,9 +16,16 @@
 - [x] 实时执行器 `push_task_ex()` 已返回入队结果，并通过 `dropped_task_count` 暴露丢任务。
 - [x] 旧 `push_task()` 虽不返回结果，但失败仍累计到 `dropped_task_count`。
 - [x] 普通异步任务异常尚未统一进入 facade 可见的失败通道。
-- [ ] `submit_periodic()` 丢弃 future，周期任务异常可能无可见出口。
-- [ ] `Executor` facade 尚无统一失败回调 / 最近错误 / 失败事件查询入口。
-- [ ] 多个注册/初始化 API 仍只返回 `bool`，失败原因不可诊断。
+  （过时基线：计划执行前状态，阶段 3 已统一，2026-09-22 回填）
+- [x] `submit_periodic()` 丢弃 future，周期任务异常可能无可见出口。
+  （阶段 3 交付：facade_submit_periodic 周期包装与诊断 + get_periodic_task_status +
+  test_periodic_failure_observability，2026-09-22 回填）
+- [x] `Executor` facade 尚无统一失败回调 / 最近错误 / 失败事件查询入口。
+  （阶段 1 交付：set_failure_callback / get_failure_status / get_recent_failures，
+  2026-09-22 回填）
+- [x] 多个注册/初始化 API 仍只返回 `bool`，失败原因不可诊断。
+  （阶段 5 交付：initialize_ex / register_gpu_executor_ex + test_executor_result_diagnostics，
+  2026-09-22 回填）
 - [x] 实时任务推送仍要求用户先拿底层 `IRealtimeExecutor*`，facade 完整度不足。
 - [x] `wait_for_completion()` 超时返回不可区分，调用方无法知道是否真的完成。
 

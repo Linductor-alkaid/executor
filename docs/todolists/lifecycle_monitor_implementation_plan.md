@@ -6,8 +6,12 @@
 
 - [x] 新增只读的 `ExecutorSnapshot`，一次调用汇总 Executor 生命周期、各类后端状态、失败摘要和任务统计。
 - [x] 第一阶段采用明确标注的 best-effort 语义，不改变提交、future、shutdown 和实时周期行为。
-- [ ] 为等待超时、shutdown 失败、启动失败和健康检查提供统一故障现场入口。
-- [ ] 后续按实际排障需求扩展有限在途任务诊断，而不是默认保存无限任务历史。
+- [x] 为等待超时、shutdown 失败、启动失败和健康检查提供统一故障现场入口。
+  （阶段 2.2 交付：wait/shutdown 超时保留完整 snapshot + sequence，见
+  executor.cpp wait_for_completion_ex，2026-09-22 回填）
+- [x] 后续按实际排障需求扩展有限在途任务诊断，而不是默认保存无限任务历史。
+  （阶段 3 已实现有界 in-flight 表：types.hpp TaskLifecycleSnapshot 与
+  in_flight_count/in_flight_tasks 字段，2026-09-22 回填）
 
 ## 当前基线
 
@@ -20,7 +24,8 @@
 - [x] 已具备统一的 `ExecutorLifecycleState` 生命周期枚举。
 - [x] 已具备一次调用汇总所有后端和失败/统计状态的 `ExecutorSnapshot`。
 - [x] 已具备统一 snapshot 序号、采集时间和 partial/inconsistency 标记。
-- [ ] 尚无在途任务的有界生命周期诊断表。
+- [x] 尚无在途任务的有界生命周期诊断表。
+  （过时基线：阶段 3 已交付，见 types.hpp in-flight 字段，2026-09-22 回填）
 
 ## 设计约束
 
@@ -226,6 +231,9 @@
 - [x] 不使用一把全局锁包住所有 backend 状态读取。
 
 ### 4.2 有界事件流（可选）
+
+> 2026-09-22 定性：条件触发的可选项——仅当 best-effort snapshot 无法定位真实故障时
+> 才启动；阶段验收已确认"事件流保持可选、未默认开启"，非欠账。
 
 - [ ] 仅当 best-effort snapshot 无法定位真实故障时，增加生命周期事件 ring buffer。
 - [ ] 事件至少包含 sequence、时间、backend、task id、前后状态和简短原因。

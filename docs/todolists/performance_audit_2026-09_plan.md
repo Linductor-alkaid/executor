@@ -305,12 +305,18 @@ splice、CAS 失败指数 PAUSE 退避、每轮重试重读期望值防确定性
 
 - [ ] PA-6：task graph 分片（按 handle hash 分桶锁）或原子依赖计数 + 定向唤醒，
   消除全局 `task_graph_mutex_` + `notify_all`。
+  （2026-09-22：深化方案转入主清单阶段 21——调度侧唤醒、依赖驱动调度，
+  依赖未就绪不入队，设计文档 docs/design/dependency_driven_scheduling.md）
 - [ ] PA-15：默认执行器引用改 `std::atomic<std::shared_ptr>` 快照，消除每次提交的
   `default_async_mutex_`/`thread_pool_mutex_` 两跳。
 - [ ] PA-35：TaskMonitor 先查容量/采样再锁；dropped 计数改原子；in-flight 表分片或
   按小整型 type id 键化。
+  （2026-09-22 进度注记：queued/pending 先查再锁已落地，见 task_monitor.cpp:11-22；
+  剩余 dropped 计数原子化与 in-flight 表分片/键化未做）
 - [ ] PA-10：LoadBalancer 负载字段改 per-worker 填充原子，去掉每任务写锁。
-- [ ] PA-14：`try_submit_batch` 的 monitor 事件移出全局锁后补记。
+- [x] PA-14：`try_submit_batch` 的 monitor 事件移出全局锁后补记。
+  （已随 P1 顺带落地：monitor id 锁前收集、record_task_queued 锁外补记，
+  见 thread_pool.cpp:1142 注释；2026-09-22 回填）
 - [ ] PA-16：`submit_batch_priority` 路由到带优先级参数的 `try_submit_batch`；worker
   队列 `push_batch` 改 `push_batch_exact` 语义。
 - [ ] PA-11/12：近似计数器退出数据路径（由 `enqueue_pos_ - dequeue_pos_` 推导）；
@@ -385,4 +391,6 @@ splice、CAS 失败指数 PAUSE 退避、每轮重试重读期望值防确定性
 - [ ] P3 timer 驻停与 libtsan workaround 的条件编译边界（CI 的 TSAN 任务必须仍走
   分片轮询路径）。
 - [ ] P4 task graph 分片与既有"计数先于 future"不变式（PR #177）的交互评审。
+  （2026-09-22：评审入口转入主清单阶段 21 的 dependency-driven scheduling 设计文档；
+  parked 任务沿用 admission 槽位与 completion sink 的既有释放时序，评审随设计文档进行）
 - [ ] P5 optimizer 去留需要用户反馈（是否有下游依赖其 advisory API）。

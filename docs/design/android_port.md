@@ -342,9 +342,12 @@ hw = std::min(hw, kAndroidDefaultMaxThreads);
 | 交叉编译 `find_package` 易用性差 | 低 | 文档 + Prefab/AAR 集成 |
 | 测试无法在 CI 直接运行 Android 二进制 | 中 | 交叉编译 CI + 自托管设备 runner 或模拟器 job |
 
-待决项：
+待决项（2026-09-22 与 android_port_plan 同步回写）：
 
 - [ ] 一期 CI 是否固定 NDK r26c + r28b，还是只保留一个推荐版本。
-- [ ] Android 默认线程数上限 4 是否作为公开默认，还是仅作为脚本建议。
-- [ ] 是否在 Android 上禁用 `RealtimeThreadExecutor` 的自动 `SCHED_FIFO` 建议值。
-- [ ] OpenCL 是否进入二期路线图，或长期保持关闭。
+  （现状：android.yml 保留双版本；长期收敛决策待定）
+- [x] Android 默认线程数上限 4 是否作为公开默认，还是仅作为脚本建议。
+  （已作为公开默认：docs/API.md 明示"Android 默认上限 4"，executor_manager.cpp 实现）
+- [x] 是否在 Android 上禁用 `RealtimeThreadExecutor` 的自动 `SCHED_FIFO` 建议值。
+  （已禁用：v0.5.0 起短周期实时线程不再自动申请 SCHED_FIFO，docs/API.md 有说明）
+- [ ] ⏸ 门控（二期决策）：OpenCL 是否进入二期路线图，或长期保持关闭。

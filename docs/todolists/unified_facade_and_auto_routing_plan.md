@@ -114,7 +114,9 @@
 ### 测试任务
 
 - [x] 为公共类型、builder、双路径 callable 和不兼容 intent 添加编译/单元测试。
-- [ ] 覆盖 CPU/GPU 路由矩阵：无配置、GPU 可用、未注册、已停止、后端错误、硬容量满、真实提交竞争，以及三种 fallback 策略。
+- [ ] ⏸ 门控（CUDA 主机）：覆盖 CPU/GPU 路由矩阵：无配置、GPU 可用、未注册、已停止、后端错误、硬容量满、真实提交竞争，以及三种 fallback 策略。
+  （无 GPU 侧已由 test_executor_auto_routing_stage1.cpp 覆盖 AllowCpu 回退、
+  NoFallback/RequireRequestedBackend 拒绝；GPU 在场场景待 CUDA 主机，2026-09-22 注记）
 - [x] 覆盖 routing buffer 的容量、顺序、清理、callback 异常隔离和与 failure event 的分离。
 - [x] 覆盖无锁 dispatch 的接受、停止、队列满、对象池耗尽、空任务及 shutdown 并发。
 - [x] 覆盖 Blocking worker 启动超时/停止和实时未启动/背压，验证不会经自动路由改变语义。
@@ -133,4 +135,6 @@
 - [x] 新用户可只使用 `Executor` 和 `submit_auto(lambda)` 完成默认异步任务，并获得可解释的默认路由决策。
 - [x] 专家用户仍可调用全部既有显式 API，且行为与回归测试基线一致。
 - [x] 所有后端不可用、拒绝、回退、任务异常和背压状态至少通过 future/返回值、路由决策、failure event 或状态计数之一可观察。
-- [ ] 全量测试、禁用 GPU 构建和启用 GPU 构建均通过；新增测试不依赖实际 GPU 才能验证不可用/回退路径。
+- [ ] ⏸ 门控（CUDA 主机）：全量测试、禁用 GPU 构建和启用 GPU 构建均通过；新增测试不依赖实际 GPU 才能验证不可用/回退路径。
+  （CI 已有三路 EXECUTOR_ENABLE_GPU=OFF job + gpu-headers-build stub 编译任务；
+  真实 GPU 运行验证待 CUDA 主机，2026-09-22 注记）

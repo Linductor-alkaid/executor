@@ -173,7 +173,9 @@
 - [x] 完成 Android CPU-only 交叉编译 CI（NDK，arm64-v8a / x86_64，static / shared，API 21）
 - [x] 完成 `executor::StopToken` 兼容层与 Blocking I/O 生命周期迁移
 - [x] 完成 Android best-effort 调度语义和线程数 / cpuset 自适应
-- [ ] 完成 arm64 设备 smoke test、Blocking I/O 与 MPSC 弱内存序压力验证
+- [ ] ⏸ 门控（硬件）：完成 arm64 设备 smoke test、Blocking I/O 与 MPSC 弱内存序压力验证
+  （big.LITTLE 真机未到位；模拟器 6/6 用例与 ARM64 Neoverse-N2 runner 600s soak 已覆盖，
+  见 docs/performance/android_a3_validation.md；发布前 gate 登记于 docs/RELEASE_CHECKLIST.md）
 - [x] 完成 Android 打包与集成文档（NDK CMake / AGP / Prefab / `c++_shared`）
 
 ---
@@ -187,7 +189,7 @@
 - [x] 完成可绑定生命周期的定时句柄（P1-2）：cancel/reschedule、Scoped 句柄销毁即取消、
   纳入监控（外部 strand 绑定由 T2/S2 门控；S2 已由阶段 19 落地）
 - [x] 完成外部事件循环互操作指南（P1-1 第一步），并依据评审结论决定序列化上下文 API 是否落地（SerialExecutionContext 已随阶段 19 合入）
-- [ ] P2-1/P2-2 重估门：待 heyaki M6/M7 消息与文件传输压测后定形
+- [ ] ⏸ 门控（下游）：P2-1/P2-2 重估门：待 heyaki M6/M7 消息与文件传输压测后定形
 
 ---
 
@@ -216,9 +218,31 @@ comm·timer·取消原语 / GPU·监控路径 / 文档同步），问题登记 P
 - [x] 执行 [性能审查收敛计划](performance_audit_2026-09_plan.md)（阶段 D0 文档同步
   随本批完成；P1 线程池热路径三连、P2 无锁兑现、P3/P4 定时器·comm·facade·监控、
   P5 GPU 待排期）
-- [ ] P1：线程池提交热路径三连（全局锁 + 持锁谓词 + 每次派发堆分配）与 Task 复制链
-- [ ] P2：ObjectPool 无锁化与 RT 优先级反转消除、LockFreeWorkerQueue 兑现
+- [x] P1：线程池提交热路径三连（全局锁 + 持锁谓词 + 每次派发堆分配）与 Task 复制链
+  （随 0.5.0 合入，详见 performance_audit_2026-09_plan.md 阶段 P1 ✅）
+- [x] P2：ObjectPool 无锁化与 RT 优先级反转消除、LockFreeWorkerQueue 兑现
+  （随 0.5.0 合入，详见 performance_audit_2026-09_plan.md 阶段 P2 ✅）
 - [ ] P3：timer 1kHz 轮询改条件编译驻停、comm 阻塞原语退避、Topic RCU、
-  取消/周期 tick 热路径分配
+  取消/周期 tick 热路径分配（2026-09-22 逐项核实确未实施）
 - [ ] P4：task graph 分片、默认执行器原子快照、TaskMonitor 先查再锁
+  （PA-14 已随 P1 顺带落地；PA-6 的调度侧唤醒深化转入阶段 21）
 - [ ] P5：GPU 持锁阻塞调用挪出、loader 函数表缓存、pinned memory、optimizer 去留
+  （⏸ 门控：GPU 性能项需真实 CUDA/OpenCL 环境记录数据；optimizer 去留待用户反馈）
+
+---
+
+## 阶段 21：v0.5.x —— 待办账实清理与 dependency-driven scheduling
+
+v0.5.x 两条主线：待办账实对齐（2026-09-22 对 15 份计划文档逐项审计核实），
+以及 submit_after 从"worker 占用等待条件变量"演进为"调度侧唤醒、依赖驱动调度"
+（承接 performance_audit PA-6 的深化方案）。
+
+- [x] 待办账实清理：15 份计划文档逐项核对——回填已完成未勾项、修正失实勾选、
+  门控项显式标注（⏸）、发布前清单重定性为可重跑模板
+- [x] 设计文档 docs/design/dependency_driven_scheduling.md：依赖未就绪不入队
+  （parked ready 结构），依赖终态级联入队、失败即时结算、task_graph_cv_ 退役；
+  载明语义决策：queued soft timeout 计时起点、shutdown 对 parked 任务的结算、
+  admission 占额语义、priority/执行器快照沿用
+- [ ] 实施调度侧唤醒改造：复用 resolve_task_graph_dependents_locked 级联骨架与
+  取消 phase CAS 仲裁；保持"计数先于 future"不变式（PR #177）与有界 admission 语义
+- [ ] TSAN 全量回归 + 依赖等待路径并发基准（承接 performance_audit PA-6 验收口径）

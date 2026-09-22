@@ -19,5 +19,7 @@
 - [ ] Android 官方模拟器已运行 `scripts/run_android_tests.sh` 全部 standalone 测试并 PASS。
 - [ ] ARM64 concurrency workflow（4 核、单核、ASan/UBSan、600s soak）最近一次为 success；结果同步至 `docs/performance/android_a3_validation.md`。
 - [ ] 至少一台 big.LITTLE Android 真机已复测 A3 测试集和 10 分钟 soak；如未完成，本版本不得宣称已在 big.LITTLE 设备验证。
+- [ ] 网站 Blocking I/O 页面在窄屏与宽屏下长 API 名、表格和 code block 不溢出（人工视觉核对，自 blocking_io_executor_update_plan 迁入）。
+- [ ] release 文档核对：版本范围、API、迁移材料、教程、中文页、英文页和 translation status 相互同步（自 blocking_io_executor_update_plan 迁入）。
 
 稳定版以发布 tag 触发正式发布；`master` 推送部署当前开发快照。若需要变更这一策略，先更新网站版本说明和 Pages workflow，再发布内容。
