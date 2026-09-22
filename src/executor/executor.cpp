@@ -391,7 +391,10 @@ void Executor::mark_task_graph_running(const TaskHandle& handle) {
     manager_->record_in_flight_task_state(handle.id(), TaskLifecycleState::Running);
 }
 
-void Executor::mark_task_graph_succeeded(const TaskHandle& handle) {
+void Executor::mark_task_graph_succeeded(const TaskHandle& handle,
+                                         ParkedDrainBag* deferred) {
+    ParkedDrainBag local_bag;
+    ParkedDrainBag& bag = deferred ? *deferred : local_bag;
     {
         std::lock_guard<std::mutex> lock(task_graph_mutex_);
         auto it = task_graph_nodes_.find(handle.id());
@@ -399,18 +402,26 @@ void Executor::mark_task_graph_succeeded(const TaskHandle& handle) {
             it->second.state = TaskGraphState::Succeeded;
             it->second.exception = nullptr;
             it->second.error_message.clear();
+            it->second.parked.reset();
             task_dependencies_->mark_completed(handle.id());
-            resolve_task_graph_dependents_locked(handle.id());
+            resolve_task_graph_dependents_locked(
+                handle.id(), bag.ready, bag.failures);
             finalize_task_graph_node_locked(handle.id());
         }
     }
     manager_->record_in_flight_task_terminal(handle.id());
     task_graph_cv_.notify_all();
+    if (!deferred) {
+        drain_parked_resolutions(bag.ready, bag.failures);
+    }
 }
 
 void Executor::mark_task_graph_failed(const TaskHandle& handle,
                                       std::exception_ptr exception,
-                                      std::string message) {
+                                      std::string message,
+                                      ParkedDrainBag* deferred) {
+    ParkedDrainBag local_bag;
+    ParkedDrainBag& bag = deferred ? *deferred : local_bag;
     {
         std::lock_guard<std::mutex> lock(task_graph_mutex_);
         auto it = task_graph_nodes_.find(handle.id());
@@ -418,15 +429,25 @@ void Executor::mark_task_graph_failed(const TaskHandle& handle,
             it->second.state = TaskGraphState::Failed;
             it->second.exception = exception;
             it->second.error_message = std::move(message);
-            resolve_task_graph_dependents_locked(handle.id());
+            // 终态节点的驻留载荷必须清空：取消 parked 任务时由这里释放
+            // 载荷（wrapper 永不运行），级联据此跳过已结算节点。
+            it->second.parked.reset();
+            resolve_task_graph_dependents_locked(
+                handle.id(), bag.ready, bag.failures);
             finalize_task_graph_node_locked(handle.id());
         }
     }
     manager_->record_in_flight_task_terminal(handle.id());
     task_graph_cv_.notify_all();
+    if (!deferred) {
+        drain_parked_resolutions(bag.ready, bag.failures);
+    }
 }
 
-void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) {
+void Executor::resolve_task_graph_dependents_locked(
+    const std::string& task_id,
+    std::vector<ParkedReady>& ready_parked,
+    std::vector<std::function<void()>>& deferred_failures) {
     std::vector<std::string> ready_ids{task_id};
     std::vector<std::string> terminal_ids;
 
@@ -442,28 +463,81 @@ void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) 
         const auto dependent_ids = dependents_it->second;
         for (const auto& dependent_id : dependent_ids) {
             auto node_it = task_graph_nodes_.find(dependent_id);
-            if (node_it == task_graph_nodes_.end() ||
-                node_it->second.state != TaskGraphState::WhenAll) {
+            if (node_it == task_graph_nodes_.end()) {
+                continue;
+            }
+            auto& dependent_node = node_it->second;
+
+            // parked 依赖图任务（dependency-driven 调度）：任一依赖失败即
+            // 失败结算；否则递减未满足计数，归零时收集出队项（executor
+            // 提交在锁外由 drain_parked_resolutions 执行，避免持图锁调用
+            // 执行器提交路径）。
+            if (dependent_node.parked &&
+                dependent_node.state == TaskGraphState::Pending) {
+                std::vector<TaskHandle> dependencies;
+                for (const auto& dependency_id : dependent_node.dependencies) {
+                    dependencies.emplace_back(dependency_id);
+                }
+
+                if (auto dependency_exception =
+                        dependency_failure_locked(dependencies)) {
+                    dependency_exception = reclassify_dependency_exception(
+                        dependency_exception);
+                    dependent_node.state = TaskGraphState::Failed;
+                    dependent_node.exception = dependency_exception;
+                    dependent_node.error_message =
+                        "Dependency failed before dependent task execution";
+                    auto payload = std::move(dependent_node.parked);
+                    dependent_node.parked.reset();
+                    ready_ids.push_back(dependent_id);
+                    terminal_ids.push_back(dependent_id);
+                    manager_->record_in_flight_task_terminal(dependent_id);
+                    deferred_failures.push_back(
+                        [payload, exception = dependency_exception]() mutable {
+                            payload->settle_without_run(exception);
+                        });
+                    continue;
+                }
+
+                if (dependent_node.unmet_count > 0) {
+                    --dependent_node.unmet_count;
+                }
+                if (dependent_node.unmet_count == 0) {
+                    auto payload = std::move(dependent_node.parked);
+                    dependent_node.parked.reset();
+                    // 节点保持 Pending：与既有"已入队未开始"语义一致，
+                    // wrapper 运行时经 mark_task_graph_running 转 Running。
+                    std::string resolved_executor_name = "default";
+                    if (payload && payload->executor) {
+                        resolved_executor_name = payload->executor->get_name();
+                    }
+                    ready_parked.push_back(ParkedReady{
+                        TaskHandle(dependent_id), std::move(resolved_executor_name),
+                        std::move(payload)});
+                }
+                continue;
+            }
+
+            if (dependent_node.state != TaskGraphState::WhenAll) {
                 continue;
             }
 
             std::vector<TaskHandle> dependencies;
-            const auto& dependent_node = node_it->second;
             for (const auto& dependency_id : dependent_node.dependencies) {
                 dependencies.emplace_back(dependency_id);
             }
 
             if (auto dependency_exception = dependency_failure_locked(dependencies)) {
-                node_it->second.state = TaskGraphState::Failed;
-                node_it->second.exception = dependency_exception;
-                node_it->second.error_message = "when_all dependency failed";
+                dependent_node.state = TaskGraphState::Failed;
+                dependent_node.exception = dependency_exception;
+                dependent_node.error_message = "when_all dependency failed";
                 ready_ids.push_back(dependent_id);
                 terminal_ids.push_back(dependent_id);
                 manager_->record_in_flight_task_terminal(dependent_id);
             } else if (dependencies_succeeded_locked(dependencies)) {
-                node_it->second.state = TaskGraphState::Succeeded;
-                node_it->second.exception = nullptr;
-                node_it->second.error_message.clear();
+                dependent_node.state = TaskGraphState::Succeeded;
+                dependent_node.exception = nullptr;
+                dependent_node.error_message.clear();
                 task_dependencies_->mark_completed(dependent_id);
                 ready_ids.push_back(dependent_id);
                 terminal_ids.push_back(dependent_id);
@@ -474,6 +548,53 @@ void Executor::resolve_task_graph_dependents_locked(const std::string& task_id) 
 
     for (const auto& terminal_id : terminal_ids) {
         finalize_task_graph_node_locked(terminal_id);
+    }
+}
+
+void Executor::drain_parked_resolutions(
+    std::vector<ParkedReady>& ready_parked,
+    std::vector<std::function<void()>>& deferred_failures) {
+    // 依赖失败的 parked 结算先执行：尽快释放 admission 与 registry 槽位。
+    for (auto& failure : deferred_failures) {
+        if (failure) {
+            failure();
+        }
+    }
+
+    // ready 出队：提交时定格的 priority/executor 原样使用；提交被拒按
+    // 既有 on_rejected 语义落 Failed 并结算，不让任务静默消失。
+    for (auto& ready : ready_parked) {
+        if (!ready.payload || !ready.payload->executor) {
+            continue;
+        }
+        bool accepted = false;
+        try {
+            if (ready.payload->priority) {
+                accepted = ready.payload->executor->try_submit_priority_task(
+                    *ready.payload->priority,
+                    std::move(ready.payload->wrapper),
+                    std::move(ready.payload->on_timeout));
+            } else {
+                accepted = ready.payload->executor->try_submit_task(
+                    std::move(ready.payload->wrapper),
+                    std::move(ready.payload->on_timeout));
+            }
+        } catch (...) {
+            accepted = false;
+        }
+        if (!accepted) {
+            auto exception = std::make_exception_ptr(std::runtime_error(
+                "Async executor rejected task submission"));
+            mark_task_graph_failed(
+                ready.handle, exception,
+                "Tracked task submission rejected after dependency readiness");
+            ready.payload->settle_without_run(exception);
+            record_submit_rejected(
+                ready.executor_name, ready.handle.id(),
+                "Async executor rejected tracked submission after dependency "
+                "readiness",
+                exception);
+        }
     }
 }
 
@@ -937,10 +1058,15 @@ TaskCancellationResponse Executor::propagate_cancel_state(
                 auto exception = std::make_exception_ptr(TaskCancelled(
                     TaskCancellationReason::Explicit,
                     "Task cancelled before execution"));
+                ParkedDrainBag drain_bag;
                 mark_task_graph_failed(
-                    *graph_handle, exception, "Task cancelled before execution");
+                    *graph_handle, exception, "Task cancelled before execution",
+                    &drain_bag);
                 manager_->record_in_flight_task_state(
                     task_id, TaskLifecycleState::Cancelled);
+                // 排队取消路径同样外移 drain：被取消节点的下游 dependent
+                // 在本任务完全终态（registry finalize 等）之后才结算。
+                drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
             }
             manager_->record_in_flight_task_terminal(task_id);
             cancellation_registry_->finalize(task_id);

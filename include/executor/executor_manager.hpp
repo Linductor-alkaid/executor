@@ -315,6 +315,14 @@ private:
     // 默认异步执行器（线程池）
     std::shared_ptr<IAsyncExecutor> default_async_executor_;
 
+    // stop(false)/shutdown(false) 退休的默认执行器。句柄从
+    // default_async_executor_ 撤下后池可能仍在 detached 终结线程上排空，
+    // 而 worker 闭包捕获裸 facade 指针：后续 shutdown(true)（含
+    // ~Executor → 本管理器析构）必须先对这些退休执行器做 stop(true)，
+    // 等 worker 全部 join 后才允许析构 facade/manager 状态。
+    // 由 default_async_mutex_ 保护。
+    std::vector<std::shared_ptr<IAsyncExecutor>> retired_async_executors_;
+
     // 已关闭标记：shutdown 后不再懒初始化，get_default_async_executor() 直接返回 nullptr
     bool default_async_shutdown_ = false;
 

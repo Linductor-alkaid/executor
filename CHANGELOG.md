@@ -6,6 +6,34 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **dependency-driven scheduling 第一阶段（PR-1，v0.5.2 主线，设计见
+  `docs/design/dependency_driven_scheduling.md`）**：`submit_after` /
+  `submit_after_with_handle` 从"任务立即入队、wrapper 在 worker 上等
+  条件变量"演进为"依赖未就绪不入队"——parked 载荷驻留任务图节点
+  （提交时定格 wrapper/priority/执行器快照），依赖终态经
+  `resolve_task_graph_dependents_locked` 级联：全部成功按原 priority
+  调度侧出队，任一失败即时结算依赖异常（任务不占 worker）。
+  worker 占用与宽依赖饿死/挂死窗口消除（新增免饿死回归测试，旧实现
+  在该场景挂死）；`unmet_count` 驱动定向出队，替代对全部等待者的
+  `notify_all` 惊群（条件变量本体按计划 PR-3 退役）。queued soft
+  timeout 的计时起点暂仍为出队时刻（完整 D1"提交即起算"语义随 PR-2）。
+
+### 修复与改进
+
+- **facade 析构与孤池 worker 的 UAF 闭环（既有窗口，PR-1 时序使其暴露）**：
+  `stop(false)` 将池交给 detached 终结线程后，manager 撤下句柄，后续
+  `shutdown(true)`（含 `~Executor` 路径）此前会完全跳过等待，孤池 worker
+  收尾（failure 面板/monitor/registry 写入）可与 facade/manager 析构并发
+  （TSAN 实证 heap-use-after-free）。现改为 retired 保活 + 终局排空：
+  executor 退休池存入 `retired_pools_`、manager 停机执行器存入
+  `retired_async_executors_`，任何 `shutdown(true)` 先等退休池 worker 全部
+  join 再放行析构；`stop(false)` 立即返回契约不变。
+- **失败统计先于依赖级联**：tracked 任务异常路径中 `record_task_exception`
+  提前到级联结算之前——dependent future 就绪时失败面板计数保证可见
+  （满载下 8/20 观测窗口，修复后 0/40）。
+
 ### 文档
 
 - **待办账实清理（v0.5.x 阶段 21 第一项）**：对 `docs/todolists/` 15 份计划文档
