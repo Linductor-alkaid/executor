@@ -14,10 +14,14 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 - [x] 桌面平台已有 Linux + Windows 实现与 CI。
 - [x] `ThreadPoolExecutor`、`RealtimeThreadExecutor`、`BlockingIoExecutor`、`ExecutorManager`、`executor::comm` 和监控面均已存在。
 - [x] 已用 NDK r26c / r28b 完成可行性交叉编译实验。
-- [ ] 当前 `src/executor/util/thread_utils.cpp` 使用 `pthread_setaffinity_np` / `pthread_getaffinity_np`，Android 无法编译。
-- [ ] 当前 `include/executor/blocking_io.hpp` 暴露 `std::stop_token`，NDK r26c 无此头文件。
-- [ ] 当前 `src/CMakeLists.txt` 在 Android 上链接不存在的 `librt` 并导出 `atomic`。
-- [ ] 当前无 Android CI、打包脚本、Gradle/Prefab 集成和设备测试路径。
+- [x] 当前 `src/executor/util/thread_utils.cpp` 使用 `pthread_setaffinity_np` / `pthread_getaffinity_np`，Android 无法编译。
+  （已过时基线：一期已加 `__ANDROID__` 分支改用 `sched_setaffinity(gettid(),...)`，2026-09-22 回填）
+- [x] 当前 `include/executor/blocking_io.hpp` 暴露 `std::stop_token`，NDK r26c 无此头文件。
+  （已过时基线：已迁移至 `executor::StopToken` 兼容层，2026-09-22 回填）
+- [x] 当前 `src/CMakeLists.txt` 在 Android 上链接不存在的 `librt` 并导出 `atomic`。
+  （已过时基线：`if(ANDROID)` 分支已不链 rt、不导出 atomic，2026-09-22 回填）
+- [x] 当前无 Android CI、打包脚本、Gradle/Prefab 集成和设备测试路径。
+  （已过时基线：android.yml、build_android.sh、PACKAGE_ANDROID.md、Prefab 均已落地，2026-09-22 回填）
 
 ---
 
@@ -253,6 +257,9 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 ## 阶段 A5（可选，二期）：OpenCL 后端评估
 
+> 2026-09-22 定性：⏸ 门控（二期决策 + 真机）——依赖 OpenCL 设备与路线图决策，
+> `opencl_loader.cpp` 尚无 Android 搜索路径，一期明确不进。
+
 ### 任务
 
 - [ ] 调研目标设备 OpenCL 可用性：`/vendor/lib64/libOpenCL.so`、`/system/vendor/lib64`。
@@ -271,10 +278,13 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 ## 文档与维护
 
-- [ ] 本计划完成后，将完成状态回写到 [Android 适配方案](../design/android_port.md) 的待决项。
+- [x] 本计划完成后，将完成状态回写到 [Android 适配方案](../design/android_port.md) 的待决项。
+  （2026-09-22 已同步：线程上限 4 已成公开默认、SCHED_FIFO 已默认关闭、NDK 现状双版本）
 - [x] 在 [项目任务清单](todolist.md) 增加 Android 阶段并链接本计划。
-- [ ] 所有 Android 相关公开文档必须有对应可执行命令或已运行记录。
-- [ ] 涉及公开 API 的文档不得早于实现合并。
+- [x] 所有 Android 相关公开文档必须有对应可执行命令或已运行记录。
+  （A4 验收已确认文档命令均本地执行过，2026-09-22 回填）
+- [x] 涉及公开 API 的文档不得早于实现合并。
+  （一次性过程约束，0.5.0 已按此交付，2026-09-22 回填）
 
 ---
 
@@ -294,11 +304,18 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 ## 风险与待决项
 
 - [ ] NDK 双版本 CI 是否长期保留，或只保留推荐版本。
-- [ ] Android 默认线程数上限 4 是否写入公开默认。
-- [ ] Android 上自动 `SCHED_FIFO` 建议值是否关闭。
-- [ ] 无锁队列弱内存序缺陷的降级策略：修复 / 默认关闭 / 要求用户显式启用。
-- [ ] OpenCL 是否进入版本路线图。
-- [ ] 是否需要自托管 Android runner；如无设备，至少保留 API 21/24 x86_64 模拟器 job。
+  （现状：android.yml 保留 r26c + r28b 双版本；长期收敛决策待定，2026-09-22 注记）
+- [x] Android 默认线程数上限 4 是否写入公开默认。
+  （已写入：docs/API.md "Android 默认上限 4"，executor_manager.cpp 已实现，2026-09-22 回填）
+- [x] Android 上自动 `SCHED_FIFO` 建议值是否关闭。
+  （已关闭：0.5.0 起短周期实时线程不再自动申请 SCHED_FIFO，docs/API.md 有说明，2026-09-22 回填）
+- [x] 无锁队列弱内存序缺陷的降级策略：修复 / 默认关闭 / 要求用户显式启用。
+  （已收敛：A3 验收未发现弱内存序缺陷，无需关闭 lockfree 选项；预案留存于
+  android_port.md 风险表，2026-09-22 回填）
+- [ ] ⏸ 门控（二期决策）：OpenCL 是否进入版本路线图。
+- [x] 是否需要自托管 Android runner；如无设备，至少保留 API 21/24 x86_64 模拟器 job。
+  （已由替代方案覆盖：手动触发的 arm64-concurrency.yml（ubuntu-24.04-arm，soak 可配），
+  设备验证经 A3 本地模拟器完成，2026-09-22 回填）
 
 ---
 
@@ -306,9 +323,11 @@ GPU、OpenCL、硬实时和弱内存序性能调优不进入一期完成定义�
 
 一期 Android 支持只有在以下条件全部满足后才可对外宣布：
 
-- [ ] A0、A1、A2、A3、A4 全部验收项通过。
-- [ ] Linux / Windows 既有 CI 不回归。
-- [ ] Android CI 稳定构建 arm64-v8a + x86_64，static + shared，API 21。
-- [ ] 至少一台 arm64 设备完成 smoke、Blocking I/O、MPSC 压力与长稳测试。
-- [ ] 打包与集成文档可复现。
-- [ ] 公开 README / BUILD / API 文档与实际行为一致。
+- [x] A0、A1、A2、A3、A4 全部验收项通过。
+- [x] Linux / Windows 既有 CI 不回归。
+- [x] Android CI 稳定构建 arm64-v8a + x86_64，static + shared，API 21。
+- [ ] ⏸ 门控（硬件）：至少一台 arm64 设备完成 smoke、Blocking I/O、MPSC 压力与长稳测试。
+  （big.LITTLE 真机未到位；模拟器 6/6 与 ARM64 Neoverse-N2 runner 600s soak 已覆盖，
+  发布前 gate 见 docs/RELEASE_CHECKLIST.md）
+- [x] 打包与集成文档可复现。
+- [x] 公开 README / BUILD / API 文档与实际行为一致。

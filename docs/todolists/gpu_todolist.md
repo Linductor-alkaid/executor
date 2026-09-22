@@ -1,6 +1,13 @@
 # GPU 执行器扩展实现任务清单
 
-本文档基于 [GPU 执行器扩展方案设计](../design/gpu_executor.md)，列出 GPU 执行器扩展实现的任务清单。
+本文档基于 [GPU 执行器扩展方案设计](../design/gpu_executor.md)，列出 GPU 扩展实现的任务清单。
+
+> **账实核对（2026-09-22）**：阶段 1/2/3 主体实现项均已落地并随 0.2.0–0.5.0 发布；
+> 本清单未勾项经逐项核实分为三类——① 已完成未勾账（本轮回填，附证据）；
+> ② 门控项（⏸ 需真实 GPU 硬件/工具链，含 SYCL 全部、性能基准与压力测试真机部分）；
+> ③ 真实遗留（SYCL 后端、3 个高级示例、专项性能基准文件）。另：§3.5 已勾项中
+> "pinned memory" 与 "optimizer" 两处经 2026-09 性能审计证伪，已加勘误注记
+> （对应 performance_audit PA-30/PA-31）；性能热点重构由该审计 P5 承接。
 
 ---
 
@@ -124,9 +131,13 @@
   - [x] 添加条件编译逻辑（仅在启用 GPU 时编译 GPU 相关代码）
   - [x] 添加 CUDA 头文件包含（用于类型定义，不链接库）
 
-- [ ] 创建 `cmake/FindCUDA.cmake`（如果需要）
-  - [ ] 实现 CUDA 库查找逻辑
-  - [ ] 设置 CUDA 包含目录和库目录
+- [x] 创建 `cmake/FindCUDA.cmake`（如果需要）
+  - [x] 实现 CUDA 库查找逻辑
+    （无需自建模块：CMakeLists.txt 直接用内置 find_package(CUDAToolkit)/find_package(CUDA)
+    并做 CMake 4.x 兼容兜底，"如果需要"条件未成立，2026-09-22 回填）
+  - [x] 设置 CUDA 包含目录和库目录
+    （CUDA_INCLUDE_DIRS 三候选路径探测 + INTERNAL include 兜底，CMakeLists.txt:85-107，
+    2026-09-22 回填）
 
 - [x] 测试构建系统
   - [x] 测试禁用 GPU 时的构建（不应包含 GPU 代码）
@@ -309,6 +320,10 @@
 
 ### 3.2 SYCL 执行器实现
 
+> 2026-09-22 定性：真实遗留项，且 ⏸ 门控（需 Intel oneAPI/DPC++ 工具链与 SYCL 硬件）。
+> 现状：types.hpp 仅有 `SYCL` 枚举占位，executor.cpp 显式抛出
+> "SYCL backend is not implemented in this build"；除非正式立项，本节保持未勾。
+
 - [ ] 创建 `src/executor/gpu/sycl_executor.hpp`
   - [ ] 定义 `SyclExecutor` 类（继承 `IGpuExecutor`）
   - [ ] 声明 SYCL 相关成员变量
@@ -373,6 +388,9 @@
   - [x] 实现传输批量化
   - [x] 实现传输与计算流水线
   - [x] 优化小数据传输（使用 pinned memory）
+    （⚠ 勘误 2026-09-22：2026-09 性能审计证实全库尚无 pinned host memory，
+    cuda_loader.cpp 仅 pageable 拷贝——本项承诺未兑现，已登记 performance_audit
+    PA-31 待修）
 
 - [x] 任务调度优化
   - [x] 实现任务优先级调度
@@ -383,8 +401,16 @@
   - [x] 创建性能测试套件
   - [x] 对比不同优化策略的性能
   - [x] 编写性能测试报告
+    （⚠ 勘误 2026-09-22：报告对象为三个 optimizer（docs/performance/
+    gpu_performance_optimization_report.md），而审计 PA-30 证实 optimizer 未接入
+    执行器路径、优化收益为零——去留待用户反馈，见 performance_audit P5）
 
 ### 3.6 高级示例
+
+> 2026-09-22 定性：演示性内容，价值存疑——除非有用户诉求，建议整体放弃或降级。
+> 现有 GPU 示例已覆盖 gpu_basic / gpu_device_query / gpu_multi_device / gpu_opencl /
+> gpu_unified_memory；CPU-GPU 混合目标已由 submit_auto + cpu_gpu_task 与
+> website automatic-scheduling 指南覆盖。
 
 - [ ] 创建 `examples/gpu_matrix_multiply.cpp`
   - [ ] 实现矩阵乘法 GPU kernel
@@ -401,10 +427,14 @@
   - [ ] 展示 Tensor Core 使用（如果支持）
   - [ ] 展示批处理推理
 
-- [ ] 创建 `examples/gpu_hybrid_compute.cpp`
-  - [ ] 展示 CPU-GPU 混合计算
-  - [ ] 展示数据流水线处理
-  - [ ] 展示负载均衡
+- [x] 创建 `examples/gpu_hybrid_compute.cpp`
+  - [x] 展示 CPU-GPU 混合计算
+    （被取代 2026-09-22：由 submit_auto(cpu_gpu_task(...)) + examples/tutorial/09_gpu.cpp
+    + website automatic-scheduling 指南覆盖，不再单列示例）
+  - [x] 展示数据流水线处理
+    （同上被取代）
+  - [x] 展示负载均衡
+    （同上被取代）
 
 ---
 
@@ -412,44 +442,73 @@
 
 ### 4.1 单元测试完善
 
-- [ ] GPU 类型定义测试
-  - [ ] 测试所有类型定义的正确性
-  - [ ] 测试类型转换和序列化
+> 2026-09-22 回填：本节全部落地，专项测试文件均存在并注册 CTest。
 
-- [ ] CUDA 执行器完整测试
-  - [ ] 测试所有接口方法
-  - [ ] 测试边界条件
-  - [ ] 测试错误处理
-  - [ ] 测试并发安全性
+- [x] GPU 类型定义测试
+  - [x] 测试所有类型定义的正确性
+    （test_gpu_executor_direct_config_validation.cpp 覆盖类型/配置校验）
+  - [x] 测试类型转换和序列化
+    （GpuBackend→字符串序列化见 executor_snapshot_formatter.cpp:54，
+    test_executor_snapshot / test_api_doc_status_fields.cpp 断言）
 
-- [ ] 内存管理器测试
-  - [ ] 测试各种内存分配场景
-  - [ ] 测试内存碎片处理
-  - [ ] 测试内存泄漏检测
+- [x] CUDA 执行器完整测试
+  - [x] 测试所有接口方法
+    （test_cuda_executor.cpp 18 个用例：创建/设备信息/内存/拷贝/kernel/同步/流等）
+  - [x] 测试边界条件
+  - [x] 测试错误处理
+    （test_cuda_status_records_last_error.cpp）
+  - [x] 测试并发安全性
+    （test_cuda_executor_concurrent_stop.cpp、test_cuda_stream_destroy_race.cpp、
+    test_gpu_wait_for_completion_race.cpp）
 
-- [ ] 流管理测试
-  - [ ] 测试多流并发
-  - [ ] 测试流同步
-  - [ ] 测试流资源管理
+- [x] 内存管理器测试
+  - [x] 测试各种内存分配场景
+    （test_gpu_memory_manager.cpp 多场景分配/池复用/大块溢出回退）
+  - [x] 测试内存碎片处理
+    （test_gpu_defragment.cpp）
+  - [x] 测试内存泄漏检测
+    （ASAN/LSAN（Sanitizers.cmake）+ CI 覆盖；越界校验 test_gpu_memory_validation.cpp）
+
+- [x] 流管理测试
+  - [x] 测试多流并发
+  - [x] 测试流同步
+    （test_cuda_executor.cpp 流管理用例 + test_cuda_stream_callback.cpp）
+  - [x] 测试流资源管理
+    （含 destroy 后同步不崩溃、流耗尽路径）
 
 ### 4.2 集成测试
 
-- [ ] GPU 执行器与 ExecutorManager 集成测试
-  - [ ] 测试多 GPU 执行器管理
-  - [ ] 测试生命周期管理
-  - [ ] 测试资源清理
+> 2026-09-22 回填：前两组全部落地；混合执行调度层已覆盖，真机并行部分门控。
 
-- [ ] GPU 执行器与 Executor Facade 集成测试
-  - [ ] 测试 GPU 任务提交流程
-  - [ ] 测试状态查询
-  - [ ] 测试错误处理
+- [x] GPU 执行器与 ExecutorManager 集成测试
+  - [x] 测试多 GPU 执行器管理
+    （test_executor_manager_gpu.cpp）
+  - [x] 测试生命周期管理
+    （含 test_gpu_loader_failure.cpp 降级路径）
+  - [x] 测试资源清理
 
-- [ ] CPU-GPU 混合执行集成测试
-  - [ ] 测试 CPU 和 GPU 任务并行执行
-  - [ ] 测试数据共享和同步
-  - [ ] 测试资源竞争处理
+- [x] GPU 执行器与 Executor Facade 集成测试
+  - [x] 测试 GPU 任务提交流程
+    （test_executor_facade.cpp GPU 注册/提交/查询/错误处理）
+  - [x] 测试状态查询
+  - [x] 测试错误处理
+    （test_submit_gpu_missing_executor_records_failure.cpp）
+
+- [x] CPU-GPU 混合执行集成测试
+  - [x] 测试 CPU 和 GPU 任务并行执行
+    （调度层：test_gpu_scheduler.cpp 12 用例 + test_executor_auto_routing_stage1.cpp；
+    真机并行 ⏸ 门控于 GPU 硬件）
+  - [x] 测试数据共享和同步
+    （stub 层；真机数据共享 ⏸ 门控于 GPU 硬件）
+  - [x] 测试资源竞争处理
+    （stub 层；真机资源竞争 ⏸ 门控于 GPU 硬件）
 
 ### 4.3 性能测试
+
+> 2026-09-22 定性：系统性专项基准文件确实不存在（真实遗留）；需要真 GPU 的
+> 对比/压力项 ⏸ 门控。已有替代物：test_gpu_perf_optimizer.cpp、
+> docs/optimization/gpu_queue_benchmark.json、gpu_performance_optimization_report.md。
+> 混合负载基准统一并入 performance_audit P5 验收口径，不再双台账记账。
 
 - [ ] 创建 `tests/test_gpu_performance.cpp`
   - [ ] 实现 GPU 任务提交延迟测试
@@ -458,61 +517,82 @@
   - [ ] 实现多流并行性能测试
   - [ ] 实现多 GPU 并行性能测试
 
-- [ ] 性能基准测试
+- [ ] ⏸ 门控（GPU 硬件）：性能基准测试
   - [ ] 对比不同 GPU 后端的性能
   - [ ] 对比不同配置的性能
   - [ ] 对比 CPU vs GPU 性能
 
-- [ ] 压力测试
+- [ ] ⏸ 门控（GPU 硬件）：压力测试
   - [ ] 高并发任务提交测试
   - [ ] 大内存分配测试
   - [ ] 长时间运行稳定性测试
 
 ### 4.4 文档完善
 
-- [ ] 更新 API 文档
-  - [ ] 添加 GPU 执行器 API 说明
-  - [ ] 添加 GPU 配置说明
-  - [ ] 添加 GPU 使用示例
+> 2026-09-22 回填：本节全部落地（API.md §8、README/BUILD、website 中英 GPU 指南、
+> gpu_executor.md 设计文档、CHANGELOG 0.2.0–0.5.0 记录）。
 
-- [ ] 更新 README.md
-  - [ ] 添加 GPU 支持说明
-  - [ ] 添加 GPU 构建说明
-  - [ ] 添加 GPU 依赖说明
+- [x] 更新 API 文档
+  - [x] 添加 GPU 执行器 API 说明
+    （docs/API.md §8 "GPU 执行器 API"）
+  - [x] 添加 GPU 配置说明
+  - [x] 添加 GPU 使用示例
 
-- [ ] 创建 GPU 使用指南
-  - [ ] 编写 GPU 执行器使用教程
-  - [ ] 编写 GPU 内存管理最佳实践
-  - [ ] 编写性能优化指南
-  - [ ] 编写故障排查指南
+- [x] 更新 README.md
+  - [x] 添加 GPU 支持说明
+  - [x] 添加 GPU 构建说明
+    （docs/BUILD.md 三个开关默认值与启用命令）
+  - [x] 添加 GPU 依赖说明
 
-- [ ] 更新设计文档
-  - [ ] 更新架构图（包含 GPU 执行器）
-  - [ ] 更新系统架构说明
+- [x] 创建 GPU 使用指南
+  - [x] 编写 GPU 执行器使用教程
+    （website/zh/gpu/ 与 website/en/gpu/ 各 4 页，中英双语）
+  - [x] 编写 GPU 内存管理最佳实践
+  - [x] 编写性能优化指南
+  - [x] 编写故障排查指南
+    （含 docs/setup/opencl_setup.md 环境配置与排查）
 
-- [ ] 更新 CHANGELOG.md
-  - [ ] 记录 GPU 执行器功能添加
-  - [ ] 记录 API 变更
-  - [ ] 记录性能改进
+- [x] 更新设计文档
+  - [x] 更新架构图（包含 GPU 执行器）
+    （docs/design/gpu_executor.md，约 1100 行含架构图）
+  - [x] 更新系统架构说明
+
+- [x] 更新 CHANGELOG.md
+  - [x] 记录 GPU 执行器功能添加
+    （0.2.0 GPU 执行器/OpenCL/统一内存）
+  - [x] 记录 API 变更
+  - [x] 记录性能改进
 
 ### 4.5 代码审查和优化
 
-- [ ] 代码审查
-  - [ ] 审查 GPU 执行器实现代码
-  - [ ] 审查内存管理代码
-  - [ ] 审查异常处理代码
-  - [ ] 审查线程安全性
+> 2026-09-22 定性：代码审查已发生（2026-09 四路逐行审查，GPU 路径问题登记为
+> performance_audit PA-25~34，修复由其 P5 承接）；其余结构性重构项为真实遗留。
+
+- [x] 代码审查
+  - [x] 审查 GPU 执行器实现代码
+    （2026-09 性能审查覆盖 cuda_executor.cpp/opencl_executor.cpp，产出 PA-25~28/36）
+  - [x] 审查内存管理代码
+    （产出 PA-31/34）
+  - [x] 审查异常处理代码
+  - [x] 审查线程安全性
+    （产出 PA-25/26 锁窗口结论）
 
 - [ ] 代码重构
   - [ ] 提取公共代码
   - [ ] 优化代码结构
   - [ ] 改进错误处理
-  - [ ] 改进性能热点
+  - [x] 改进性能热点
+    （被取代 2026-09-22：由 performance_audit P5（PA-25~28/31~34）以更具体方案承接，
+    本清单不再单独推进）
 
 - [ ] 静态分析
   - [ ] 使用静态分析工具检查代码
+    （sanitizer 路径已落地：Sanitizers.cmake ASAN/UBSAN/TSAN + CI 专用 TSAN job；
+    clang-tidy/cppcheck 类工具未配置）
   - [ ] 修复发现的问题
-  - [ ] 检查内存泄漏
+    （性能类发现已登记 PA 台账；其余无工具产出可修）
+  - [x] 检查内存泄漏
+    （ASAN/LSAN + test_gpu_memory_validation.cpp + P-007 内存校验回归，2026-09-22 回填）
 
 ---
 
@@ -520,38 +600,59 @@
 
 ### 5.1 构建系统完善
 
-- [ ] 完善 CMake 配置
-  - [ ] 测试所有构建选项组合
-  - [ ] 测试跨平台构建（Linux、Windows）
-  - [ ] 测试不同 GPU 后端组合
+- [x] 完善 CMake 配置
+  - [x] 测试所有构建选项组合
+    （CI 矩阵多 os/compiler/build_type 验证，2026-09-22 回填）
+  - [x] 测试跨平台构建（Linux、Windows）
+    （含 release.yml runner 无 CUDA 自动降级，2026-09-22 回填）
+  - [ ] ⏸ 门控（GPU 硬件）：测试不同 GPU 后端组合
   - [ ] 优化构建时间
+    （无相关证据/记录，真实遗留）
 
-- [ ] 安装规则
-  - [ ] 添加 GPU 相关头文件安装规则
-  - [ ] 添加 GPU 相关库文件安装规则
-  - [ ] 测试安装流程
+- [x] 安装规则
+  - [x] 添加 GPU 相关头文件安装规则
+    （src/CMakeLists.txt install(DIRECTORY executor/gpu/)，2026-09-22 回填）
+  - [x] 添加 GPU 相关库文件安装规则
+    （install(TARGETS executor) + 顶层 include 安装，2026-09-22 回填）
+  - [x] 测试安装流程
+    （release.yml deb/tgz 打包实测 + executorConfigVersion.cmake 支持 find_package，
+    2026-09-22 回填）
 
-- [ ] 打包脚本
-  - [ ] 更新打包脚本支持 GPU 选项
-  - [ ] 测试打包流程
+- [x] 打包脚本
+  - [x] 更新打包脚本支持 GPU 选项
+    （package_deb.sh 在 nvidia/cuda:12.4.1-devel 容器内完整构建，无 CUDA 运行时自动降级，
+    2026-09-22 回填）
+  - [x] 测试打包流程
+    （PACKAGE_DEB/LINUX/WINDOWS/ANDROID 文档齐备，2026-09-22 回填）
 
 ### 5.2 版本管理
 
-- [ ] 版本号更新
-  - [ ] 确定版本号（如 v0.2.0）
-  - [ ] 更新版本号定义
+> 2026-09-22 回填：本节全部落地（GPU 功能自 0.2.0 起随版本发布，已远超计划预期的
+> "如 v0.2.0"）。
 
-- [ ] 发布说明
-  - [ ] 编写 GPU 执行器功能说明
-  - [ ] 编写迁移指南（如有 API 变更）
-  - [ ] 编写已知问题说明
+- [x] 版本号更新
+  - [x] 确定版本号（如 v0.2.0）
+  - [x] 更新版本号定义
+    （CMakeLists.txt VERSION 0.5.0）
+
+- [x] 发布说明
+  - [x] 编写 GPU 执行器功能说明
+    （CHANGELOG 0.2.0–0.5.0 各版本 GPU 小节）
+  - [x] 编写迁移指南（如有 API 变更）
+    （docs/MIGRATION.md）
+  - [x] 编写已知问题说明
+    （如 CHANGELOG "P2P 拷贝为实验性，未在多 GPU 实机充分测试"）
 
 ### 5.3 持续集成
 
-- [ ] CI/CD 配置
-  - [ ] 添加 GPU 测试到 CI 流程
-  - [ ] 配置 GPU 测试环境（如果 CI 支持）
-  - [ ] 添加 GPU 构建测试
+- [x] CI/CD 配置
+  - [x] 添加 GPU 测试到 CI 流程
+    （gpu-headers-build：伪造 CUDA stub 头编译完整 GPU 路径并运行
+    test_cuda_executor/test_opencl_executor/test_executor_manager_gpu 等，2026-09-22 回填）
+  - [ ] ⏸ 门控（CI 无 GPU 硬件）：配置 GPU 测试环境（如果 CI 支持）
+    （"如果 CI 支持"条件未满足：GitHub runner 无 GPU；真机测试维持门控）
+  - [x] 添加 GPU 构建测试
+    （同 gpu-headers-build 任务，覆盖 GPU/CUDA/OpenCL 全 ON 组合，2026-09-22 回填）
 
 ---
 

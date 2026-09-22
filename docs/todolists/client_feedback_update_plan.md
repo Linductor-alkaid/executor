@@ -219,23 +219,30 @@ SDK 依赖，注册 CTest smoke `event_loop_interop_example`）。）
 
 ## 阶段 T2：外部上下文绑定定时器（与 S2 联动，条件项）
 
-- [ ] 仅在 S2 证明存在稳定的外部 context adapter 后启动；定义 `TimerHandle` 在指定 context
+> 2026-09-22 定性：⏸ 门控（前置条件未满足）——S2 实际交付的是 executor 托管的
+> `SerialExecutionContext`（include/executor/serial_execution_context.hpp），
+> 未提供外部 strand adapter；heyaki asio strand timer 参照用例未启动。
+
+- [ ] ⏸ 门控（S2 adapter）：仅在 S2 证明存在稳定的外部 context adapter 后启动；定义 `TimerHandle` 在指定 context
   上到期、取消、重排和销毁的执行位置。
-- [ ] 以 heyaki 的 asio strand timer 为参照用例，证明对象状态访问和 timer 销毁保持同一
+- [ ] ⏸ 门控（heyaki 用例）：以 heyaki 的 asio strand timer 为参照用例，证明对象状态访问和 timer 销毁保持同一
   序列化上下文；未通过前不得在迁移文档中建议替换该类 timer。
 
 ---
 
 ## 阶段 G1：P2 能力重估门（P2-1/P2-2，明确延后）
 
-- [ ] 触发条件：heyaki M6/M7 消息与文件传输真实压测完成后，按台账 P2-1/P2-2 重估：
+> 2026-09-22 定性：⏸ 门控（下游进度）——由 heyaki M6/M7 外部进度触发，
+> 与主清单阶段 18 同口径。
+
+- [ ] ⏸ 门控（heyaki M6/M7）：触发条件：heyaki M6/M7 消息与文件传输真实压测完成后，按台账 P2-1/P2-2 重估：
   同上下文 signal/slot（带统计的 observer 原语）、多优先级/加权/双限额 channel 变体或
   公共骨架。
 - [x] 延后期间仅落地轻量文档项：comm 使用指引中明确"何时允许裸 `std::function` 回调"
   （台账 P2-1 的次选建议），随 D1 交付。（中英文"如何选择通信组件"指南新增
   "什么时候允许裸回调"一节。）
-- [ ] 重估本身仍由 heyaki M6/M7 外部进度触发，未开始。
-- [ ] 重估结论（做/不做/再延后）回写台账与本计划，避免过早抽象。
+- [ ] ⏸ 门控（heyaki M6/M7）：重估本身仍由 heyaki M6/M7 外部进度触发，未开始。
+- [ ] ⏸ 门控（随重估）：重估结论（做/不做/再延后）回写台账与本计划，避免过早抽象。
 
 ---
 
@@ -297,15 +304,22 @@ SDK 依赖，注册 CTest smoke `event_loop_interop_example`）。）
 
 ## 收益与性能门槛
 
+> 2026-09-22 账实核对：T1 精度门槛已记录并回填；C0 基线数量与 C1 内存/吞吐数字
+> 两项度量缺口显式保留（需 heyaki 配合或本仓库补测），避免误读为"收益门槛已满足"。
+
 - [ ] C0 记录 heyaki 当前私有取消点、facade timer 和必须保留在 asio strand 的 timer 基线数量；
   C1/T1/T2 各阶段验收只统计实际可迁移项，不以类型已发布代替业务收益。
+  （2026-09-22 注记：全库无该基线数量记录，数据源在 heyaki 仓库，需下游配合）
 - [ ] C1 合入前给出 cancellation state/registry 的单任务内存增量、并发取消吞吐和提交延迟回归；
   明确 registry 容量及终态保留策略，容量耗尽必须可观察且不得无界增长。
+  （2026-09-22 注记拆分：registry 容量与终态保留策略已落地——task_cancellation.hpp
+  kDefaultCapacity=65536、容量耗尽可观察、有界保留；剩余缺口为"单任务内存增量、
+  并发取消吞吐"实测数字，可在本仓库补测后回填）
 - [x] T1 使用 `benchmark_timer_precision` 记录句柄数量、取消/重排吞吐和到期抖动；超过既定预算时
   先保留兼容 API 并停止推广，不在同阶段无门槛扩展 timer thread 架构。
   （已记录基线对比：5ms delayed 平均到期误差旧实现约 5.5ms（10ms 轮询），registry +
   generation heap + 1ms 分片等待后约 0.9ms；单 timer thread 架构未扩展。）
-- [ ] S2/T2 以 heyaki node/relay 参照用例统计纳入 admission/监控的 post 派发比例，以及可安全
+- [ ] ⏸ 门控（heyaki 实测）：S2/T2 以 heyaki node/relay 参照用例统计纳入 admission/监控的 post 派发比例，以及可安全
   替换的 strand timer 数量；若收益不足以覆盖 adapter 复杂度，允许关闭 T2。
 
 ## 风险与待决项
@@ -313,19 +327,23 @@ SDK 依赖，注册 CTest smoke `event_loop_interop_example`）。）
 > 2026-08-29 状态：以下前 8 项已由 C0 冻结决策解决（见设计稿 §11.2）并在 C1/T1
 > 实现；其余为 S2/T2/G1 门控项，维持待决。
 
-- [ ] 排队取消后 future 的满足方式（C0 决）。
-- [ ] 取消计数的字段归属（`CompletionStatus` 扩展还是独立 `CancellationStatus`）与是否需要
+- [x] 排队取消后 future 的满足方式（C0 决）。（设计稿 §11.2 冻结：取消方满足 future，
+  TaskCancelled 就绪）
+- [x] 取消计数的字段归属（`CompletionStatus` 扩展还是独立 `CancellationStatus`）与是否需要
   单任务级取消历史查询（C0 定稿；归类为独立 lifecycle 计数已定）。
-- [ ] `submit_delayed` 返回类型兼容性：倾向新增 `submit_delayed_with_handle` 而非改签名
+- [x] `submit_delayed` 返回类型兼容性：倾向新增 `submit_delayed_with_handle` 而非改签名
   （C0 确认）。
-- [ ] periodic 既有 task_id 与 `TimerHandle` 的统一程度，避免两套取消入口长期并存。
-- [ ] 共享 cancellation state 跨 scheduler/local queue/steal 副本的一致性、registry 有界保留和
+- [x] periodic 既有 task_id 与 `TimerHandle` 的统一程度，避免两套取消入口长期并存。
+- [x] 共享 cancellation state 跨 scheduler/local queue/steal 副本的一致性、registry 有界保留和
   cancel/开始执行/完成的线性化点（C0 必须定稿，未定不得启动 C1）。
-- [ ] token callable 的 overload resolution、参数位置、泛型 lambda 歧义和返回类型推导规则；
+  （单一 phase CAS 仲裁，见 executor.hpp submit_tracked 注释）
+- [x] token callable 的 overload resolution、参数位置、泛型 lambda 歧义和返回类型推导规则；
   默认选择显式 cancellable API 以降低源代码兼容风险。
-- [ ] 普通 `TimerHandle` 与 `ScopedTimerHandle` 的复制/移动/临时对象语义，防止意外析构取消。
-- [ ] T1 不具备外部 strand 所有权；迁移文档和网站不得把生命周期绑定等同于执行上下文绑定。
-- [ ] S2 是否进核心库：存在"指南 + 应用侧 adapter 已足够"的合理结论，不强推 API。
-- [ ] G1 依赖 heyaki M6/M7 外部进度，无固定时间表。
-- [ ] timer thread 单线程在大量句柄下的精度与延迟影响，以 `benchmark_timer_precision`
+- [x] 普通 `TimerHandle` 与 `ScopedTimerHandle` 的复制/移动/临时对象语义，防止意外析构取消。
+- [x] T1 不具备外部 strand 所有权；迁移文档和网站不得把生命周期绑定等同于执行上下文绑定。
+- [x] S2 是否进核心库：存在"指南 + 应用侧 adapter 已足够"的合理结论，不强推 API。
+  （已决策并落地 SerialExecutionContext，docs/API.md 有专节）
+- [ ] ⏸ 门控（heyaki 进度）：G1 依赖 heyaki M6/M7 外部进度，无固定时间表。
+- [x] timer thread 单线程在大量句柄下的精度与延迟影响，以 `benchmark_timer_precision`
   回归数据决定是否需要分片。
+  （已实现 generation heap + 1ms 分片等待，0.9ms vs 旧 5.5ms 基线已记录，2026-09-22 回填）

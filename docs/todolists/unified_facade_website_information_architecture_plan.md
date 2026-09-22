@@ -105,12 +105,24 @@
 
 ## 验收标准
 
-- [ ] 新用户从首页到第一个任务无需阅读任何专用执行器页面，即可理解并运行 `submit_auto(lambda)`。
-- [ ] 选择页能让读者在一分钟内区分 future completion、bounded admission 和 worker lifecycle，并链接到对应观察方式。
-- [ ] 实时、无锁、GPU 和 Blocking I/O 页面均在首屏说明适用前提及不应使用的情况。
-- [ ] legacy CPU/GPU overload 的文档不再被误读为新代码默认路径。
-- [ ] 中英文相同路由页的 API 语义、代码来源、版本标签和导航顺序一致，或翻译状态明确声明缺口。
+> 2026-09-22 账实核对：第 2–5 项页面侧证据已就位并回填；第 1、6 项分别为
+> 外部用户效果验收（⏸ 门控）与 CI 持续门禁，不作一次性勾账。
+
+- [ ] ⏸ 门控（外部用户）：新用户从首页到第一个任务无需阅读任何专用执行器页面，即可理解并运行 `submit_auto(lambda)`。
+  （结构证据：website/index.md hero 与 zh/quick-start/first-task.md 主示例均为 submit_auto）
+- [x] 选择页能让读者在一分钟内区分 future completion、bounded admission 和 worker lifecycle，并链接到对应观察方式。
+  （zh/guides/choosing-submit-api.md 开篇三种结果模型表格 + 下钻条件，2026-09-22 回填）
+- [x] 实时、无锁、GPU 和 Blocking I/O 页面均在首屏说明适用前提及不应使用的情况。
+  （realtime-control.md、lockfree-and-performance.md、blocking-io-workers.md 首屏
+  均有"何时使用/不应使用"声明，2026-09-22 回填）
+- [x] legacy CPU/GPU overload 的文档不再被误读为新代码默认路径。
+  （zh/gpu/automatic-scheduling.md 设"兼容路径"节并指明新代码用 cpu_gpu_task()，
+  2026-09-22 回填）
+- [x] 中英文相同路由页的 API 语义、代码来源、版本标签和导航顺序一致，或翻译状态明确声明缺口。
+  （website/translation-status.md 全主题组 Complete 并定义 fallback；版本标签
+  已于 2026-09-22 统一为 v0.5.0）
 - [ ] 网站构建、链接检查及教程 smoke test 通过；文档改动不引入不可运行的独立代码副本。
+  （CI docs.yml 每次 PR 强制 docs:check + docs:build + ctest -L tutorial，持续性门禁）
 
 ## 风险与决策点
 

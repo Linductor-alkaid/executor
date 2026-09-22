@@ -461,9 +461,12 @@ latest-wins API 必须保持向后兼容。
 安全证明。后续强化保持生产默认零开销，并避免无条件侵入宿主程序的 allocator：
 
 - [ ] 增加可选违例策略：已实现 `RecordOnly` 与测试用 `Abort`；`CommEvent` 低频告警仍待设计为非实时路径桥接，默认不在实时路径分配字符串或调用用户 callback。
+  （2026-09-22 定性：真实遗留设计项——RealtimeAllocationGuard 已交付 RecordOnly/Abort，
+  剩余 CommEvent 桥接待设计）
 - [x] 实现 guard 自动挂载到 `RealtimeThread` 周期入口的显式 API：`RealtimeThreadConfig::enable_allocation_guard` 默认关闭，开启后携带执行器名和 `cycle_callback` 阶段，保持旧回调默认行为不变。
 - [x] 在文档和构建选项中明确全局 `operator new` 重载仅限 Linux 诊断构建，说明与宿主 allocator、内存池和共享库的冲突边界。
 - [ ] 评估更低侵入的替代方案（链接器/`LD_PRELOAD` malloc hook 或平台专用 hook），在可移植性、部署复杂度和诊断完整性之间作出记录决策。
+  （2026-09-22 定性：真实遗留评估项，无决策记录）
 - [x] 集成回归测试：自动挂载路径定位执行器组件/阶段；关闭 guard 时不产生计数或事件，默认构建不启用全局分配跟踪。
 
 ### P1：LET 对外语义锚点

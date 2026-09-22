@@ -1,5 +1,10 @@
 # 无锁队列优化目标文档
 
+> **账实核对（2026-09-22）**：§1/§2 阶段（性能分析、False Sharing、CAS 重试、批量操作）
+> 已完成并有结果文档（`docs/performance/lockfree_false_sharing_fix_results.md`、
+> `lockfree_batch_operations_results.md`）。§3.2 背压/流量整形、§4.1 退化告警、
+> §4.2 极限压测/形式化验证等确为遗留可选项。§6.2/§6.3 原有三处失实勾选已勘误。
+
 ## 1. 当前状态分析
 
 ### 1.1 实现概况
@@ -340,9 +345,13 @@ struct LockFreeQueueStats {
 #### 4.1 性能回归测试
 
 - [ ] 创建性能回归测试套件
-  - [ ] 自动化性能测试脚本
-  - [ ] 性能基线对比
-  - [ ] 性能退化告警
+  - [x] 自动化性能测试脚本
+    （benchmark_lockfree_mpsc.cpp 支持 --json；CI benchmark-baseline.yml nightly 自动捕获
+    pinned JSON baseline，2026-09-22 回填）
+  - [x] 性能基线对比
+    （docs/performance/lockfree_mpsc_baseline.json 已建立，CI 固定 CPU 核并记录 governor；
+    仅 informational，2026-09-22 回填）
+  - [ ] 性能退化告警（CI 当前 continue-on-error，无 >10% 失败门禁）
 
 - [ ] CI 集成
   - [ ] 每次提交运行性能测试
@@ -355,9 +364,13 @@ struct LockFreeQueueStats {
 #### 4.2 正确性验证
 
 - [ ] 扩展并发测试
-  - [ ] 批量操作的并发测试
+  - [x] 批量操作的并发测试
+    （tests/test_batch_integration.cpp 已注册 CTest；#187 修复批量预留误取消窗口后
+    lockfree 双模式全量 + TSAN 覆盖，2026-09-22 回填）
   - [ ] 极限压力测试（64+ 生产者）
+    （当前 benchmark producer_counts 上限 32）
   - [ ] 长时间稳定性测试（1 小时+）
+    （现有 android_smoke.cpp 为秒级可配 soak，非 1h+ 通用稳定性测试）
 
 - [ ] 形式化验证（可选）
   - [ ] 使用模型检查工具验证算法正确性
@@ -435,13 +448,15 @@ struct LockFreeQueueStats {
 ### 6.2 期望达成（P2）
 
 - ✅ 性能监控功能完整
-- ✅ 背压控制实现
+- ❌ 背压控制实现（勘误 2026-09-22：原误标 ✅；§3.2 阻塞 push/流量整形未实现，
+  保留为可选项）
 - ✅ 文档更新完成
 
 ### 6.3 可选达成（P3）
 
-- ✅ 形式化验证
-- ✅ 性能优化白皮书
+- ❌ 形式化验证（勘误 2026-09-22：原误标 ✅；未做模型检查，不变量仅散布于代码注释
+  与 docs/design/lockfree_user_api.md）
+- ❌ 性能优化白皮书（勘误 2026-09-22：原误标 ✅；docs/ 下无对应文档）
 
 ---
 

@@ -88,10 +88,14 @@ compatibility boundary（有界在途计数、非阻塞 tracked dispatch）在 A
 
 ### 验收
 
-- [ ] 设计稿不承诺抢占；wrapper 返回与 callback 尾部访问之间的生命周期竞争被共享状态
+- [x] 设计稿不承诺抢占；wrapper 返回与 callback 尾部访问之间的生命周期竞争被共享状态
   所有权显式消除，无栈引用逃逸。
-- [ ] FIFO、排队取消、异常传播、context shutdown 拒绝、future 恰好一次结算的语义
+  （serial_execution_context.md 冻结形状明文"不持有任何栈同步对象…竞争按构造消除"；
+  W1 TSAN 10,000 次提交 0 报告，2026-09-22 回填）
+- [x] FIFO、排队取消、异常传播、context shutdown 拒绝、future 恰好一次结算的语义
   全部有定义并与现有测试兼容。
+  （设计稿结算矩阵 + test_serial_context_stress / test_serial_execution_context 全量，
+  2026-09-22 回填）
 - [x] 上游 issue 已创建，Mira 台账两条状态为 Proposed。
   （[executor#178](https://github.com/Linductor-alkaid/executor/issues/178)；台账状态
   后续随实现合入 master 推进至 Accepted，见 D3。）
@@ -173,9 +177,11 @@ compatibility boundary（有界在途计数、非阻塞 tracked dispatch）在 A
 
 ### 验收
 
-- [ ] 设计稿覆盖台账"上游验收标准"全部场景并有对应可测条目。
-- [ ] 既有 `submit`/`submit_with_handle`/batch 返回类型与默认行为不变（未配置容量时
+- [x] 设计稿覆盖台账"上游验收标准"全部场景并有对应可测条目。
+  （bounded_admission.md:80 "验收（对齐 Mira 台账上游验收标准）"专节，2026-09-22 回填）
+- [x] 既有 `submit`/`submit_with_handle`/batch 返回类型与默认行为不变（未配置容量时
   零行为差异）。
+  （A1 验收：max_in_flight_tasks==0 时全量 CTest 通过，2026-09-22 回填）
 
 ---
 
@@ -244,8 +250,10 @@ compatibility boundary（有界在途计数、非阻塞 tracked dispatch）在 A
 
 ### 验收
 
-- [ ] 用户能从文档判断"`queue_capacity`（本地队列）与总 admission 容量"的区别与各自
+- [x] 用户能从文档判断"`queue_capacity`（本地队列）与总 admission 容量"的区别与各自
   承诺；不会推导出"admission 保护绕过 facade 的直接池访问"。
+  （docs/API.md "queue_capacity…不是总量背压边界" + "直接使用 ThreadPool/PriorityScheduler
+  的调用方不受保护"，2026-09-22 回填）
 
 ---
 
@@ -269,20 +277,32 @@ compatibility boundary（有界在途计数、非阻塞 tracked dispatch）在 A
 - [x] A1 记录接纳检查的单次提交开销（默认无界配置 vs 有界配置）、并发提交下的计数
   竞争开销；超过预算时保留 API 但停止推广有界默认值。（默认配置热路径仅增加一次
   relaxed 上限 load，无额外分配；有界配置每提交增加一个 shared_ptr 释放器分配。）
-- [ ] 以 Mira M0/M1 真实负载口径统计：迁移到原生 admission 与直接 facade 后可移除的
+- [ ] ⏸ 门控（Mira 侧）：以 Mira M0/M1 真实负载口径统计：迁移到原生 admission 与直接 facade 后可移除的
   compatibility boundary 数量（目标：两个全部移除）。（待 Mira 侧迁移后回填。）
 
 ## 风险与待决项
 
-- [ ] W0 形状选择：void 派发 + 业务 promise 直结（倾向）vs tracked 机制外部结算模式；
+> 2026-09-22 账实核对：前 5 项均已在 W0/A0 冻结决策并落地实现，回填勾选；
+> 第 6 项 libtsan 误报风险已由 timer 实现规避（不使用 condition_variable 定时等待）。
+
+- [x] W0 形状选择：void 派发 + 业务 promise 直结（倾向）vs tracked 机制外部结算模式；
   需评估后者对 `submit_tracked_with_hook` 既有 completion sink 的侵入面。
-- [ ] 恰好一次结算矩阵中"迟到 callback vs 已取消派发"的仲裁：串行线程可能已开始执行
+  （已选形状 1，设计稿记录候选 2 否决理由，2026-09-22 回填）
+- [x] 恰好一次结算矩阵中"迟到 callback vs 已取消派发"的仲裁：串行线程可能已开始执行
   callable 时派发任务被判定排队取消——必须定义以 `TaskCancellationState` 相位 CAS 为准
   还是允许 callback 完成值胜出。
-- [ ] admission 拒绝类别归属（新 `FailureKind` vs reason 字段）及 `ExecutorSnapshot`
+  （已定：结算方恰好一个，由共享 promise_ready CAS 仲裁；仅当未发布且相位未终态，
+  不与取消/超时结算竞争，2026-09-22 回填）
+- [x] admission 拒绝类别归属（新 `FailureKind` vs reason 字段）及 `ExecutorSnapshot`
   schema 是否递增（涉及文档一致性测试与下游序列化）。
-- [ ] batch 提交在容量不足时的语义（全收或部分接纳 + 计数）未定，A0 必须冻结。
-- [ ] 取消 registry 容量与 admission 容量的获取顺序若不当可能产生"接纳后被 registry
+  （已定：FailureKind::CapacityExhausted + CapacityExhaustedException +
+  capacity_exhausted_count，schema 纯新增不递增，2026-09-22 回填）
+- [x] batch 提交在容量不足时的语义（全收或部分接纳 + 计数）未定，A0 必须冻结。
+  （已冻结：逐任务独立接纳，部分接纳合法，bounded_admission.md:62，2026-09-22 回填）
+- [x] 取消 registry 容量与 admission 容量的获取顺序若不当可能产生"接纳后被 registry
   拒绝"的容量泄漏窗口，A0 需给出顺序与回滚证明。
-- [ ] gcc-11 libtsan clockwait 误报与既有抖动测试清单可能干扰 W1/A1 的 TSAN 判读，
+  （已定：先 admission、后 registry，bounded_admission.md:39，2026-09-22 回填）
+- [x] gcc-11 libtsan clockwait 误报与既有抖动测试清单可能干扰 W1/A1 的 TSAN 判读，
   沿用既有甄别流程，不因环境噪声放宽竞争判定。
+  （已消解：timer 实现改分片轮询、不用 condition_variable 定时等待，规避误报，
+  2026-09-22 回填）
