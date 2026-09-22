@@ -961,11 +961,48 @@ private:
         WhenAll
     };
 
+    // 依赖未就绪时驻留调度侧的提交载荷（dependency-driven scheduling，
+    // 见 docs/design/dependency_driven_scheduling.md）：依赖图任务不再
+    // 入队占用 worker 等待条件变量，而是停在节点上，由依赖终态级联出队。
+    // wrapper / on_timeout / priority / executor 在提交时定格，ready 时
+    // 原样出队提交；settle_without_run 用于依赖失败或出队被拒时，在不运行
+    // callable 的前提下完成 admission 释放（计数先于 future）、future 结算、
+    // registry 终结与 terminal hook。
+    struct ParkedSubmission {
+        std::function<void()> wrapper;
+        std::function<void(std::exception_ptr)> on_timeout;
+        std::function<void(std::exception_ptr)> settle_without_run;
+        std::optional<int> priority;
+        std::shared_ptr<IAsyncExecutor> executor;
+    };
+
+    // 级联解析在锁内收集、锁外执行的 ready 出队项。
+    struct ParkedReady {
+        TaskHandle handle;
+        std::string executor_name;
+        std::shared_ptr<ParkedSubmission> payload;
+    };
+
+    // mark_task_graph_* 的级联收集袋：传入非空指针时，mark 只收集不执行，
+    // 由调用方在自己完整收尾（promise 结算、registry finalize、观测记账、
+    // terminal hook）之后调用 drain_parked_resolutions——保证 dependent 的
+    // future 严格晚于上游任务完全终态就绪（否则观测者按 dependent future
+    // 触发 shutdown/析构时会与上游收尾并发）。缺省 nullptr 时 mark 内部
+    // 立即 drain（行为等同 PR-1 初版，适用于无下游观测关键的路径）。
+    struct ParkedDrainBag {
+        std::vector<ParkedReady> ready;
+        std::vector<std::function<void()>> failures;
+    };
+
     struct TaskGraphNode {
         TaskGraphState state = TaskGraphState::Pending;
         std::exception_ptr exception;
         std::string error_message;
         std::vector<std::string> dependencies;
+        // 未满足（未 Succeeded）依赖计数；仅 parked 节点维护。
+        size_t unmet_count = 0;
+        // 依赖未就绪时非空；终态或出队时清空。
+        std::shared_ptr<ParkedSubmission> parked;
     };
 
     TaskHandle allocate_task_handle();
@@ -976,11 +1013,21 @@ private:
     std::exception_ptr dependency_failure_locked(const std::vector<TaskHandle>& dependencies) const;
     bool dependencies_succeeded_locked(const std::vector<TaskHandle>& dependencies) const;
     void mark_task_graph_running(const TaskHandle& handle);
-    void mark_task_graph_succeeded(const TaskHandle& handle);
+    void mark_task_graph_succeeded(const TaskHandle& handle,
+                                   ParkedDrainBag* deferred = nullptr);
     void mark_task_graph_failed(const TaskHandle& handle,
                                 std::exception_ptr exception,
-                                std::string message);
-    void resolve_task_graph_dependents_locked(const std::string& task_id);
+                                std::string message,
+                                ParkedDrainBag* deferred = nullptr);
+    void resolve_task_graph_dependents_locked(
+        const std::string& task_id,
+        std::vector<ParkedReady>& ready_parked,
+        std::vector<std::function<void()>>& deferred_failures);
+    // 锁外执行级联收集的 parked 决算：失败结算先于 ready 出队；出队被拒
+    // 按提交被拒路径落 Failed 并结算。
+    void drain_parked_resolutions(
+        std::vector<ParkedReady>& ready_parked,
+        std::vector<std::function<void()>>& deferred_failures);
     void finalize_task_graph_node_locked(const std::string& task_id);
     void trim_task_graph_retention_locked();
     std::exception_ptr make_dependency_exception(const std::string& message) const;
@@ -1775,9 +1822,12 @@ auto Executor::submit_tracked_with_hook(
                 std::memory_order_acquire)) {
             promise->set_exception(exception);
         }
-        mark_task_graph_failed(handle, exception, "Tracked task submission rejected");
+        ParkedDrainBag drain_bag;
+        mark_task_graph_failed(handle, exception, "Tracked task submission rejected",
+                               &drain_bag);
         cancellation_registry_->finalize(handle.id());
         complete_terminal();
+        drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
     };
 
     // queued soft timeout：与取消经同一 phase CAS 仲裁，只赢一次。
@@ -1797,8 +1847,30 @@ auto Executor::submit_tracked_with_hook(
         record_task_timeout(
             executor_name, handle.id(),
             "Tracked async task timed out before execution", exception);
+        ParkedDrainBag drain_bag;
         mark_task_graph_failed(
-            handle, exception, "Tracked async task timed out before execution");
+            handle, exception, "Tracked async task timed out before execution",
+            &drain_bag);
+        cancellation_registry_->finalize(handle.id());
+        complete_terminal();
+        drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
+    };
+
+    // 不运行 callable 的 parked 结算路径（依赖失败 / 出队被拒）：phase CAS
+    // 仲裁保证与取消/超时只赢一方，"计数先于 future" 与提交拒绝路径同序。
+    // 异常归类由调用方完成（依赖失败先经 reclassify_dependency_exception）。
+    auto settle_without_run = [this, handle, state, promise, promise_ready,
+                               complete_terminal,
+                               release_admission](std::exception_ptr exception) mutable {
+        if (state->try_reject()) {
+            release_admission();  // 计数先于 future
+            bool expected = false;
+            if (promise_ready->compare_exchange_strong(
+                    expected, true, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                promise->set_exception(exception);
+            }
+        }
         cancellation_registry_->finalize(handle.id());
         complete_terminal();
     };
@@ -1852,10 +1924,12 @@ auto Executor::submit_tracked_with_hook(
             if (dependency_exception) {
                 dependency_exception =
                     reclassify_dependency_exception(dependency_exception);
+                ParkedDrainBag drain_bag;
                 mark_task_graph_failed(
                     handle,
                     dependency_exception,
-                    "Dependency failed before dependent task execution");
+                    "Dependency failed before dependent task execution",
+                    &drain_bag);
                 if (state->try_reject()) {
                     release_admission();
                     bool expected = false;
@@ -1867,6 +1941,7 @@ auto Executor::submit_tracked_with_hook(
                 }
                 cancellation_registry_->finalize(handle.id());
                 complete_terminal();
+                drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
                 std::rethrow_exception(dependency_exception);
             }
 
@@ -1882,13 +1957,14 @@ auto Executor::submit_tracked_with_hook(
         }
 
         mark_task_graph_running(handle);
+        ParkedDrainBag drain_bag;
         try {
             // 观测不变式：future 就绪之前，取消生命周期计数必须已最终化
             // （否则等待 future 后立即读 get_cancellation_status() 会与
             // worker 侧计数竞态）。
             if constexpr (std::is_void_v<return_type>) {
                 invoke(state->stop_token());
-                mark_task_graph_succeeded(handle);
+                mark_task_graph_succeeded(handle, &drain_bag);
                 if (state->cancel_requested()) {
                     // 运行中收到停止请求后仍正常完成：保留业务结果，只计数。
                     cancellation_registry_->on_completed_after_request();
@@ -1898,7 +1974,7 @@ auto Executor::submit_tracked_with_hook(
                 promise->set_value();
             } else {
                 auto result = invoke(state->stop_token());
-                mark_task_graph_succeeded(handle);
+                mark_task_graph_succeeded(handle, &drain_bag);
                 if (state->cancel_requested()) {
                     cancellation_registry_->on_completed_after_request();
                 }
@@ -1909,6 +1985,10 @@ auto Executor::submit_tracked_with_hook(
             promise_ready->store(true, std::memory_order_release);
             cancellation_registry_->finalize(handle.id());
             complete_terminal();
+            // dependent 的出队/结算必须晚于本任务自身完全终态（future 就绪、
+            // registry finalize、terminal hook），否则依赖本任务 future 的
+            // 观测者可在上游收尾前触发 shutdown/析构（UAF 窗口）。
+            drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
         } catch (...) {
             auto exception = std::current_exception();
             // 判定是否为"已请求取消后的协作退出"：只有 stop state 已被请求
@@ -1935,11 +2015,13 @@ auto Executor::submit_tracked_with_hook(
                     promise->set_exception(exception);
                 }
                 mark_task_graph_failed(
-                    handle, exception, "Task cancelled during execution");
+                    handle, exception, "Task cancelled during execution",
+                    &drain_bag);
                 manager_->record_in_flight_task_state(
                     handle.id(), TaskLifecycleState::Cancelled);
                 cancellation_registry_->finalize(handle.id());
                 complete_terminal();
+                drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
                 return;
             }
 
@@ -1951,18 +2033,83 @@ auto Executor::submit_tracked_with_hook(
                     std::memory_order_acquire)) {
                 promise->set_exception(exception);
             }
-            mark_task_graph_failed(handle, exception, "Tracked task failed");
+            // 失败统计必须先于级联写入：PR-1 起 dependent 的 future 在
+            // mark_task_graph_failed 内同步结算，观测者据此读取失败面板时
+            // 计数必须已可见。
+            record_task_exception(
+                executor_name, handle.id(),
+                "Tracked async task threw an exception", exception);
+            mark_task_graph_failed(handle, exception, "Tracked task failed",
+                                   &drain_bag);
             if (state->cancel_requested()) {
                 cancellation_registry_->on_completed_after_request();
             }
             cancellation_registry_->finalize(handle.id());
             complete_terminal();
-            record_task_exception(
-                executor_name, handle.id(),
-                "Tracked async task threw an exception", exception);
+            drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
             throw;
         }
     };
+
+    // dependency-driven 调度（PR-1，见 docs/design/dependency_driven_scheduling.md）：
+    // 依赖图任务在入队前做 park 决策——依赖全部成功才入队；存在失败则不运行
+    // callable 直接结算；否则驻留节点，由依赖终态级联在调度侧唤醒（出队），
+    // 不再占用 worker 等待条件变量。wrapper 内的既有依赖等待块保留为安全网
+    // （parked 出队后谓词立即通过），PR-3 退役。
+    if (dependencies && !dependencies->empty()) {
+        bool submit_now = false;
+        std::exception_ptr dependency_exception;
+        {
+            std::lock_guard<std::mutex> lock(task_graph_mutex_);
+            dependency_exception = dependency_failure_locked(*dependencies);
+            if (!dependency_exception) {
+                if (dependencies_succeeded_locked(*dependencies)) {
+                    submit_now = true;
+                } else {
+                    auto node_it = task_graph_nodes_.find(handle.id());
+                    size_t unmet = 0;
+                    for (const auto& dependency : *dependencies) {
+                        const auto dep_it = task_graph_nodes_.find(dependency.id());
+                        if (dep_it == task_graph_nodes_.end() ||
+                            dep_it->second.state != TaskGraphState::Succeeded) {
+                            ++unmet;
+                        }
+                    }
+                    if (node_it != task_graph_nodes_.end()) {
+                        node_it->second.unmet_count = unmet;
+                        auto parked = std::make_shared<ParkedSubmission>();
+                        parked->wrapper = std::move(task_wrapper);
+                        parked->on_timeout = std::move(on_timeout);
+                        parked->settle_without_run = settle_without_run;
+                        parked->priority = priority;
+                        parked->executor = executor_snapshot;
+                        node_it->second.parked = std::move(parked);
+                    } else {
+                        // 节点缺失只可能是终态被 trim 后复用 id 的非法场景；
+                        // 防御性按提交失败处理，不静默吞掉任务。
+                        dependency_exception = make_dependency_exception(
+                            "task graph node missing at park decision");
+                    }
+                }
+            }
+        }
+        if (dependency_exception) {
+            dependency_exception =
+                reclassify_dependency_exception(dependency_exception);
+            ParkedDrainBag drain_bag;
+            mark_task_graph_failed(
+                handle,
+                dependency_exception,
+                "Dependency failed before dependent task execution",
+                &drain_bag);
+            settle_without_run(dependency_exception);
+            drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
+            return submission;
+        }
+        if (!submit_now) {
+            return submission;  // parked：依赖终态时由调度侧级联出队
+        }
+    }
 
     try {
         bool accepted = false;

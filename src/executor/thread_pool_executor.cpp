@@ -66,28 +66,56 @@ void ThreadPoolExecutor::stop() {
 void ThreadPoolExecutor::stop(bool wait_for_tasks) {
     std::shared_ptr<ThreadPool> thread_pool;
     bool caller_is_worker = false;
+    bool have_pool = false;
     {
         std::lock_guard<std::mutex> lock(thread_pool_mutex_);
-        if (!thread_pool_) {
-            return;
-        }
-        thread_pool = thread_pool_;
-        caller_is_worker = thread_pool->is_current_worker_thread();
-        // A worker-origin request must retain ownership until an external
-        // caller finalizes and joins the pool.
-        if (!caller_is_worker) {
-            thread_pool_.reset();
+        if (thread_pool_) {
+            thread_pool = thread_pool_;
+            have_pool = true;
+            caller_is_worker = thread_pool->is_current_worker_thread();
+            // A worker-origin request must retain ownership until an external
+            // caller finalizes and joins the pool.
+            if (!caller_is_worker) {
+                thread_pool_.reset();
+                // 退休池保活：stop(false) 的 detached 终结线程持有自己的
+                // shared_ptr，这里再留一份可达引用，供后续 stop(true)（含
+                // ~Executor → ~ExecutorManager 路径）等待 worker 全部 join。
+                retired_pools_.push_back(thread_pool);
+            }
         }
     }
 
-    if (caller_is_worker) {
+    if (have_pool && caller_is_worker) {
         thread_pool->shutdown(true);
-    } else if (wait_for_tasks) {
+    } else if (have_pool && wait_for_tasks) {
         thread_pool->shutdown(true);
-    } else {
+        drain_retired_pools();
+    } else if (have_pool) {
         std::thread([thread_pool = std::move(thread_pool)]() {
             thread_pool->shutdown(false);
         }).detach();
+        // stop(false) 契约是立即返回：退休池留给后续 stop(true)/终局排空。
+    } else if (wait_for_tasks) {
+        // 此前已 stop(false) 过的执行器再次 stop(true)：池本体已退休，
+        // 这里只负责等到退休池的 worker 全部 join。
+        drain_retired_pools();
+    }
+}
+
+void ThreadPoolExecutor::drain_retired_pools() {
+    std::vector<std::shared_ptr<ThreadPool>> retired;
+    {
+        std::lock_guard<std::mutex> lock(thread_pool_mutex_);
+        retired.swap(retired_pools_);
+    }
+    for (const auto& retired_pool : retired) {
+        if (!retired_pool) {
+            continue;
+        }
+        // 第二调用方经 shutdown_cv_ 等待 detached 终结线程完成 join；若
+        // detached 线程尚未启动，本调用成为 finalizer 亲自 join。两个顺序
+        // 都恰好有一个 joiner，不会重复或遗漏。
+        retired_pool->shutdown(true);
     }
 }
 
