@@ -271,7 +271,9 @@ auto fused = executor.submit_after(both, [] {
 - `submit_after_with_handle(...)`：同时返回 dependent task 的 handle 和 future，适合继续构造任务链。
 - `when_all(dependencies)`：返回逻辑 handle；所有依赖成功后该 handle 成功，任一依赖失败后该 handle 失败，可继续传给 `submit_after()`。
 
-依赖失败时，dependent task 默认不执行；dependent future 进入异常状态，`future.get()` 会重新抛出依赖异常或依赖图错误。无效 handle、跨 `Executor` 实例 handle 或 cycle 会记录 `SubmitRejected`，并返回 ready exceptional future 或失败的逻辑 handle。已完成 handle 按 `ExecutorConfig::task_graph_retention_capacity` 保留，默认保留最近 1024 个终态 handle；容量为 0 时终态 handle 立即过期。仍被活动任务依赖的终态 handle 不会提前回收。过期 handle 再用于 `submit_after()` / `when_all()` 会被拒绝并返回可诊断异常。也可通过 `set_task_graph_retention_capacity()` 在运行时调整容量。`submit_after()` 的等待任务当前会占用一个 worker 等待条件变量，超大规模任务图后续可演进为纯调度侧唤醒。
+依赖失败时，dependent task 默认不执行；dependent future 进入异常状态，`future.get()` 会重新抛出依赖异常或依赖图错误。无效 handle、跨 `Executor` 实例 handle 或 cycle 会记录 `SubmitRejected`，并返回 ready exceptional future 或失败的逻辑 handle。已完成 handle 按 `ExecutorConfig::task_graph_retention_capacity` 保留，默认保留最近 1024 个终态 handle；容量为 0 时终态 handle 立即过期。仍被活动任务依赖的终态 handle 不会提前回收。过期 handle 再用于 `submit_after()` / `when_all()` 会被拒绝并返回可诊断异常。也可通过 `set_task_graph_retention_capacity()` 在运行时调整容量。
+
+依赖调度为 dependency-driven：依赖未就绪的 dependent 任务**不入队、不占用 worker**，驻留调度侧；依赖全部成功时由调度器按提交时的 priority 入队（生命周期 DependencyBlocked → Queued → Running），任一依赖失败/被取消时立即以依赖异常结算，任务不接触 worker。`ExecutorConfig::task_timeout_ms > 0` 时，queued soft timeout 自**提交时刻**起算、覆盖依赖等待期，parked 超时按失败结算并级联下游。`shutdown()` 返回时仍 parked（依赖永不就绪）的任务以异常结算（"Executor is shutting down; parked task was never executed"），future 不悬空。
 
 ### 3.5 软超时
 

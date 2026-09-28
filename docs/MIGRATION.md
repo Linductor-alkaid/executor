@@ -4,6 +4,34 @@
 
 ---
 
+## 从 0.5.0 升级到 0.5.x：依赖驱动调度（随下一版本发布）
+
+`submit_after()` / `submit_after_with_handle()` / `when_all()` 的公开签名与
+返回类型不变，但依赖等待的执行模型从"dependent 任务立即入队、wrapper 在
+worker 上等待条件变量"演进为 dependency-driven scheduling（设计见
+`docs/design/dependency_driven_scheduling.md`）。需要关注的可观察行为变化：
+
+- **依赖等待不再占用 worker**：依赖未就绪的 dependent 驻留调度侧
+  （生命周期 `DependencyBlocked`），依赖全部成功后按提交时的 priority
+  入队（补记 `Queued`）。原"低线程数 + 宽依赖可饿死线程池"的窗口消除；
+  依赖图的规模边界仍是 `max_in_flight_tasks`（parked 期间照常占额）与
+  `task_graph_retention_capacity`。
+- **queued soft timeout 计时包含依赖等待期**：`task_timeout_ms > 0` 时，
+  超时预算自提交时刻起算（此前同样自入队起算，行为一致；区别是 parked
+  期间现在也会触发超时），parked 超时按失败结算并级联下游。
+  `task_timeout_ms == 0`（默认）行为不变——依赖等待无超时上限。
+- **shutdown 对 parked 任务的结算**：`shutdown()` 返回时仍 parked（依赖
+  永不就绪）的任务以 `std::runtime_error`（"Executor is shutting down;
+  parked task was never executed"）结算，future 不悬空；admission/取消
+  计数同步释放。此前这类任务的 future 可能永不就绪。
+- **取消语义不变**：排队取消仍可赢（future 以 `TaskCancelled` 就绪），
+  运行中取消仍是协作式。
+
+迁移动作：无需改代码。若下游曾依赖"dependent 任务会出现在执行器队列中"
+这类实现细节（不属公开契约），请改用生命周期观测与 future 等待。
+
+---
+
 ## 从 0.4.0 升级到 0.5.0：任务生命周期语义与确定性边界
 
 0.5.0 保持既有公开提交 API 的签名与返回类型不变，但引入四个迁移主题：任务级

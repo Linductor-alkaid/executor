@@ -41,9 +41,12 @@ References must live from dependent submission until eventual completion, includ
 
 ## Capacity boundary
 
-Handles make completion and failure propagation explicit, but the current implementation is not a fully non-blocking DAG scheduler. Dependent wrappers enter the ordinary pool and can wait there for prerequisite state. Low worker counts, long chains, or submitting many dependents before their prerequisites can occupy workers.
+Handles make completion and failure propagation explicit. Dependency scheduling is dependency-driven: dependents whose prerequisites are not yet resolved do not enter the pool and do not occupy workers — they stay parked on the scheduler side and are enqueued with their submission-time priority once every prerequisite has succeeded. Low worker counts, long chains, or submitting many dependents before their prerequisites no longer starve the pool; `max_in_flight_tasks` and `task_graph_retention_capacity` remain the graph size bounds.
 
-Submit prerequisites first, avoid unbounded blocking inside a dependent, limit in-flight chains, and pressure-test with the production minimum worker count. Use a dedicated graph scheduler for large dynamic DAGs instead of increasing threads and queue capacity.
+In practice:
+
+- The dependency wait counts against the `task_timeout_ms` queued soft timeout budget (measured from submission); keep the default 0 when you do not need timeouts.
+- Avoid unbounded blocking inside a dependent, limit in-flight chains, and pressure-test with the production minimum worker count. Use a dedicated graph scheduler for large dynamic DAGs instead of increasing threads and queue capacity.
 
 ## Failure and exit
 

@@ -195,8 +195,9 @@ Executor::~Executor() {
     stop_timer_thread();
     // 实例模式：池排空必须在 facade 状态成员析构之前完成。成员按声明逆序
     // 析构时 owned_manager_ 几乎最后销毁，若依赖析构链触发排空，
-    // task_graph_mutex_/task_graph_cv_、failure_mutex_、periodic_tasks_mutex_
-    // 等会先一步被销毁，仍在运行的 wrapper（捕获 this）随即 use-after-free。
+    // task_graph_mutex_、closure_graveyard_、failure_mutex_、
+    // periodic_tasks_mutex_ 等会先一步被销毁，仍在运行的 wrapper（捕获
+    // this）随即 use-after-free。
     // shutdown() 幂等：用户已显式 shutdown 时这里基本是空操作。
     if (owned_manager_) {
         try {
@@ -324,6 +325,11 @@ void Executor::fail_all_parked_tasks_for_shutdown() {
         }
     }
     if (parked_ids.empty()) {
+        // 无 parked 节点同样要清墓地：parked 超时/竞争输家路径转入墓地的
+        // promise/state 引用在 shutdown 终局统一释放（契约：shutdown 后
+        // closure_graveyard_size() == 0，与有无 parked 节点无关）。
+        std::lock_guard<std::mutex> lock(task_graph_mutex_);
+        closure_graveyard_.clear();
         return;
     }
 
@@ -365,6 +371,13 @@ void Executor::fail_all_parked_tasks_for_shutdown() {
         }
     }
     drain_parked_resolutions(bag.ready, bag.failures);
+    // 墓地终局清空（安全：shared_ptr 引用计数，在途闭包仍持有各自引用；
+    // shutdown(true) 下 worker 已 join，shutdown(false) 下由闭包自身引用
+    // 保活到其终局）。仅回收墓地持有的引用，降低常驻内存。
+    {
+        std::lock_guard<std::mutex> lock(task_graph_mutex_);
+        closure_graveyard_.clear();
+    }
 }
 
 void Executor::set_timer_thread_factory_for_test(
@@ -477,7 +490,6 @@ void Executor::mark_task_graph_succeeded(const TaskHandle& handle,
         }
     }
     manager_->record_in_flight_task_terminal(handle.id());
-    task_graph_cv_.notify_all();
     if (!deferred) {
         drain_parked_resolutions(bag.ready, bag.failures);
     }
@@ -505,7 +517,6 @@ void Executor::mark_task_graph_failed(const TaskHandle& handle,
         }
     }
     manager_->record_in_flight_task_terminal(handle.id());
-    task_graph_cv_.notify_all();
     if (!deferred) {
         drain_parked_resolutions(bag.ready, bag.failures);
     }
@@ -649,6 +660,12 @@ void Executor::drain_parked_resolutions(
         } catch (...) {
             accepted = false;
         }
+        if (accepted) {
+            // PR-3 监控补记：parked 任务在真正进入执行器队列时补记 Queued
+            // （设计 §7：DependencyBlocked → Queued → Running）。
+            manager_->record_in_flight_task_state(
+                ready.handle.id(), TaskLifecycleState::Queued);
+        }
         if (!accepted) {
             auto exception = std::make_exception_ptr(std::runtime_error(
                 "Async executor rejected task submission"));
@@ -778,8 +795,6 @@ TaskHandle Executor::when_all(std::vector<TaskHandle> dependencies) {
         manager_->record_in_flight_task_state(
             handle.id(), TaskLifecycleState::DependencyBlocked);
     }
-
-    task_graph_cv_.notify_all();
 
     return handle;
 }
@@ -1137,8 +1152,6 @@ TaskCancellationResponse Executor::propagate_cancel_state(
             }
             manager_->record_in_flight_task_terminal(task_id);
             cancellation_registry_->finalize(task_id);
-            // 唤醒依赖该任务的等待者（含依赖未满足的依赖图任务）。
-            task_graph_cv_.notify_all();
             return TaskCancellationResponse{
                 TaskCancellationResult::RequestedBeforeStart};
         }
@@ -1172,6 +1185,11 @@ void Executor::propagate_timer_task_cancel(
 
 CancellationStatus Executor::get_cancellation_status() const {
     return cancellation_registry_->status();
+}
+
+size_t Executor::closure_graveyard_size() const {
+    std::lock_guard<std::mutex> lock(task_graph_mutex_);
+    return closure_graveyard_.size();
 }
 
 void Executor::set_cancellation_registry_capacity(size_t capacity) {

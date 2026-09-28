@@ -306,7 +306,14 @@ splice、CAS 失败指数 PAUSE 退避、每轮重试重读期望值防确定性
 - [ ] PA-6：task graph 分片（按 handle hash 分桶锁）或原子依赖计数 + 定向唤醒，
   消除全局 `task_graph_mutex_` + `notify_all`。
   （2026-09-22：深化方案转入主清单阶段 21——调度侧唤醒、依赖驱动调度，
-  依赖未就绪不入队，设计文档 docs/design/dependency_driven_scheduling.md）
+  依赖未就绪不入队，设计文档 docs/design/dependency_driven_scheduling.md；
+  2026-09-28 PR-3 落地：`task_graph_cv_` 与全部 `notify_all` 退役，定向出队
+  替代惊群。验收基准 `tests/benchmark_task_graph_paths`：tracked 提交吞吐
+  1/2/4/8 生产者 30.3k/74.3k/65.9k/45.1k ops/s；parked fan-out 256 依赖
+  28.0µs/依赖、64 依赖 16.1µs/依赖（定向唤醒，无惊群）；256 链 22.4µs/跳。
+  每提交图锁获取 2 次（登记 + park 决策各一次，completion 1 次），为常数；
+  原"分桶锁"备选不再需要——无 worker 持锁等待，图锁持有时间缩为纯簿记。
+  分片如仍有收益由后续基准数据决定，本项主体关闭待该 PR 合入后勾选）
 - [ ] PA-15：默认执行器引用改 `std::atomic<std::shared_ptr>` 快照，消除每次提交的
   `default_async_mutex_`/`thread_pool_mutex_` 两跳。
 - [ ] PA-35：TaskMonitor 先查容量/采样再锁；dropped 计数改原子；in-flight 表分片或

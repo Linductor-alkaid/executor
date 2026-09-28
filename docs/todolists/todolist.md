@@ -243,6 +243,9 @@ v0.5.x 两条主线：待办账实对齐（2026-09-22 对 15 份计划文档逐�
   （parked ready 结构），依赖终态级联入队、失败即时结算、task_graph_cv_ 退役；
   载明语义决策：queued soft timeout 计时起点、shutdown 对 parked 任务的结算、
   admission 占额语义、priority/执行器快照沿用
-- [ ] 实施调度侧唤醒改造：复用 resolve_task_graph_dependents_locked 级联骨架与
+- [x] 实施调度侧唤醒改造：复用 resolve_task_graph_dependents_locked 级联骨架与
   取消 phase CAS 仲裁；保持"计数先于 future"不变式（PR #177）与有界 admission 语义
-- [ ] TSAN 全量回归 + 依赖等待路径并发基准（承接 performance_audit PA-6 验收口径）
+  （PR-1 #197 + PR-2 #198 + PR-3：CV 退役/Queued 补记/墓地观测，随 0.5.x 合入）
+- [x] TSAN 全量回归 + 依赖等待路径并发基准（承接 performance_audit PA-6 验收口径；
+  benchmark_task_graph_paths 交付并回填台账数据；TSAN/ASAN 全零，
+  独立验证四轮终局 PASS，随 PR-3 合入收口）

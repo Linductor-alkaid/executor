@@ -53,11 +53,11 @@ auto plan = executor.submit_after(prerequisites, run_planner, config);
 
 ## 当前容量边界
 
-任务句柄让完成关系和失败传播显式化，但当前实现不是完全非阻塞的 DAG 调度器：dependent wrapper 会进入普通线程池，并在前置状态确定前等待。低线程数、大量长依赖链，或在前置任务之前集中提交 dependent，都可能占住 worker。
+任务句柄让完成关系和失败传播显式化。依赖调度为 dependency-driven：依赖未就绪的 dependent 不入队、不占用 worker，驻留调度侧，依赖全部成功后才按提交时的 priority 入队——低线程数、长依赖链或先提交 dependent 都不再占住 worker；`max_in_flight_tasks` 与 `task_graph_retention_capacity` 仍是图的规模边界。
 
 实际使用时：
 
-- 先提交所有前置任务，再提交依赖任务；
+- 依赖等待期计入 `task_timeout_ms` 的 queued soft timeout 预算（自提交起算）；不需要超时就保持默认 0；
 - 不在 dependent 中继续进行无界阻塞；
 - 控制同时在途的依赖链数量；
 - 用生产配置中的最小线程数进行压力测试；
@@ -77,7 +77,7 @@ auto plan = executor.submit_after(prerequisites, run_planner, config);
 
 1. 让 `load` 抛异常；确认 `plan` 任务体不执行，`load.future` 与 `plan` future 都能解释失败。
 2. 传入默认构造或另一 Executor 创建的 handle；确认 dependent future 得到可观察拒绝。
-3. 用最小线程数提交多组长依赖链；观察 active/queued 和完成情况，验证容量不会因等待 wrapper 耗尽。
+3. 用最小线程数提交多组长依赖链；观察 active/queued 和完成情况——依赖等待不再占住 worker，链应全部完成而非饿死。
 4. 在依赖未完成时开始退出；先停止创建新图，保留所有 futures，再有界等待或记录未完成图的业务 ID。
 
 Executor shutdown 不会把内存中的任务图持久化。若流程必须跨进程恢复，应把阶段和输入写入外部存储，并让任务幂等。

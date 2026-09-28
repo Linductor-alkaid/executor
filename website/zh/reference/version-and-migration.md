@@ -16,6 +16,10 @@ description: 当前开发快照、发布版本和 API 迁移的入口。
 | 选项、编译器与后端前置 | [BUILD.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/BUILD.md) |
 | 当前完整签名 | [API.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md) |
 
+## 开发快照：依赖驱动调度
+
+`master` 上任务图依赖等待已演进为 dependency-driven scheduling：`submit_after` 的 dependent 在依赖未就绪时不再入队占用 worker，parked 超时与 shutdown 结算语义详见 [MIGRATION.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/MIGRATION.md) 的"从 0.5.0 升级到 0.5.x"一节。公开 API 签名不变。
+
 ## `bool` 到 `_ex` 的迁移
 
 旧入口保持兼容，适合调用方只需成功/失败的场景；新代码在需要诊断、日志或可靠回退时优先使用 `_ex`，读取 `ExecutorResult::error_code` 与 `message`。

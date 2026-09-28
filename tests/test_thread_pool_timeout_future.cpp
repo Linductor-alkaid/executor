@@ -45,6 +45,26 @@ bool future_returns(std::future<int>& future, int expected, const char* what) {
     }
 }
 
+// 确定性启动门：blocker 任务体首条语句置位 started（release），主线程有界
+// 等待（acquire）其置位后再提交后续任务。观察到置位即证明 worker 已将
+// blocker 出队并开始执行——软超时仅在出队后的执行前检查一次（见
+// thread_pool.cpp），运行中的任务不会被中断，因此 blocker 此后必然正常
+// 完成；而其后提交的任务必然排队等待 blocker 剩余 ~300ms，远超 100ms
+// 预算，必然被软超时跳过。固定 sleep 无法提供该保证：负载下 worker 出队
+// 延迟可超过任务自身的超时预算，导致 blocker 在出队时即被跳过。
+// 有界等待防止异常路径下主线程挂死；超时按断言失败处理。
+bool wait_for_started(const std::atomic<bool>& started,
+                      std::chrono::milliseconds budget) {
+    const auto deadline = std::chrono::steady_clock::now() + budget;
+    while (!started.load(std::memory_order_acquire)) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
 bool future_throws_timed_out(std::future<int>& future) {
     try {
         (void)future.get();
@@ -78,12 +98,16 @@ bool test_thread_pool_timeout_satisfies_future_and_monitor() {
     monitor::TaskMonitor monitor;
     pool.set_task_monitor(&monitor);
 
-    auto blocker = pool.submit([]() {
+    std::atomic<bool> blocker_started{false};
+    auto blocker = pool.submit([&blocker_started]() {
+        blocker_started.store(true, std::memory_order_release);
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         return 1;
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    TEST_ASSERT(
+        wait_for_started(blocker_started, std::chrono::milliseconds(10000)),
+        "blocker task should be picked up by a worker");
 
     std::atomic<bool> timed_out_task_ran{false};
     auto timed_out = pool.submit([&timed_out_task_ran]() {
@@ -127,12 +151,16 @@ bool test_executor_timeout_satisfies_future_and_failure_status() {
     config.task_timeout_ms = 100;
     TEST_ASSERT(executor.initialize(config), "executor should initialize");
 
-    auto blocker = executor.submit([]() {
+    std::atomic<bool> blocker_started{false};
+    auto blocker = executor.submit([&blocker_started]() {
+        blocker_started.store(true, std::memory_order_release);
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         return 1;
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    TEST_ASSERT(
+        wait_for_started(blocker_started, std::chrono::milliseconds(10000)),
+        "facade blocker should be picked up by a worker");
 
     std::atomic<bool> timed_out_task_ran{false};
     auto timed_out = executor.submit([&timed_out_task_ran]() {
