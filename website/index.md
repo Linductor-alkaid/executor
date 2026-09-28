@@ -52,8 +52,8 @@ Executor 不是协程运行时、分布式消息系统或硬实时操作系统�
 | 平台 | Linux、Windows；Android CPU-only（NDK） |
 | 语言 | C++20 |
 | 构建系统 | CMake 3.16+ |
-| 版本 | `v0.5.0` |
+| 版本 | `v0.5.2` |
 | 持续集成 | [GitHub Actions](https://github.com/Linductor-alkaid/executor/actions/workflows/c-cpp.yml) |
 | 许可证 | [MIT](https://github.com/Linductor-alkaid/executor/blob/master/LICENSE) |
 
-<div class="version-note">本手册对应 `v0.5.0`；后续 `master` 开发能力需在发布 tag 后才构成稳定版承诺。</div>
+<div class="version-note">本手册对应 `v0.5.2`；后续 `master` 开发能力需在发布 tag 后才构成稳定版承诺。</div>
