@@ -8,6 +8,25 @@
 
 ### 新增
 
+- **dependency-driven scheduling 第二阶段（PR-2，v0.5.2 主线，设计见
+  `docs/design/dependency_driven_scheduling.md`）**：
+  - **D1 parked 超时**：queued soft timeout 自提交时刻起算，parked 期间
+    经 facade 一次性定时器（时长取 `ExecutorConfig::task_timeout_ms`，
+    0 = 不启用维持既有行为）触发，与池队列计时器经 phase CAS 仲裁恰好
+    一个赢家；parked 获胜即失败结算并级联下游。定时器线程按需启动
+    （全新 facade 无需先提交 delayed/periodic 预热）；输家/赢家闭包的
+    promise/state 捕获转入 facade 墓地延迟析构，消除定时器线程与消费者
+    使用异常对象之间的析构竞争（TSAN 实证）；`record_task_timeout`
+    先于自身 future 结算（统计可见性与级联顺序同一不变式）。
+  - **D2 shutdown 终局结算**：shutdown 返回前对全部仍 parked（依赖永不
+    就绪）的节点统一失败结算，future 不悬空、admission/registry/in-flight
+    全部释放；serial 派发被池丢弃时 TicketGuard 同步补图终态，parked
+    下游即时级联。
+  - **serial dispatch 结算顺序对齐**：submit_on 全部终态路径 drain bag 化
+    （on_timeout/成功/协作取消/失败/context 拒绝），失败统计先于级联
+    写入——与 tracked 路径同一观测不变式。
+  - retention 交互与 admission 四路径（依赖失败/超时/取消/shutdown）
+    恰好一次释放的验收测试。
 - **dependency-driven scheduling 第一阶段（PR-1，v0.5.2 主线，设计见
   `docs/design/dependency_driven_scheduling.md`）**：`submit_after` /
   `submit_after_with_handle` 从"任务立即入队、wrapper 在 worker 上等
@@ -17,8 +36,7 @@
   调度侧出队，任一失败即时结算依赖异常（任务不占 worker）。
   worker 占用与宽依赖饿死/挂死窗口消除（新增免饿死回归测试，旧实现
   在该场景挂死）；`unmet_count` 驱动定向出队，替代对全部等待者的
-  `notify_all` 惊群（条件变量本体按计划 PR-3 退役）。queued soft
-  timeout 的计时起点暂仍为出队时刻（完整 D1"提交即起算"语义随 PR-2）。
+  `notify_all` 惊群（条件变量本体按计划 PR-3 退役）。
 
 ### 修复与改进
 
