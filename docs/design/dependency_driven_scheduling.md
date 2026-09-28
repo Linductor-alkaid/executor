@@ -317,10 +317,15 @@ API.md / MIGRATION.md / 网站同步点：生命周期观测一节补"Dependency
    评估结论：退休 shell 的 stop(false)-only 驻留有界（facade 下每实例至多
    一次退休、shell 已被 detached 线程清空、任何 shutdown(true)/析构兜底），
    不加查询接口，保持文档化。
-3. **PR-3**：`task_graph_cv_` 退役、监控 Queued 补记、基准与 PA-6 验收数据、
-   API/MIGRATION/网站同步；顺带：closure_graveyard_ 规模观测/安全清空、
-   serial on_timeout 之外的输家闭包析构时点审计（submit/submit_priority
-   等池侧 on_timeout 同类模式）。
+3. **PR-3（本轮）**：`task_graph_cv_` 退役（wrapper 依赖等待块删除、4 处
+   notify_all 移除）、监控 Queued 补记、closure_graveyard_ 观测接口
+   （`closure_graveyard_size()`）与 shutdown 终局清空、PA-6 验收基准
+   （tests/benchmark_task_graph_paths）与台账数据回填、
+   API/MIGRATION/网站同步。
+   遗留观察：closure_graveyard_ 只增不减（规模以超时/竞争次数为界，
+   shutdown 终局清空）已在基准中输出规模供监控；submit/submit_priority
+   等池侧 on_timeout 同类"输家闭包析构时点"模式为 PR-2 前既有行为，
+   历史无告警，保持观察。
 
 每个 PR 独立可回滚；任何路径发现与"恰好一次结算"或"计数先于 future"
 冲突，先停下评审，不以性能名义放宽正确性约束。测试全程由

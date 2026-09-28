@@ -251,6 +251,17 @@ public:
     CancellationStatus get_cancellation_status() const;
 
     /**
+     * @brief 超时闭包墓地当前规模（诊断观测）。
+
+     * on_timeout 闭包的 promise/state 捕获在输家/赢家路径转入墓地延迟析构
+     * （避免定时器/池线程无同步析构结算状态，见
+     * docs/design/dependency_driven_scheduling.md §6 D1 实现注记）。
+     * 规模以"parked 超时触发 + 竞争输家"次数为界，shutdown 终局清空、
+     * facade 析构释放；长期高频超时的进程可借此观测累积。
+     */
+    size_t closure_graveyard_size() const;
+
+    /**
      * @brief 设置按句柄取消 registry 的容量（active 与 tombstone 各自上限）。
      *
      * 容量耗尽时新的可取消提交被明确拒绝（SubmitRejected 诊断），
@@ -1140,7 +1151,8 @@ private:
     TaskRouter task_router_;
 
     mutable std::mutex task_graph_mutex_;
-    std::condition_variable task_graph_cv_;
+    // PR-3：task_graph_cv_ 已退役——dependency-driven 调度下不再有 worker
+    // 阻塞等待依赖，定向出队替代 notify_all 惊群。
     std::unique_ptr<TaskDependencyManager> task_dependencies_;
     std::unordered_map<std::string, TaskGraphNode> task_graph_nodes_;
     std::unordered_map<std::string, std::vector<std::string>> task_graph_dependents_;
@@ -1979,62 +1991,14 @@ auto Executor::submit_tracked_with_hook(
                          handle,
                          state,
                          executor_name,
-                         dependencies,
                          promise,
                          promise_ready,
                          complete_terminal,
                          release_admission,
                          invoke = std::move(invoke_user_callable)]() mutable {
-        // 依赖图变体：依赖未满足前保持 Pending/Queued，取消可赢排队仲裁。
-        if (dependencies && !dependencies->empty()) {
-            std::exception_ptr dependency_exception;
-            bool dependencies_ready = false;
-            {
-                std::unique_lock<std::mutex> lock(task_graph_mutex_);
-                task_graph_cv_.wait(lock, [&] {
-                    dependency_exception =
-                        dependency_failure_locked(*dependencies);
-                    if (dependency_exception) {
-                        return true;
-                    }
-                    if (dependencies_succeeded_locked(*dependencies)) {
-                        dependencies_ready = true;
-                        return true;
-                    }
-                    return state->cancel_requested();
-                });
-            }
-
-            if (dependency_exception) {
-                dependency_exception =
-                    reclassify_dependency_exception(dependency_exception);
-                ParkedDrainBag drain_bag;
-                mark_task_graph_failed(
-                    handle,
-                    dependency_exception,
-                    "Dependency failed before dependent task execution",
-                    &drain_bag);
-                if (state->try_reject()) {
-                    release_admission();
-                    bool expected = false;
-                    if (promise_ready->compare_exchange_strong(
-                            expected, true, std::memory_order_acq_rel,
-                            std::memory_order_acquire)) {
-                        promise->set_exception(dependency_exception);
-                    }
-                }
-                cancellation_registry_->finalize(handle.id());
-                complete_terminal();
-                drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
-                std::rethrow_exception(dependency_exception);
-            }
-
-            if (!dependencies_ready) {
-                // 被自身取消唤醒：取消方已满足 future 并落图终态。
-                return;
-            }
-        }
-
+        // PR-3：依赖等待块退役。dependency-driven 调度下依赖图任务只在
+        // 依赖全部 Succeeded 后才会被入队（park 决策与终态级联双入口，
+        // 终态不可逆），运行时无需任何依赖检查，task_graph_cv_ 随之删除。
         // 开始执行仲裁（单一 CAS 线性化点）。
         if (!state->try_begin_execution()) {
             return;  // 取消/超时已先赢，future 已满足

@@ -8,6 +8,20 @@
 
 ### 新增
 
+- **dependency-driven scheduling 第三阶段（PR-3，v0.5.2 主线收口，设计见
+  `docs/design/dependency_driven_scheduling.md`）**：
+  - **`task_graph_cv_` 退役**：依赖图任务运行时不再有任何依赖检查与
+    条件变量等待（PR-1 起 parked 任务仅在依赖全部成功后入队，终态不可逆），
+    4 处 `notify_all` 惊群唤醒全部删除——每 terminal 唤醒从 O(等待者)
+    降为 O(1) 定向入队。
+  - **监控 Queued 补记**：parked 任务出队入执行器时补记 `Queued`
+    生命周期，观测链完整为 DependencyBlocked → Queued → Running。
+  - **closure 墓地观测与终局清空**：新增 `closure_graveyard_size()`
+    诊断接口；shutdown 终局清空墓地释放常驻引用。
+  - **PA-6 验收基准**：新增 `tests/benchmark_task_graph_paths`
+    （tracked 提交吞吐 1/2/4/8 生产者、parked fan-out 释放延迟、依赖链
+    每跳成本、墓地规模）；PA-6 数据回填 performance_audit 台账，
+    "分桶锁"备选确认不再需要。
 - **dependency-driven scheduling 第二阶段（PR-2，v0.5.2 主线，设计见
   `docs/design/dependency_driven_scheduling.md`）**：
   - **D1 parked 超时**：queued soft timeout 自提交时刻起算，parked 期间

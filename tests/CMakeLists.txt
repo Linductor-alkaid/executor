@@ -412,6 +412,12 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "benchmark;optimization"
             TIMEOUT 120
         )
+    # 任务图调度路径基准测试（PA-6 验收：tracked 吞吐/parked fan-out/链延迟）
+    elseif(TEST_NAME STREQUAL "benchmark_task_graph_paths")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "benchmark;task_graph"
+            TIMEOUT 300
+        )
     # 批量提交基准测试（benchmark_batch_* 系列）
     elseif(TEST_NAME MATCHES "^benchmark_batch_.*")
         set_tests_properties(${TEST_NAME} PROPERTIES
@@ -486,6 +492,17 @@ endif()
 # 且含 200ms 量级超时预算的观察窗口，独占调度避免负载噪声误报。
 if(TARGET test_dependency_driven_pr2)
     set_tests_properties(test_dependency_driven_pr2 PROPERTIES
+        LABELS "unit;concurrency"
+        TIMEOUT 300
+        RUN_SERIAL TRUE
+    )
+endif()
+
+# dependency-driven scheduling（PR-3）验证测试：Queued 补记确定性采样与
+# closure 墓地观测。同样为门控握手 + 有限等待模式，含 200ms 量级超时预算
+# 与稳定性观察窗口，独占调度避免负载噪声误报。
+if(TARGET test_dependency_driven_pr3)
+    set_tests_properties(test_dependency_driven_pr3 PROPERTIES
         LABELS "unit;concurrency"
         TIMEOUT 300
         RUN_SERIAL TRUE
