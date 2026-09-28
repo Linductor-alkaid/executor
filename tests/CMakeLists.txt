@@ -83,6 +83,30 @@ endforeach()
 
 # 查找 Google Test
 find_package(GTest)
+
+# 离线兜底：EXECUTOR_LOCAL_GTEST_DIR 指向本机已有的 googletest 源码 checkout
+# （如其他项目的 third_party），供无网络且未装 libgtest-dev 的验证环境使用。
+# 仅在显式指定且目录有效时启用；不指定时行为与原先完全一致。
+set(EXECUTOR_LOCAL_GTEST_DIR "" CACHE PATH
+    "Path to a local googletest checkout used when system GTest is unavailable")
+if(NOT GTest_FOUND AND EXECUTOR_LOCAL_GTEST_DIR
+        AND EXISTS "${EXECUTOR_LOCAL_GTEST_DIR}/CMakeLists.txt")
+    message(STATUS "Using local googletest checkout: ${EXECUTOR_LOCAL_GTEST_DIR}")
+    set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    add_subdirectory("${EXECUTOR_LOCAL_GTEST_DIR}"
+        "${CMAKE_BINARY_DIR}/googletest-local" EXCLUDE_FROM_ALL)
+    if(NOT TARGET GTest::GTest)
+        add_library(GTest::GTest INTERFACE IMPORTED)
+        target_link_libraries(GTest::GTest INTERFACE gtest)
+    endif()
+    if(NOT TARGET GTest::Main)
+        add_library(GTest::Main INTERFACE IMPORTED)
+        target_link_libraries(GTest::Main INTERFACE gtest_main)
+    endif()
+    set(GTest_FOUND ON)
+endif()
+
 if(NOT GTest_FOUND)
     # 可选兜底：无系统 GTest 时（如未装 libgtest-dev 的 runner），用 FetchContent
     # 拉取固定版本的 googletest。默认关闭，离线构建不受影响。
@@ -445,6 +469,17 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         )
     endif()
 endforeach()
+
+# dependency-driven scheduling（PR-1）验证测试：门控握手 + 多处有限等待，
+# 单测最坏路径超过默认 30s 档；worker 占满/释放的时序对并行 ctest 的负载
+# 噪声敏感，RUN_SERIAL 独占调度。
+if(TARGET test_dependency_driven_scheduling)
+    set_tests_properties(test_dependency_driven_scheduling PROPERTIES
+        LABELS "unit;concurrency"
+        TIMEOUT 120
+        RUN_SERIAL TRUE
+    )
+endif()
 
 add_executable(test_dispatch_task_fallback test_dispatch_task_fallback.cpp)
 target_link_libraries(test_dispatch_task_fallback PRIVATE executor GTest::GTest GTest::Main)

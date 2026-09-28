@@ -172,7 +172,42 @@ executor snapshot。变化仅在**入队决策**：
 满足后执行，等待逻辑整体删除。4 处 `notify_all`
 （mark_task_graph_succeeded / mark_task_graph_failed / when_all /
 request_task_cancel）中前两处的唤醒职能由级联接管；when_all 与取消路径的
-notify 在删除等待者后失去对象，一并移除。成员变量删除。
+notify 在删除等待者后失去对象，一并移除。成员变量删除。（PR-3）
+
+### 5.7 生命周期：级联结算与 facade 析构的交错（PR-1 评审产出）
+
+PR-1 使 dependent 的 future 在**上游 worker 线程上同步结算**（级联或
+drain），由此产生一条新的时序约束与一个此前潜藏的生命周期窗口：
+
+- **结算顺序约束**：上游任务自身的完整终态（promise 结算、registry
+  finalize、失败统计记账、terminal hook）必须先于 dependent 结算。因此
+  `mark_task_graph_*` 通过 `ParkedDrainBag` 只收集不执行，由各调用方在
+  自身收尾之后 `drain_parked_resolutions`；失败统计
+  （`record_task_exception`）先于级联写入——否则观测者按 dependent
+  future 触发的失败面板读取会命中不可见窗口（满载 8/20 复现，修复后
+  0/40）。
+- **facade 析构窗口（先于 PR-1 潜藏，PR-1 时序使其暴露）**：
+  `stop(false)` 把池交给 detached 终结线程并立即返回，manager 撤下句柄；
+  此后 `shutdown(true)` 因 `has_default_async_executor()==false` 完全跳过
+  等待，孤池 worker 仍会运行 wrapper 收尾并触达 facade/manager 成员
+  （recent_failures_、monitor、registry）。任何"拿到 in-flight future →
+  立即析构 facade"的用法都会命中（TSAN 实证 heap-use-after-free）。
+  **修复**：retired 保活 + 终局排空链——executor 将退休池存入
+  `retired_pools_`，manager 将停机后的执行器存入 `retired_async_executors_`；
+  任何 `shutdown(true)`（含 `~Executor` → `~ExecutorManager`）先对退休池
+  逐个 `shutdown(true)`，经 ThreadPool 的 shutdown_cv_ 等 detached 终结
+  线程 join 完全部 worker 后才允许析构 facade/manager 状态。`stop(false)`
+  立即返回的契约不变；等待只发生在显式 `shutdown(true)`/析构路径。
+  单例模式 facade 先于 manager 析构的组合仍属既有文档约束
+  （避免在静态析构中使用 Executor），不在本链路覆盖范围。
+  非阻塞遗留观察（2026-09-22 独立验证记录）：① `drain_retired_pools` 若被
+  退休池自己的 worker 调用，`ThreadPool::shutdown` 的 worker-origin 分支
+  只置位不等待，该次排空依赖 detached 终结线程或外部 `stop(true)` 兜底
+  （facade 路径下 detached 线程恒存在，窗口闭合；仅嵌入方直操 manager 的
+  极端时序可能触及）；② 仅 `shutdown(false)` 且从不 `shutdown(true)` 时，
+  退休执行器 shell 在 manager 内驻留（facade 下每实例至多一次退休、shell
+  已清空，实践不可累积；直操 manager 反复 create/stop(false) 的嵌入方需
+  后续加固，如 stop(false) 时顺手清理已 `shutdown_complete_` 的条目）。
 
 ## 6. 语义决策记录
 
@@ -251,10 +286,18 @@ API.md / MIGRATION.md / 网站同步点：生命周期观测一节补"Dependency
 ## 9. 实施切分
 
 1. **PR-1**：parked 提交路径 + 依赖终态级联入队（含 §8 功能面 1/2/3）；
-2. **PR-2**：取消/超时/shutdown 三条 parked 结算路径 + retention 交互
-   （§8 功能面 4–9）；
+   实际交付追加：§5.7 生命周期两项（ParkedDrainBag 结算顺序约束 +
+   retired 保活/终局排空链，后者修复的是先于本计划潜藏的
+   facade-vs-孤池-worker UAF）与失败统计先于级联的顺序修正。
+2. **PR-2**：取消/超时/shutdown 三条 parked 结算路径的完整语义
+   （D1 计时起点、parked 超时武装）+ retention 交互（§8 功能面 4–9）；
+   顺带评估 serial dispatch 路径的 drain bag 化与退休 shell 的
+   stop(false)-only 清理加固。
 3. **PR-3**：`task_graph_cv_` 退役、监控 Queued 补记、基准与 PA-6 验收数据、
    API/MIGRATION/网站同步。
 
 每个 PR 独立可回滚；任何路径发现与"恰好一次结算"或"计数先于 future"
-冲突，先停下评审，不以性能名义放宽正确性约束。
+冲突，先停下评审，不以性能名义放宽正确性约束。测试全程由
+Independent-Verification-Agent 独立编写与执行（PR-1 三轮验证：
+功能 11 用例、600× 全量 + 1000× 定向压测、TSAN/ASAN 零告警、
+满载回归 0/40）。

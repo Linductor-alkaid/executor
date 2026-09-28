@@ -804,8 +804,12 @@ ShutdownResult ExecutorManager::shutdown(bool wait_for_tasks) {
             shutdown_requested_from_worker =
                 executor_to_stop->is_current_worker_thread();
             if (!shutdown_requested_from_worker) {
-                // 管理器侧引用在此释放；本地快照保活执行器到排空结束，
-                // 其析构（含最后的 join）发生在锁外。
+                // 管理器侧引用撤下但不可直接丢弃：池可能已交由 detached
+                // 终结线程排空（stop(false)），worker 闭包捕获裸 facade
+                // 指针。退休执行器保存在 retired_async_executors_，由
+                // wait_for_tasks 路径与本管理器析构负责等到 worker 全部
+                // join 后再释放。
+                retired_async_executors_.push_back(executor_to_stop);
                 default_async_executor_.reset();
             }
             // worker 发起的 shutdown 保留成员，由外部调用者最终化。
@@ -824,6 +828,31 @@ ShutdownResult ExecutorManager::shutdown(bool wait_for_tasks) {
             throw;
         }
         finish_default_async_shutdown_drain();
+    }
+
+    // 退休执行器终局排空：仅 wait_for_tasks 路径执行（保持 stop(false)
+    // 立即返回的契约）。此前的 shutdown(false) 可能把执行器送进
+    // retired_async_executors_；本次 shutdown(true)（含 ~Executor 路径）
+    // 必须等到这些池的 detached 终结线程 join 完全部 worker，才能允许
+    // 调用方继续析构 facade/manager 状态——worker 闭包捕获裸 facade
+    // 指针，收尾时还会触达 failure 面板 / monitor / registry。
+    if (wait_for_tasks) {
+        std::vector<std::shared_ptr<IAsyncExecutor>> retired;
+        {
+            std::unique_lock<std::mutex> lock(default_async_mutex_);
+            retired.swap(retired_async_executors_);
+        }
+        for (auto& retired_executor : retired) {
+            if (!retired_executor) {
+                continue;
+            }
+            try {
+                retired_executor->stop(true);
+            } catch (...) {
+                // 终局排空不外泄异常；池无法完全排空时最多提前退役，
+                // 不能阻断 shutdown/析构。
+            }
+        }
     }
     return shutdown_requested_from_worker
                ? ShutdownResult::RequestedFromWorker

@@ -162,10 +162,20 @@ protected:
         std::vector<std::function<void(std::exception_ptr)>> on_timeout_handlers) override;
 
 private:
+    // 对 stop(false) 退休的池做终局排空：逐个 shutdown(true)，经 ThreadPool
+    // 的 shutdown_cv_ 等待 detached 终结线程 join 完全部 worker 后返回。
+    void drain_retired_pools();
+
     std::string name_;              // 执行器名称
     ThreadPoolConfig config_;       // 线程池配置
     mutable std::mutex thread_pool_mutex_;
     std::shared_ptr<ThreadPool> thread_pool_;  // 线程池实例
+    // stop(false) 退休的池。stop(false) 把池交给 detached 终结线程后立即
+    // 返回（契约），但 wrapper 闭包捕获裸 facade 指针且仍可能在 worker 上
+    // 运行：后续 stop(true) 与管理器终局必须经 retired_pools_ 等到全部
+    // worker join，才能安全析构 facade/manager 状态（UAF 闭环，
+    // 见 docs/design/dependency_driven_scheduling.md 生命周期一节）。
+    std::vector<std::shared_ptr<ThreadPool>> retired_pools_;
 };
 
 } // namespace executor
