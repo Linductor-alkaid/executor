@@ -289,9 +289,15 @@ TEST(TaskCancellationTest, CancelOfTokenlessRunningTaskOnlyRecordsRequest) {
     ASSERT_TRUE(executor.initialize(one_thread_config()));
 
     std::atomic<bool> started{false};
-    auto submission = executor.submit_with_handle([&started]() noexcept {
+    // 保持门替代固定 sleep：断言 RequestedRunning 期间任务不得自然完成
+    // （固定 100ms 在高负载下可被主线程调度延迟耗尽，任务终态后取消得
+    // AlreadyCompleted）。主线程放行后任务才完成。
+    std::atomic<bool> release{false};
+    auto submission = executor.submit_with_handle([&started, &release]() noexcept {
         started.store(true, std::memory_order_release);
-        std::this_thread::sleep_for(100ms);
+        while (!release.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
         return 5;
     });
 
@@ -303,6 +309,7 @@ TEST(TaskCancellationTest, CancelOfTokenlessRunningTaskOnlyRecordsRequest) {
     EXPECT_EQ(response.result, TaskCancellationResult::RequestedRunning);
 
     // 不接收 token 的任务只能记录"已请求"，任务本身照常完成。
+    release.store(true, std::memory_order_release);
     ASSERT_EQ(submission.future.wait_for(10s), std::future_status::ready);
     EXPECT_EQ(submission.future.get(), 5);
     executor.shutdown();
@@ -355,13 +362,22 @@ TEST(TaskCancellationTest, RepeatRunningCancelReturnsAlreadyRequested) {
     ASSERT_TRUE(executor.initialize(small_config()));
 
     std::atomic<bool> started{false};
-    auto submission = executor.submit_cancellable([&started](StopToken token) noexcept {
-        started.store(true, std::memory_order_release);
-        while (!token.stop_requested()) {
-            std::this_thread::yield();
-        }
-        return 1;
-    });
+    // 第二道保持门：任务观察到 stop_requested 后不得立即返回，否则任务
+    // 收尾（phase 终态 + registry finalize）与主线程的第二次 cancel 赛跑
+    // （CI 高负载下主线程被抢占时第二次请求得 AlreadyCompleted）。
+    // 门保证两次断言期间任务仍处 Running。
+    std::atomic<bool> release{false};
+    auto submission = executor.submit_cancellable(
+        [&started, &release](StopToken token) noexcept {
+            started.store(true, std::memory_order_release);
+            while (!token.stop_requested()) {
+                std::this_thread::yield();
+            }
+            while (!release.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            return 1;
+        });
 
     while (!started.load(std::memory_order_acquire)) {
         std::this_thread::yield();
@@ -373,6 +389,8 @@ TEST(TaskCancellationTest, RepeatRunningCancelReturnsAlreadyRequested) {
               TaskCancellationResult::AlreadyRequested);
     EXPECT_EQ(executor.get_cancellation_status().request_count, 1u);
 
+    // 断言全部完成后才放行任务：future 以业务结果就绪。
+    release.store(true, std::memory_order_release);
     ASSERT_EQ(submission.future.wait_for(10s), std::future_status::ready);
     executor.shutdown();
 }
@@ -675,7 +693,14 @@ TEST(TaskCancellationTest, PlainSubmitBehaviorUnchanged) {
 
     auto throwing = executor.submit([]() { throw std::runtime_error("boom"); });
     EXPECT_THROW(throwing.get(), std::runtime_error);
-    EXPECT_GE(executor.get_failure_status().task_exception_count, 1u);
+    // future 就绪早于 worker 线程到达 record_task_exception 是合法时序
+    // （见 wait_for_counter 注释）：计数断言必须轮询等待而非立即读取。
+    EXPECT_TRUE(wait_for_counter(
+        std::chrono::seconds(2),
+        [&executor]() {
+            return executor.get_failure_status().task_exception_count;
+        }))
+        << "throwing submit must be counted as a task failure";
 
     executor.shutdown();
 }
