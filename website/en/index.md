@@ -50,7 +50,7 @@ Executor is not a coroutine runtime, a distributed messaging system, or a hard r
 | Platform | Linux, Windows; Android CPU-only via NDK |
 | Language | C++20 |
 | Build system | CMake 3.16+ |
-| Version | `v0.5.0` |
+| Version | `v0.5.2` |
 | License | [MIT](https://github.com/Linductor-alkaid/executor/blob/master/LICENSE) |
 
-<div class="version-note">This guide corresponds to `v0.5.0`; later `master` capabilities become stable promises only after their release tag.</div>
+<div class="version-note">This guide corresponds to `v0.5.2`; later `master` capabilities become stable promises only after their release tag.</div>
