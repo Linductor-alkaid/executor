@@ -4,13 +4,12 @@
 
 ---
 
-## 从 0.5.0 升级到 0.5.x：依赖驱动调度（随下一版本发布）
+## 从 0.5.0 升级到 0.5.2：依赖驱动调度
 
 `submit_after()` / `submit_after_with_handle()` / `when_all()` 的公开签名与
 返回类型不变，但依赖等待的执行模型从"dependent 任务立即入队、wrapper 在
 worker 上等待条件变量"演进为 dependency-driven scheduling（设计见
 `docs/design/dependency_driven_scheduling.md`）。需要关注的可观察行为变化：
-
 - **依赖等待不再占用 worker**：依赖未就绪的 dependent 驻留调度侧
   （生命周期 `DependencyBlocked`），依赖全部成功后按提交时的 priority
   入队（补记 `Queued`）。原"低线程数 + 宽依赖可饿死线程池"的窗口消除；

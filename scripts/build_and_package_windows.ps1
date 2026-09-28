@@ -2,7 +2,7 @@
 # 一键构建静态库、动态库并打包成发行版本
 
 param(
-    [string]$Version = "0.5.0",
+    [string]$Version = "0.5.2",
     [string]$BuildType = "Release",
     [string]$Generator = "",
     [string]$Architecture = "x64",

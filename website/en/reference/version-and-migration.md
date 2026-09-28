@@ -7,7 +7,7 @@ description: Entry points for the development snapshot, releases, and API migrat
 
 ## Current scope
 
-The latest release record is `v0.5.0`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
+The latest release record is `v0.5.2`. This site uses that stable version as its baseline while following later `master` development; capabilities without a stable tag are not version promises. This first English edition does not maintain historical versioned sites.
 
 | What to check | Source of truth |
 | --- | --- |
@@ -16,9 +16,9 @@ The latest release record is `v0.5.0`. This site uses that stable version as its
 | Build options, compilers, and backends | [BUILD.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/BUILD.md) |
 | Complete current signatures | [API.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/API.md) |
 
-## Development snapshot: dependency-driven scheduling
+## 0.5.2: dependency-driven scheduling
 
-On `master`, task-graph dependency waiting has moved to dependency-driven scheduling: `submit_after` dependents no longer enter the pool (and occupy workers) while prerequisites are unresolved. See the "upgrading from 0.5.0 to 0.5.x" section of [MIGRATION.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/MIGRATION.md) for the parked timeout and shutdown settlement semantics. Public API signatures are unchanged.
+v0.5.2 moves task-graph dependency waiting to dependency-driven scheduling: `submit_after` dependents no longer enter the pool (and occupy workers) while prerequisites are unresolved. See the "upgrading from 0.5.0 to 0.5.2" section of [MIGRATION.md](https://github.com/Linductor-alkaid/executor/blob/master/docs/MIGRATION.md) for the parked timeout and shutdown settlement semantics. Public API signatures are unchanged (one new diagnostic, `closure_graveyard_size()`).
 
 ## Moving from `bool` to `_ex`
 

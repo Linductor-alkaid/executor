@@ -406,6 +406,14 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
             LABELS "benchmark"
             TIMEOUT 120
         )
+    # 提交热路径基准（默认 2 万任务 × 6 档生产者 + 延迟采样，RUN_SERIAL）：
+    # 无优化构建下可超 30s 默认档，与其余基准一致放宽到 120s；并归入
+    # benchmark 标签，与 CI/本地 -LE benchmark 口径一致。
+    elseif(TEST_NAME STREQUAL "benchmark_thread_pool_hotpath")
+        set_tests_properties(${TEST_NAME} PROPERTIES
+            LABELS "benchmark;baseline"
+            TIMEOUT 120
+        )
     # 优化基线基准测试（测量优化路线图中各优化目标的当前性能）
     elseif(TEST_NAME STREQUAL "benchmark_optimization_baseline")
         set_tests_properties(${TEST_NAME} PROPERTIES
