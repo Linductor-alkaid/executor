@@ -481,6 +481,17 @@ if(TARGET test_dependency_driven_scheduling)
     )
 endif()
 
+# dependency-driven scheduling（PR-2）：parked 超时 / shutdown 终局结算 /
+# retention 交互 / serial dispatch 组合。同样为门控握手 + 有限等待模式，
+# 且含 200ms 量级超时预算的观察窗口，独占调度避免负载噪声误报。
+if(TARGET test_dependency_driven_pr2)
+    set_tests_properties(test_dependency_driven_pr2 PROPERTIES
+        LABELS "unit;concurrency"
+        TIMEOUT 300
+        RUN_SERIAL TRUE
+    )
+endif()
+
 add_executable(test_dispatch_task_fallback test_dispatch_task_fallback.cpp)
 target_link_libraries(test_dispatch_task_fallback PRIVATE executor GTest::GTest GTest::Main)
 target_include_directories(test_dispatch_task_fallback PRIVATE

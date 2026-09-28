@@ -165,6 +165,11 @@ executor snapshot。变化仅在**入队决策**：
   （safety_net_design）一致。
 - ready 出队时 executor snapshot 已失效：`try_submit_*` 返回 false → 既有
   `on_rejected`，节点 Failed，不新增路径。
+- **实现（PR-2）**：`fail_all_parked_tasks_for_shutdown()` 在 shutdown 三条
+  路径的 manager shutdown 返回之后调用，两阶段锁——先收集仍 parked 的 id，
+  再逐节点（锁内复查-清载荷-落终态-级联-临时化，锁外 settle）；
+  `TicketGuard` 对被池丢弃的 serial 派发同步补 mark（ExecutorStopping），
+  使其 parked 下游即时级联而不必等 sweep。
 
 ### 5.6 `task_graph_cv_` 退役
 
@@ -211,16 +216,32 @@ drain），由此产生一条新的时序约束与一个此前潜藏的生命周
 
 ## 6. 语义决策记录
 
-### D1 queued soft timeout 的计时起点 —— **维持现状：提交即起算**
+### D1 queued soft timeout 的计时起点 —— **维持现状：提交即起算**（PR-2 实现）
 
-超时定时器在提交时武装，parked 期间同样可触发
-（`try_timeout_before_start` 的 phase CAS 在 parked 下同样成立）。
-触发时除既有结算外，需在锁内清空 `node.parked` 并按失败级联下游。
+超时预算自**提交时刻**起算，parked 期间同样可触发。实现为 facade 侧一次性
+定时器（`ensure_timers().schedule_once`，时长取 `ExecutorConfig::
+task_timeout_ms`，经 `initialize_ex` 记录于 `default_task_timeout_ms_`）：
+到点以 `TimedOutException` 调用 on_timeout 拷贝，经 `try_timeout_before_start`
+phase CAS 仲裁——与池自身的队列计时器（出队后才武装）构成双计时器，
+**恰好一个赢家**，后到者在 CAS 落败处直接返回。定时器不随任务提前终态
+取消：落败方空转返回，代价是至多一个到期记录（寿命 ≤ 超时时长）。
+parked 期超时获胜即 mark_task_graph_failed：清 parked、按失败级联下游。
 
-*备选*：改为"ready 入队时起算"被否决——改变现行可观测语义
+*备选*："ready 入队时起算"被否决——改变现行可观测语义
 （"任务在预算内未开始执行"包含依赖等待期），且依赖挂起将完全无界。
-维持现状零迁移成本；若下游反馈需要区分"图等待"与"队列积压"，可作为
-后续可选项再立项。
+`task_timeout_ms == 0`（默认）不武装定时器，parked 永不超时。
+
+**实现注记（PR-2 独立验证产出）**：① 武装前必须 `start_timer_thread()`
+——`ensure_timers()` 只创建调度器对象，全新 facade 上若从未提交过
+delayed/periodic，定时器会静默失活；线程创建失败/调度器已停时降级为
+无超时覆盖（任务仍由依赖驱动，D2 sweep 兜底）。② 输家/赢家 on_timeout
+的 promise/state 捕获转入 `closure_graveyard_`（facade 成员，图锁保护）
+延迟析构——定时器/池线程的闭包析构时点与消费者使用异常对象之间无
+happens-before 边（TSAN 实证 data race：`exception_ptr::_M_release`
+free vs `TaskCancelled::reason` read），墓地使析构时点归 facade 终局
+所有；规模以超时/竞争次数为界。③ `record_task_timeout` 先于自身
+future 结算（与级联顺序同一不变式）。④ 墓地只增不减，PR-3 在监控/
+基准中加规模观测，或 shutdown 后安全清空。
 
 ### D2 shutdown(false) 对 parked 的处理 —— **失败结算**
 
@@ -285,19 +306,22 @@ API.md / MIGRATION.md / 网站同步点：生命周期观测一节补"Dependency
 
 ## 9. 实施切分
 
-1. **PR-1**：parked 提交路径 + 依赖终态级联入队（含 §8 功能面 1/2/3）；
-   实际交付追加：§5.7 生命周期两项（ParkedDrainBag 结算顺序约束 +
-   retired 保活/终局排空链，后者修复的是先于本计划潜藏的
-   facade-vs-孤池-worker UAF）与失败统计先于级联的顺序修正。
-2. **PR-2**：取消/超时/shutdown 三条 parked 结算路径的完整语义
-   （D1 计时起点、parked 超时武装）+ retention 交互（§8 功能面 4–9）；
-   顺带评估 serial dispatch 路径的 drain bag 化与退休 shell 的
-   stop(false)-only 清理加固。
+1. **PR-1（已合入，#197）**：parked 提交路径 + 依赖终态级联入队；
+   追加交付 §5.7 生命周期两项（ParkedDrainBag 结算顺序约束 +
+   retired 保活/终局排空链）与失败统计先于级联的顺序修正。
+2. **PR-2（本轮）**：D1 parked 超时（facade 定时器 + 双计时器 CAS 单赢家）、
+   D2 shutdown 终局结算（`fail_all_parked_tasks_for_shutdown` +
+   TicketGuard 丢发补 mark）、serial dispatch 路径 drain bag 化
+   （on_timeout/finish_success/catch 分支/publish 拒绝 + 统计先于级联）；
+   retention 交互与 admission 四路径恰好一次的验收测试。
+   评估结论：退休 shell 的 stop(false)-only 驻留有界（facade 下每实例至多
+   一次退休、shell 已被 detached 线程清空、任何 shutdown(true)/析构兜底），
+   不加查询接口，保持文档化。
 3. **PR-3**：`task_graph_cv_` 退役、监控 Queued 补记、基准与 PA-6 验收数据、
-   API/MIGRATION/网站同步。
+   API/MIGRATION/网站同步；顺带：closure_graveyard_ 规模观测/安全清空、
+   serial on_timeout 之外的输家闭包析构时点审计（submit/submit_priority
+   等池侧 on_timeout 同类模式）。
 
 每个 PR 独立可回滚；任何路径发现与"恰好一次结算"或"计数先于 future"
 冲突，先停下评审，不以性能名义放宽正确性约束。测试全程由
-Independent-Verification-Agent 独立编写与执行（PR-1 三轮验证：
-功能 11 用例、600× 全量 + 1000× 定向压测、TSAN/ASAN 零告警、
-满载回归 0/40）。
+Independent-Verification-Agent 独立编写与执行。

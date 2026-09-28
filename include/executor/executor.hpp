@@ -1028,6 +1028,11 @@ private:
     void drain_parked_resolutions(
         std::vector<ParkedReady>& ready_parked,
         std::vector<std::function<void()>>& deferred_failures);
+
+    // shutdown 终局：对所有仍 parked（依赖未满足、永不可能就绪）的节点
+    // 统一失败结算（D2）。释放 admission/registry 槽位并级联下游，使
+    // in-flight 计数收敛、future 不悬空。
+    void fail_all_parked_tasks_for_shutdown();
     void finalize_task_graph_node_locked(const std::string& task_id);
     void trim_task_graph_retention_locked();
     std::exception_ptr make_dependency_exception(const std::string& message) const;
@@ -1061,6 +1066,18 @@ private:
     // 析构兜底覆盖池丢弃）。
     std::atomic<size_t> max_in_flight_tasks_{0};
     std::atomic<int64_t> in_flight_submissions_{0};
+    // 默认异步执行器的 queued soft timeout（毫秒，0 = 不启用）。parked
+    // 依赖图任务的超时定时器以此为时长、自提交时刻起算（D1，见
+    // docs/design/dependency_driven_scheduling.md）：池自身的队列计时器
+    // 在出队后才武装，parked 期间的预算由 facade 定时器覆盖。取值与
+    // initialize_ex 的 ExecutorConfig.task_timeout_ms 一致——默认池正是
+    // 由同一配置创建。
+    std::atomic<int64_t> default_task_timeout_ms_{0};
+    // 超时闭包墓地：输家/赢家 on_timeout 闭包的 promise/state 捕获转入
+    // 此处延迟析构，避免定时器/池线程在与消费者使用异常对象无
+    // happens-before 的时点上析构共享状态（TSAN 实证 data race）。
+    // task_graph_mutex_ 保护；规模以超时/竞争次数为界，facade 析构释放。
+    std::vector<std::shared_ptr<void>> closure_graveyard_;
 
     /**
      * @brief admission 容量的恰好一次释放器（内部管道类型）。
@@ -1255,20 +1272,45 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
     }
 
     // queued soft timeout：与取消经同一 phase CAS 仲裁，只赢一次。
-    auto on_timeout = [this, handle, state, executor_name, settle_exception,
+    // 捕获 promise/promise_ready 而非 settle_exception 闭包，便于输家/
+    // 赢家路径把捕获转入 closure_graveyard_（原因同 tracked 路径：
+    // 定时器线程析构结算状态与消费者使用异常对象无 happens-before）。
+    auto on_timeout = [this, handle, state, executor_name, promise, promise_ready,
                        complete_terminal, release_admission](std::exception_ptr exception) mutable {
         if (!state->try_timeout_before_start()) {
+            {
+                std::lock_guard<std::mutex> lock(task_graph_mutex_);
+                closure_graveyard_.push_back(std::move(promise));
+                closure_graveyard_.push_back(std::move(state));
+            }
+            promise = nullptr;
+            state = nullptr;
             return;  // 取消已赢或已开始执行
         }
         release_admission();  // 计数先于 future
-        settle_exception(exception);
         record_task_timeout(
             executor_name, handle.id(),
             "Serial dispatch timed out before execution", exception);
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+        ParkedDrainBag drain_bag;
         mark_task_graph_failed(
-            handle, exception, "Serial dispatch timed out before execution");
+            handle, exception, "Serial dispatch timed out before execution",
+            &drain_bag);
         cancellation_registry_->finalize(handle.id());
         complete_terminal();
+        drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
+        {
+            std::lock_guard<std::mutex> lock(task_graph_mutex_);
+            closure_graveyard_.push_back(std::move(promise));
+            closure_graveyard_.push_back(std::move(state));
+        }
+        promise = nullptr;
+        state = nullptr;
     };
 
     std::shared_ptr<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))> bound;
@@ -1281,10 +1323,12 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
     }
 
     // 串行线程上的终态化：admission 与计数、registry finalize 先于业务
-    // future 就绪，延续 tracked 路径的观测不变式。
+    // future 就绪，延续 tracked 路径的观测不变式。级联收集经出参交还
+    // serial_callback 在业务 future 结算后 drain（dependent 晚于上游
+    // 完全终态就绪）。
     auto finish_success = [this, handle, state, complete_terminal,
-                           release_admission]() mutable {
-        mark_task_graph_succeeded(handle);
+                           release_admission](ParkedDrainBag& drain_bag) mutable {
+        mark_task_graph_succeeded(handle, &drain_bag);
         if (state->cancel_requested()) {
             cancellation_registry_->on_completed_after_request();
         }
@@ -1297,10 +1341,11 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
     auto serial_callback = [this, handle, state, executor_name, bound, promise,
                             promise_ready, complete_terminal, release_admission,
                             finish_success]() mutable {
+        ParkedDrainBag drain_bag;
         try {
             if constexpr (std::is_void_v<return_type>) {
                 std::invoke(*bound);
-                finish_success();
+                finish_success(drain_bag);
                 bool expected = false;
                 if (promise_ready->compare_exchange_strong(
                         expected, true, std::memory_order_acq_rel,
@@ -1309,7 +1354,7 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
                 }
             } else {
                 auto result = std::invoke(*bound);
-                finish_success();
+                finish_success(drain_bag);
                 bool expected = false;
                 if (promise_ready->compare_exchange_strong(
                         expected, true, std::memory_order_acq_rel,
@@ -1317,6 +1362,7 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
                     promise->set_value(std::move(result));
                 }
             }
+            drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
         } catch (...) {
             auto exception = std::current_exception();
             bool cooperative_cancel = false;
@@ -1338,7 +1384,8 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
                     promise->set_exception(exception);
                 }
                 mark_task_graph_failed(
-                    handle, exception, "Task cancelled during execution");
+                    handle, exception, "Task cancelled during execution",
+                    &drain_bag);
                 manager_->record_in_flight_task_state(
                     handle.id(), TaskLifecycleState::Cancelled);
             } else {
@@ -1350,17 +1397,19 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
                         std::memory_order_acquire)) {
                     promise->set_exception(exception);
                 }
-                mark_task_graph_failed(
-                    handle, exception, "Serial context task failed");
-                if (state->cancel_requested()) {
-                    cancellation_registry_->on_completed_after_request();
-                }
+                // 失败统计先于级联写入（与 tracked 路径同一不变式）。
                 record_task_exception(
                     executor_name, handle.id(),
                     "Serial context task threw an exception", exception);
+                mark_task_graph_failed(
+                    handle, exception, "Serial context task failed", &drain_bag);
+                if (state->cancel_requested()) {
+                    cancellation_registry_->on_completed_after_request();
+                }
             }
             cancellation_registry_->finalize(handle.id());
             complete_terminal();
+            drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
         }
     };
 
@@ -1373,6 +1422,8 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
         std::shared_ptr<TaskCancellationState> state;
         std::shared_ptr<std::promise<return_type>> promise;
         std::shared_ptr<std::atomic_bool> promise_ready;
+        Executor* owner = nullptr;
+        TaskHandle handle;
 
         ~TicketGuard() {
             if (published->load(std::memory_order_acquire)) {
@@ -1380,15 +1431,23 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
             }
             context->abandon(ticket);
             if (state->terminal()) {
-                // 取消/超时/拒绝的结算方仍在途，由其完成 future。
+                // 取消/超时/拒绝的结算方仍在途，由其完成 future 与图终态。
                 return;
             }
+            auto exception = std::make_exception_ptr(ExecutorStopping(
+                "Serial dispatch dropped by executor shutdown"));
             bool expected = false;
             if (promise_ready->compare_exchange_strong(
                     expected, true, std::memory_order_acq_rel,
                     std::memory_order_acquire)) {
-                promise->set_exception(std::make_exception_ptr(ExecutorStopping(
-                    "Serial dispatch dropped by executor shutdown")));
+                promise->set_exception(exception);
+            }
+            // 被丢弃的派发按失败落图终态：parked 下游即时级联结算，
+            // 不必等到 shutdown sweep（自身 future 已先结算，顺序不变式保持）。
+            if (owner) {
+                owner->mark_task_graph_failed(
+                    handle, exception,
+                    "Serial dispatch dropped by executor shutdown");
             }
         }
     };
@@ -1399,6 +1458,8 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
     guard->state = state;
     guard->promise = promise;
     guard->promise_ready = promise_ready;
+    guard->owner = this;
+    guard->handle = handle;
 
     auto publish_task = [this, handle, state, executor_name, &context, ticket = *ticket,
                          promise, promise_ready, published_holder, complete_terminal,
@@ -1431,13 +1492,16 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
                 std::memory_order_acquire)) {
             promise->set_exception(exception);
         }
-        mark_task_graph_failed(
-            handle, exception, "Serial execution context stopped before dispatch");
-        cancellation_registry_->finalize(handle.id());
-        complete_terminal();
         record_task_exception(
             executor_name, handle.id(),
             "Serial dispatch rejected by stopped context", exception);
+        ParkedDrainBag drain_bag;
+        mark_task_graph_failed(
+            handle, exception, "Serial execution context stopped before dispatch",
+            &drain_bag);
+        cancellation_registry_->finalize(handle.id());
+        complete_terminal();
+        drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
     };
 
     try {
@@ -1831,22 +1895,35 @@ auto Executor::submit_tracked_with_hook(
     };
 
     // queued soft timeout：与取消经同一 phase CAS 仲裁，只赢一次。
+    // 输家/赢家路径结束时 promise/state 转入 closure_graveyard_ 延迟析构：
+    // 这两个捕获的析构链会释放 future 共享状态与异常对象，若发生在
+    // 定时器/池线程上，与消费者使用异常对象之间没有任何 happens-before
+    // 边（TSAN 实证 data race）；转入墓地后析构时点归 facade 终局所有。
     auto on_timeout = [this, handle, state, executor_name, promise, promise_ready,
                        complete_terminal,
                        release_admission](std::exception_ptr exception) mutable {
         if (!state->try_timeout_before_start()) {
+            // 输家即释：结算已由赢家完成，捕获转入墓地，不在本线程析构。
+            {
+                std::lock_guard<std::mutex> lock(task_graph_mutex_);
+                closure_graveyard_.push_back(std::move(promise));
+                closure_graveyard_.push_back(std::move(state));
+            }
+            promise = nullptr;
+            state = nullptr;
             return;  // 取消已赢或已开始执行
         }
         release_admission();  // 计数先于 future
+        // 失败统计先于自身 future 结算（与 PR-1 级联顺序同一不变式）。
+        record_task_timeout(
+            executor_name, handle.id(),
+            "Tracked async task timed out before execution", exception);
         bool expected = false;
         if (promise_ready->compare_exchange_strong(
                 expected, true, std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
             promise->set_exception(exception);
         }
-        record_task_timeout(
-            executor_name, handle.id(),
-            "Tracked async task timed out before execution", exception);
         ParkedDrainBag drain_bag;
         mark_task_graph_failed(
             handle, exception, "Tracked async task timed out before execution",
@@ -1854,6 +1931,13 @@ auto Executor::submit_tracked_with_hook(
         cancellation_registry_->finalize(handle.id());
         complete_terminal();
         drain_parked_resolutions(drain_bag.ready, drain_bag.failures);
+        {
+            std::lock_guard<std::mutex> lock(task_graph_mutex_);
+            closure_graveyard_.push_back(std::move(promise));
+            closure_graveyard_.push_back(std::move(state));
+        }
+        promise = nullptr;
+        state = nullptr;
     };
 
     // 不运行 callable 的 parked 结算路径（依赖失败 / 出队被拒）：phase CAS
@@ -2058,6 +2142,8 @@ auto Executor::submit_tracked_with_hook(
     // （parked 出队后谓词立即通过），PR-3 退役。
     if (dependencies && !dependencies->empty()) {
         bool submit_now = false;
+        bool parked_stored = false;
+        std::function<void(std::exception_ptr)> timer_on_timeout;
         std::exception_ptr dependency_exception;
         {
             std::lock_guard<std::mutex> lock(task_graph_mutex_);
@@ -2078,12 +2164,14 @@ auto Executor::submit_tracked_with_hook(
                     if (node_it != task_graph_nodes_.end()) {
                         node_it->second.unmet_count = unmet;
                         auto parked = std::make_shared<ParkedSubmission>();
+                        timer_on_timeout = on_timeout;  // 定时器持有一份拷贝
                         parked->wrapper = std::move(task_wrapper);
                         parked->on_timeout = std::move(on_timeout);
                         parked->settle_without_run = settle_without_run;
                         parked->priority = priority;
                         parked->executor = executor_snapshot;
                         node_it->second.parked = std::move(parked);
+                        parked_stored = true;
                     } else {
                         // 节点缺失只可能是终态被 trim 后复用 id 的非法场景；
                         // 防御性按提交失败处理，不静默吞掉任务。
@@ -2107,6 +2195,47 @@ auto Executor::submit_tracked_with_hook(
             return submission;
         }
         if (!submit_now) {
+            // D1：queued soft timeout 自提交起算，parked 期间同样可触发。
+            // 池自身队列计时器在出队后才武装，且与 facade 定时器经同一
+            // phase CAS 仲裁——双计时器恰好一个赢家，后到者直接返回。
+            // 定时器不随任务提前终态取消：获胜者之外的 on_timeout 在 CAS
+            // 落败处返回，代价是至多一个到期空转记录（寿命 ≤ 超时时长）。
+            const auto timeout_ms =
+                default_task_timeout_ms_.load(std::memory_order_acquire);
+            if (parked_stored && timeout_ms > 0) {
+                // ensure_timers() 只创建调度器对象；调度线程需显式启动
+                // （全新 facade 此前可能从未提交过 delayed/periodic）。
+                bool timer_running = false;
+                try {
+                    start_timer_thread();
+                    timer_running = true;
+                } catch (...) {
+                    // 线程创建失败：任务本身仍由依赖驱动，降级为无超时
+                    // 覆盖继续 parked，不以超时能力缺失否决提交。
+                }
+                if (timer_running) {
+                    auto timeout_exception = std::make_exception_ptr(
+                        TimedOutException("Task timed out after " +
+                                          std::to_string(timeout_ms) + "ms"));
+                    const auto scheduled_id = ensure_timers().schedule_once(
+                        timeout_ms,
+                        generate_task_id(),
+                        nullptr,
+                        {},
+                    [timer_on_timeout = std::move(timer_on_timeout),
+                     exception = std::move(timeout_exception)]() mutable {
+                        timer_on_timeout(exception);
+                        // 调用后即释本拷贝：闭包链不得在定时器线程的任意
+                        // 析构时点锚定结算状态（ graveyard 之外仍可能持有
+                        // complete_terminal/releaser 等幂等成员，就地清空）。
+                        timer_on_timeout = nullptr;
+                        exception = nullptr;
+                    },
+                        nullptr);
+                    // scheduled_id 为空表示调度器已停止（shutdown 竞态）：
+                    // 同样降级，D2 sweep 兜底结算。
+                }
+            }
             return submission;  // parked：依赖终态时由调度侧级联出队
         }
     }
