@@ -448,6 +448,9 @@ auto submit_cancellable_after(const std::vector<TaskHandle>& dependencies,
 TaskCancellationResponse request_task_cancel(const TaskHandle& handle) noexcept;
 CancellationStatus get_cancellation_status() const;
 void set_cancellation_registry_capacity(size_t capacity);
+
+// 诊断：超时闭包墓地当前规模（0.5.2 新增）。
+size_t closure_graveyard_size() const;
 ```
 
 语义：
@@ -1220,6 +1223,7 @@ std::map<std::string, TaskStatistics> get_all_task_statistics() const;
 - `format_executor_snapshot_with_metrics`：位于 `executor::monitor`，用于性能基线；返回文本、`formatting_duration`（纳秒）和 `formatting_allocation_count`。分配次数只统计 formatter 的流缓冲与最终输出字符串，不统计 snapshot 采集或调用方 logger 的分配；常规业务日志仍使用 `get_snapshot_text()`。
 - `get_task_statistics` / `get_all_task_statistics`：按 `task_type` 或全部的成功/失败/超时次数及执行时间统计。
 - `get_cancellation_status`：取消生命周期独立计数（`request_count`、`queued_cancelled_count`、`running_request_count`、`completed_after_request_count`），不并入 `ExecutorFailureStatus`。
+- `closure_graveyard_size`：parked 超时闭包转入的延迟析构墓地当前规模（诊断观测）。规模以"parked 超时触发 + 竞争输家"次数为界，`shutdown()` 终局清空、facade 析构释放；长期高频超时的进程可借此观测常驻内存累积。
 - `get_timer_status_summary`：定时任务计数（`pending_count`、`executed_count`、`cancelled_count`），同样独立于 failure 体系。
 
 ### 6.1 完整生命周期快照

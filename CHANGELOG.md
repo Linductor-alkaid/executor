@@ -4,7 +4,14 @@
 
 ---
 
-## [Unreleased]
+## [0.5.2] - 2026-09-28
+
+0.5.2 以 dependency-driven scheduling 为主线：`submit_after` 的依赖等待从
+"任务立即入队、wrapper 在 worker 上等待条件变量"演进为调度侧唤醒——依赖
+未就绪的任务驻留任务图节点、不占用 worker，依赖终态定向级联出队；补全
+parked 超时（提交即起算）与 shutdown 终局结算语义，退役 `task_graph_cv_`
+及其惊群唤醒，新增监控 Queued 补记与诊断接口。既有公开提交 API 兼容；
+闭包墓地诊断接口 `closure_graveyard_size()` 为唯一新增公开方法。
 
 ### 新增
 

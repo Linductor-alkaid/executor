@@ -136,6 +136,6 @@ More runnable code is available in [examples](examples/) and [tutorial](examples
 
 ## Version and License
 
-Current version: **v0.5.0**
+Current version: **v0.5.2**
 
 Executor is available under the [MIT License](LICENSE).

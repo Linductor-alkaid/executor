@@ -2,7 +2,7 @@
 # 将构建好的库打包成发行版本
 
 param(
-    [string]$Version = "0.5.0",
+    [string]$Version = "0.5.2",
     [string]$BuildDir = "build_windows",
     [string]$OutputDir = "dist",
     # 打包名中的架构标识（x64/arm64）；留空时回退到 $env:PROCESSOR_ARCHITECTURE。
