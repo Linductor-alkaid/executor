@@ -209,6 +209,18 @@ Executor::~Executor() {
             owned_manager_.reset();
         } catch (...) {
         }
+    } else if (manager_ != nullptr && manager_->has_default_async_executor()) {
+        // 单例模式（CR-001）：函数级静态按构造逆序，本析构先于
+        // ExecutorManager 静态析构执行，manager_ 此刻仍存活。此前单例析构
+        // 不排空，默认池在途任务在静态析构窗口内触达已销毁的 facade 成员
+        // （failure_mutex_/图锁/timers_/cancellation_registry_）导致 UAF。
+        // has_default_async_executor() 只查询不懒建池：从未用默认池的进程
+        // 退出时不产生建池副作用，其余后端仍由 atexit 兜底关停。
+        try {
+            (void)shutdown(true);
+        } catch (...) {
+            // 析构不外泄异常。
+        }
     }
 }
 

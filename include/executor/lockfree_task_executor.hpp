@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <vector>
 
 namespace executor {
 
@@ -288,8 +289,18 @@ private:
     alignas(64) std::atomic<uint32_t> wake_seq_{0};
     // set_before_publish_hook 安装的用户回调与上下文；队列里装的是
     // 会先唤醒驻停 worker 的 trampoline（见 .cpp）。
-    BeforePublishHook user_before_publish_hook_{nullptr};
-    void* user_before_publish_context_{nullptr};
+    // CR-004：用户 hook 以不可变快照节点发布，trampoline（生产者线程）
+    // 一次原子加载后经本地副本调用。节点一经发布不可释放（无 epoch/hazard
+    // 回收机制，无法确认旧指针不再被生产者持有），按 (hook, context) 去重
+    // 常驻进程生命周期——诊断路径，节点 16 字节，数量等于不同配置数。
+    struct BeforePublishHookState {
+        BeforePublishHook hook;
+        void* context;
+    };
+    std::atomic<BeforePublishHookState*> user_before_publish_state_{nullptr};
+    // 配置路径专用（trampoline 不触碰）：持有快照节点所有权并按配置去重。
+    std::mutex user_before_publish_states_mutex_;
+    std::vector<std::unique_ptr<BeforePublishHookState>> user_before_publish_states_;
 };
 
 } // namespace executor

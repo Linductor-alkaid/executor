@@ -330,6 +330,10 @@ void ThreadPool::execute_task(const Task& task) {
     // reference it when computing execution_time_ns for the recovery
     // update_statistics() call below.
     auto start_time = std::chrono::steady_clock::now();
+    // CR-020: 任务体是否已开始执行。monitor 回调抛异常时（任务未开始），
+    // submit 包装层的 promise 永不会被结算 —— future.get() 永久挂起；
+    // catch 侧据此决定是否代为触发 on_timeout 结算。
+    bool task_started = false;
 
     try {
         auto* monitor = monitor_.load(std::memory_order_acquire);
@@ -356,6 +360,7 @@ void ThreadPool::execute_task(const Task& task) {
     bool success = false;
 
     if (!timed_out) {
+        task_started = true;
         try {
             // 执行任务
             if (task.function) {
@@ -408,6 +413,20 @@ void ThreadPool::execute_task(const Task& task) {
         // hangs forever (or up to 300s) waiting for total == completed.
         exception_handler_.handle_task_exception("ThreadPool::execute_task",
                                                  std::current_exception());
+        // CR-020: 异常发生在任务开始执行之前（record_task_start 抛出）时，
+        // 任务包装层的 promise 无人结算，future.get() 永久挂起。镜像软超时
+        // 分支触发 on_timeout，把异常交付给包装层——其 promise_ready CAS
+        // 保证只结算一次。任务已开始（record_task_complete/update_statistics
+        // 抛出）时 future 已由包装层自己结算，不重复触发。
+        if (!task_started && task.on_timeout) {
+            try {
+                task.on_timeout(std::current_exception());
+            } catch (...) {
+                exception_handler_.handle_task_exception(
+                    "ThreadPool::execute_task timeout callback",
+                    std::current_exception());
+            }
+        }
         // Best-effort stats: counted as completed but NOT failed (a
         // monitor exception is not a task failure — the user code
         // didn't even run). This matches the soft-timeout branch
@@ -960,7 +979,7 @@ bool ThreadPool::try_submit(std::function<void()> task,
     executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
-    executor_task.timeout_ms = config_.task_timeout_ms;
+    // CR-022: timeout_ms 在锁内从 config_ 读取（见下方临界区）。
 
     // PA-4: monitor 需要 task_id 时先拷出，入队即可移动消耗整个 Task。
     auto* monitor = monitor_.load(std::memory_order_acquire);
@@ -975,9 +994,16 @@ bool ThreadPool::try_submit(std::function<void()> task,
     // mutex_ avoids lock-order inversions with workers and shutdown.
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stop_.load()) {
+        // CR-022: 初始化失败回滚会把 stop_ 复位为 false，但 dispatcher 为
+        // null、无 worker——此时接受提交只会让任务滞留 scheduler、future
+        // 永挂、wait_for_completion 挂到超时。与 stop_ 一并校验 initialized_。
+        // timeout_ms 读 config_ 也必须在锁内，否则与 initialize 写 config_
+        // 构成数据竞争（UB）。
+        if (!initialized_.load(std::memory_order_acquire) ||
+            stop_.load(std::memory_order_acquire)) {
             return false;
         }
+        executor_task.timeout_ms = config_.task_timeout_ms;
 
         scheduler_.enqueue(std::move(executor_task));
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
@@ -1034,7 +1060,7 @@ bool ThreadPool::try_submit_priority(
     executor_task.submit_time_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
-    executor_task.timeout_ms = config_.task_timeout_ms;
+    // CR-022: timeout_ms 在锁内从 config_ 读取（见下方临界区）。
 
     auto* monitor = monitor_.load(std::memory_order_acquire);
     const bool monitor_on = (monitor && monitor->is_enabled());
@@ -1045,9 +1071,12 @@ bool ThreadPool::try_submit_priority(
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (stop_.load()) {
+        // CR-022: 同 try_submit —— 校验 initialized_，timeout_ms 锁内读取。
+        if (!initialized_.load(std::memory_order_acquire) ||
+            stop_.load(std::memory_order_acquire)) {
             return false;
         }
+        executor_task.timeout_ms = config_.task_timeout_ms;
 
         scheduler_.enqueue(std::move(executor_task));
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
@@ -1121,7 +1150,7 @@ bool ThreadPool::try_submit_batch(
             executor_task->on_timeout = std::move(on_timeout_handlers[i]);
         }
         executor_task->submit_time_ns = submit_time_ns;
-        executor_task->timeout_ms = config_.task_timeout_ms;
+        // CR-022: timeout_ms 在锁内从 config_ 读取（见下方临界区）。
         if (monitor_on) {
             monitor_ids.push_back(executor_task->task_id);
         }
@@ -1131,8 +1160,13 @@ bool ThreadPool::try_submit_batch(
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (stop_.load()) {
-            return false;  // 线程池已停止，拒绝任务
+        // CR-022: 同 try_submit —— 校验 initialized_，timeout_ms 锁内读取。
+        if (!initialized_.load(std::memory_order_acquire) ||
+            stop_.load(std::memory_order_acquire)) {
+            return false;  // 线程池未初始化或已停止，拒绝任务
+        }
+        for (auto& executor_task : batched) {
+            executor_task->timeout_ms = config_.task_timeout_ms;
         }
 
         scheduler_.enqueue_batch(batched.data(), batch_size);
