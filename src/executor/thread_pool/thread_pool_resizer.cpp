@@ -1,5 +1,9 @@
 #include "thread_pool_resizer.hpp"
 #include "thread_pool.hpp"
+// CR-117: kDefaultCapacitySlots 定义在 worker_local_queue.hpp。该头不在
+// thread_pool.hpp 的 lockfree 构建分支（EXECUTOR_USE_LOCKFREE_WORKER_QUEUE）
+// 的包含链里，必须显式包含，否则该 CI 变体编译失败。
+#include "worker_local_queue.hpp"
 #include <algorithm>
 #include <chrono>
 
