@@ -20,21 +20,76 @@ bool TaskSchedulerOptimizer::add_task(const GpuTaskNode& task) {
     }
     task_graph_[task.task_id] = task;
 
+    // CR-062: 维护反向依赖索引。
+    for (const auto& dep : task.dependencies) {
+        dependents_[dep].push_back(task.task_id);
+    }
+
     if (config_.enable_priority_inheritance) {
         apply_priority_inheritance();
     }
     return true;
 }
 
+void TaskSchedulerOptimizer::erase_node_unlocked(const std::string& task_id) {
+    // 摘除单个节点：清理其全部依赖的反向边，并回收"已无未决依赖者"的
+    // completed 条目（CR-062：completed_tasks_ 此前只增不减）。
+    auto node_it = task_graph_.find(task_id);
+    if (node_it != task_graph_.end()) {
+        for (const auto& dep : node_it->second.dependencies) {
+            auto dep_it = dependents_.find(dep);
+            if (dep_it == dependents_.end()) {
+                continue;
+            }
+            auto& list = dep_it->second;
+            list.erase(std::remove(list.begin(), list.end(), task_id), list.end());
+            if (list.empty()) {
+                dependents_.erase(dep_it);
+                // 依赖已无未决消费者：completed 记录可以回收。迟到的
+                // 新依赖者与"依赖未知 id"的既有语义一致（视为就绪）。
+                if (completed_tasks_.count(dep) != 0) {
+                    completed_tasks_.erase(dep);
+                }
+            }
+        }
+        task_graph_.erase(node_it);
+    }
+}
+
 bool TaskSchedulerOptimizer::remove_task(const std::string& task_id) {
     std::unique_lock lock(graph_mutex_);
-    return task_graph_.erase(task_id) > 0;
+    if (task_graph_.find(task_id) == task_graph_.end()) {
+        return false;
+    }
+    // CR-062: 级联移除全部（传递）依赖 task_id 的任务——否则其下游会因
+    // "依赖不在图中"被误判为就绪，带着缺失输入执行。
+    std::vector<std::string> stack{task_id};
+    std::unordered_set<std::string> visited{task_id};
+    while (!stack.empty()) {
+        const std::string current = stack.back();
+        stack.pop_back();
+        auto dep_it = dependents_.find(current);
+        if (dep_it != dependents_.end()) {
+            for (const auto& downstream : dep_it->second) {
+                if (visited.insert(downstream).second) {
+                    stack.push_back(downstream);
+                }
+            }
+        }
+        erase_node_unlocked(current);
+    }
+    return true;
 }
 
 void TaskSchedulerOptimizer::mark_completed(const std::string& task_id) {
     std::unique_lock lock(graph_mutex_);
-    task_graph_.erase(task_id);
+    // CR-062: 经 erase_node_unlocked 摘除节点并维护反向边；completed 条目
+    // 在无未决依赖者时立即回收（下游全就绪/被移除后不再需要保留）。
+    erase_node_unlocked(task_id);
     completed_tasks_.insert(task_id);
+    if (dependents_.find(task_id) == dependents_.end()) {
+        completed_tasks_.erase(task_id);
+    }
 
     {
         std::lock_guard slock(stats_mutex_);
@@ -152,8 +207,11 @@ int TaskSchedulerOptimizer::select_best_device(const GpuTaskNode& task) const {
         return 0;
     }
 
+    // CR-061: 初值与循环内同一公式（含任务自身开销）。此前初值漏加
+    // task.estimated_cost，begin() 落在高负载设备时低负载设备永远无法胜出。
     int best_device = device_loads_.begin()->first;
-    size_t min_cost = device_loads_.begin()->second.estimated_total_cost;
+    size_t min_cost = device_loads_.begin()->second.estimated_total_cost +
+                      task.estimated_cost;
 
     for (const auto& [device_id, load] : device_loads_) {
         size_t total_cost = load.estimated_total_cost + task.estimated_cost;

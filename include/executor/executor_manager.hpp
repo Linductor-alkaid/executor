@@ -100,9 +100,19 @@ public:
      * @brief 获取默认异步执行器的生命周期持有快照
      *
      * 返回的 shared_ptr 会在注册表移除后继续保持对象存活，但不会阻止
-     * shutdown 对执行器请求停止。
+     * shutdown 对执行器请求停止。未初始化时会懒创建默认池（提交路径
+     * 语义，见 README "submit_auto"）。
      */
     std::shared_ptr<IAsyncExecutor> get_default_async_executor_snapshot();
+
+    /**
+     * @brief 同上，但绝不创建默认池（CR-013）
+     *
+     * 供只读诊断（get_async_executor_status/get_snapshot）与 shutdown
+     * 查询路径使用：未初始化时直接返回 nullptr，不产生建池副作用；
+     * 懒创建失败后也不重试（失败被闩存，用户显式 initialize() 可重建）。
+     */
+    std::shared_ptr<IAsyncExecutor> get_default_async_executor_snapshot_no_create();
 
     /**
      * @brief 注册实时执行器
@@ -325,6 +335,9 @@ private:
 
     // 已关闭标记：shutdown 后不再懒初始化，get_default_async_executor() 直接返回 nullptr
     bool default_async_shutdown_ = false;
+    // CR-013: 懒创建失败闩存——失败的 call_once 若抛出会允许无限重试，
+    // 每次提交/诊断查询都重新走一遍建池并把 system_error 抛给调用方。
+    bool default_init_failed_ = false;
 
     // P-260816-001: 默认执行器的排空（stop/wait_for_completion 含 worker join，
     // 可阻塞数秒）在 default_async_mutex_ 之外执行，避免池内任务再入

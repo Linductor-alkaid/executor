@@ -20,6 +20,14 @@ namespace executor {
  * 使用std::vector<std::unique_ptr<Task>> + 堆操作存储任务，
  * 相比shared_ptr减少引用计数开销和控制块内存分配。
  * Task包含std::atomic<bool>不可复制和移动，因此使用unique_ptr管理。
+ *
+ * @note 语义约定（CR-024，实测确认后文档化）：
+ *  - 严格优先级，无老化（aging）：持续的高优先级负载会让 LOW/NORMAL
+ *    任务无限期等待。这是有意设计（实时场景要求高优先级零干扰）；
+ *    需要防饿死的场景应在应用层拆分流量或使用独立执行器。
+ *  - 已知窗口：worker 会优先弹本地队列再查全局调度器，滞留在某个
+ *    本地队列的高优先级任务对全局严格序不可见——洪泛尾段低优先级
+ *    任务可能提前至多一个本地队列深度的时间执行（实测 ~100ms 量级）。
  */
 class PriorityScheduler {
 public:

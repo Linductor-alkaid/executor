@@ -18,7 +18,13 @@ ThreadPool::ThreadPool() : stop_(false), initialized_(false) {
 }
 
 ThreadPool::~ThreadPool() {
-    shutdown(true);
+    // CR-014: 析构排空不外泄异常——shutdown 链路（dispatch/resize/stop）
+    // 中任何异常穿出析构函数都是 std::terminate。排空失败最多滞留任务。
+    try {
+        shutdown(true);
+    } catch (...) {
+        // 析构不外泄异常。
+    }
 }
 
 bool ThreadPool::initialize(const ThreadPoolConfig& config) {
@@ -314,7 +320,16 @@ void ThreadPool::worker_thread(size_t worker_id) {
         // PA-1: 成功搬运的唤醒由 dispatch_batch 内部完成（PA-36: 不再
         // 由调用方重复 notify_all）。
         if (!stop_.load(std::memory_order_acquire)) {
-            (void)dispatch_pending_tasks(5);  // 批量分发，减少锁竞争
+            // CR-023: dispatch 链路（scheduler enqueue 的 make_unique、lockfree
+            // push 的 Task 拷贝）在资源耗尽时可抛 bad_alloc——异常穿出 worker
+            // 线程即 std::terminate。吞掉并跳过本轮分发（剩余任务下一轮重试；
+            // 单个 Task 在 OOM 下泄漏属可接受降级）。
+            try {
+                (void)dispatch_pending_tasks(5);  // 批量分发，减少锁竞争
+            } catch (...) {
+                exception_handler_.handle_task_exception(
+                    "ThreadPool::worker_thread dispatch", std::current_exception());
+            }
         }
     }
 }
@@ -911,27 +926,37 @@ void ThreadPool::resize_monitor_thread() {
         }
         lock.unlock();
 
-        // 更新线程池状态信息
-        ThreadPoolStatus status = get_status();
+        // CR-021: 本线程体内任何异常（如 resize_local_queues 的分配失败、
+        // create_worker_thread 的 std::system_error）都绝不能穿出线程函数
+        // ——异常逃逸即 std::terminate，整个进程被一个监控周期拖死。
+        // 吞掉并跳过本周期，下一秒重试。
+        try {
+            // 更新线程池状态信息
+            ThreadPoolStatus status = get_status();
 
-        // 计算平均等待时间（简化实现，使用队列大小估算）
-        double avg_wait_time_ms = 0.0;
-        if (status.queue_size > 0 && status.total_threads > 0) {
-            // 假设每个任务平均执行时间，估算等待时间
-            avg_wait_time_ms = (static_cast<double>(status.queue_size) * status.avg_task_time_ms)
-                               / static_cast<double>(status.total_threads);
-        }
+            // 计算平均等待时间（简化实现，使用队列大小估算）
+            double avg_wait_time_ms = 0.0;
+            if (status.queue_size > 0 && status.total_threads > 0) {
+                // 假设每个任务平均执行时间，估算等待时间
+                avg_wait_time_ms = (static_cast<double>(status.queue_size) * status.avg_task_time_ms)
+                                   / static_cast<double>(status.total_threads);
+            }
 
-        if (resizer_) {
-            resizer_->update_status(
-                status.queue_size,
-                status.active_threads,
-                status.total_threads,
-                avg_wait_time_ms
-            );
+            if (resizer_) {
+                resizer_->update_status(
+                    status.queue_size,
+                    status.active_threads,
+                    status.total_threads,
+                    avg_wait_time_ms
+                );
 
-            // 检查并执行扩缩容
-            resizer_->check_and_resize();
+                // 检查并执行扩缩容
+                resizer_->check_and_resize();
+            }
+        } catch (...) {
+            // 监控周期失败不致命：记录并放弃本周期。
+            exception_handler_.handle_task_exception(
+                "ThreadPool::resize_monitor_thread", std::current_exception());
         }
     }
 }
@@ -1149,7 +1174,11 @@ bool ThreadPool::try_submit_batch(
         if (i < on_timeout_handlers.size()) {
             executor_task->on_timeout = std::move(on_timeout_handlers[i]);
         }
-        executor_task->submit_time_ns = submit_time_ns;
+        // CR-025: 批内时间戳逐个递增。此前整批共享同一时间戳，同优先级
+        // 比较器对批内任务恒等价，堆弹出序与提交序完全无关（实测 200/200
+        // 轮乱序）。+i 的纳秒级偏移对时间语义无影响，但使比较器满足
+        // priority_scheduler.hpp 承诺的同优先级 FIFO。
+        executor_task->submit_time_ns = submit_time_ns + static_cast<int64_t>(i);
         // CR-022: timeout_ms 在锁内从 config_ 读取（见下方临界区）。
         if (monitor_on) {
             monitor_ids.push_back(executor_task->task_id);

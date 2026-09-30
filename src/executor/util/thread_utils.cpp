@@ -195,6 +195,37 @@ bool set_current_thread_timer_slack_ns(uint64_t /*slack_ns*/) {
 
 #elif defined(__linux__)
 
+namespace {
+// CR-030: pthread_t -> 内核 tid。pthread_gettid_np 是 GNU/bionic 扩展：
+// glibc 在 _GNU_SOURCE 下才声明、且 2.30 之前的版本没有符号——这里用
+// 弱符号声明 + 运行时判空，旧 glibc/musl 上自动退化为仅支持自线程
+// （经 SYS_gettid），目标线程请求返回 -1 由调用方如实失败。
+#if defined(__BIONIC__)
+pid_t thread_native_to_tid(std::thread::native_handle_type handle) {
+    return static_cast<pid_t>(pthread_gettid_np(handle));
+}
+#elif defined(__GLIBC__)
+extern "C" __attribute__((weak)) pid_t pthread_gettid_np(pthread_t);
+
+pid_t thread_native_to_tid(std::thread::native_handle_type handle) {
+    if (pthread_gettid_np != nullptr) {
+        return static_cast<pid_t>(pthread_gettid_np(handle));
+    }
+    if (handle == pthread_self()) {
+        return static_cast<pid_t>(syscall(SYS_gettid));
+    }
+    return -1;
+}
+#else
+pid_t thread_native_to_tid(std::thread::native_handle_type handle) {
+    if (handle == pthread_self()) {
+        return static_cast<pid_t>(syscall(SYS_gettid));
+    }
+    return -1;
+}
+#endif
+}  // namespace
+
 bool set_thread_priority(std::thread::native_handle_type handle, int priority) {
     struct sched_param param;
     param.sched_priority = priority;
@@ -217,26 +248,23 @@ bool set_thread_priority(std::thread::native_handle_type handle, int priority) {
     }
 
     // P-260618-007: previously the SCHED_OTHER branch silently dropped the
-    // priority argument (the comment said "这里简化处理,只设置调度策略").
-    // Callers (ThreadPool, RealtimeThreadExecutor) treated the resulting
-    // "true" as "priority applied", but nice was never touched — a non-root
-    // user setting thread_priority=10 got a false success and no effect.
+    // priority argument. A later fix called setpriority(PRIO_PROCESS, 0,
+    // ...) — but who=0 means the CALLING task, so the nice landed on the
+    // caller instead of `handle` (nice is a per-task attribute on Linux;
+    // the old comment claiming "no per-thread nice" was wrong).
     //
-    // We now actually call setpriority(PRIO_PROCESS, ..., clamped_nice) so
-    // the priority argument has a real effect. Note: Linux's setpriority is
-    // process-level (PRIO_PROCESS) and applies to the entire process, not
-    // a single thread — there is no per-thread nice on Linux. The caller
-    // is therefore expected to set priority from a fresh forked process
-    // dedicated to one thread, or accept that the entire process nice is
-    // adjusted. setpriority returns 0 on success, -1 on failure
-    // (EACCES/EPERM for non-root). For priority == 0 we skip this path
-    // entirely (no nice adjustment is needed).
+    // CR-030: resolve the target kernel tid via pthread_gettid_np and set
+    // the nice on the actual target thread. setpriority returns 0 on
+    // success, -1 on failure (EACCES/EPERM for non-root lowering below
+    // the default) — failures are reported honestly. For priority == 0
+    // we skip this path entirely (no nice adjustment is needed).
     if (policy == SCHED_OTHER && priority != 0) {
-        if (setpriority(PRIO_PROCESS, 0, priority) != 0) {
-            // Permission denied or other error: return false honestly
-            // instead of pretending success. Callers that want "best
-            // effort" can ignore the return code; callers that want strict
-            // application will now be told the truth.
+        const pid_t target_tid = thread_native_to_tid(handle);
+        if (target_tid <= 0) {
+            // 无法确定目标 tid 的环境：如实失败，不再静默改错线程。
+            return false;
+        }
+        if (setpriority(PRIO_PROCESS, target_tid, priority) != 0) {
             return false;
         }
     }

@@ -697,10 +697,18 @@ private:
                 }
             }
 
+            // CR-050: 调度线程是进程级单点——任何一次派发/构建抛出
+            // （facade 每 tick 都做堆分配，OOM 或闭包异常是现实输入）穿出
+            // 线程函数即 std::terminate，整个进程为丢一个 tick 陪葬。三个
+            // 外呼点各自隔离：失败 = 丢当前这一个 tick，调度线程存活。
             // 一次性 timer：直接派发（callable 已移出，取消不再可达）。
             for (auto& dispatch : due_dispatches) {
                 if (dispatch) {
-                    dispatch();
+                    try {
+                        dispatch();
+                    } catch (...) {
+                        // 丢当前派发；生命周期统计已在出堆时结清。
+                    }
                 }
             }
 
@@ -715,7 +723,14 @@ private:
                         !it->second->tick_builder) {
                         continue;
                     }
-                    plan = it->second->tick_builder();
+                    try {
+                        plan = it->second->tick_builder();
+                    } catch (...) {
+                        // tick 构建失败（闭包拷贝/分配）：跳过本 tick，
+                        // 周期 record 的下一轮重排已在此前出堆时完成，
+                        // 调度线程与后续 tick 不受影响。
+                        continue;
+                    }
                     if (!plan.dispatch) {
                         continue;
                     }
@@ -725,7 +740,11 @@ private:
                     }
                     ++summary_.executed_count;
                 }
-                plan.dispatch();
+                try {
+                    plan.dispatch();
+                } catch (...) {
+                    // 派发失败（提交到执行器被拒等）：丢当前 tick。
+                }
             }
 
             // 到期等待：单次最多睡 kWakeSlice（且不超过 heap 顶 deadline），

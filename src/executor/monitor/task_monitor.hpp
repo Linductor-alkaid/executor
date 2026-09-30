@@ -27,7 +27,9 @@ public:
     // shutdown 路径上 worker 的持锁访问构成数据竞争（TSAN 报告 + 潜在 UAF）。
     // mutex_ 声明先于各 map，按逆序析构最后销毁，锁自身的生命周期覆盖
     // 全部受保护成员。
-    ~TaskMonitor();
+    // CR-073: record_task_* 为虚函数且已存在派生（测试注入），经基类指针
+    // delete 派生对象是 UB——析构必须为虚。
+    virtual ~TaskMonitor();
 
     TaskMonitor(const TaskMonitor&) = delete;
     TaskMonitor& operator=(const TaskMonitor&) = delete;
@@ -80,6 +82,9 @@ public:
     std::map<TaskLifecycleState, size_t> get_in_flight_state_counts() const;
     size_t get_in_flight_count() const;
     size_t get_in_flight_dropped_count() const;
+    /// CR-075: set_in_flight_capacity 缩容驱逐数（独立于运行期准入丢弃，
+    /// 不参与 incomplete 推导）。
+    size_t get_in_flight_evicted_count() const;
     std::chrono::nanoseconds get_oldest_in_flight_age() const;
     bool in_flight_diagnostics_incomplete() const;
 
@@ -127,6 +132,9 @@ private:
     std::unordered_map<std::string, std::string> task_id_to_type_;
     std::unordered_map<std::string, TaskLifecycleSnapshot> in_flight_tasks_;
     size_t in_flight_dropped_count_ = 0;
+    // CR-075: 缩容驱逐计数。此前驱逐混入 dropped_count_，导致 incomplete
+    // 永久置位且与真实运行期丢弃不可区分。
+    size_t in_flight_evicted_count_ = 0;
 
     /// 按 task_type 聚合的统计（内部存储，与 TaskStatistics 一致）
     struct Stats {

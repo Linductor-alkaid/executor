@@ -314,11 +314,18 @@ public:
         return active_.size();
     }
 
-    /** 注册新 state；active 容量耗尽时返回 false（可观察拒绝）。 */
+    /** 注册新 state；active 容量耗尽或 task_id 已被占用时返回 false（可
+     *  观察拒绝）。CR-034：此前重复 id 会静默覆盖旧表项，旧 state 与
+     *  registry 脱钩后按 id 取消永远打不到它（其任务从此不可取消）。
+     *  facade 的 id 由进程级原子计数器生成、保证唯一，重复只可能来自
+     *  调用方自行构造——按拒绝处理。 */
     bool register_state(const std::string& task_id,
                         std::shared_ptr<TaskCancellationState> state) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (active_.size() >= capacity_) {
+            return false;
+        }
+        if (active_.find(task_id) != active_.end()) {
             return false;
         }
         active_[task_id] = std::move(state);
