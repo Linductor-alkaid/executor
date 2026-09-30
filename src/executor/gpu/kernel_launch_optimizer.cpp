@@ -4,15 +4,20 @@
 namespace executor {
 namespace gpu {
 
-KernelLaunchOptimizer::KernelLaunchOptimizer() : config_() {}
+KernelLaunchOptimizer::KernelLaunchOptimizer()
+    : config_snapshot_(std::make_shared<const Config>()) {}
 
-KernelLaunchOptimizer::KernelLaunchOptimizer(const Config& config) : config_(config) {}
+KernelLaunchOptimizer::KernelLaunchOptimizer(const Config& config)
+    : config_snapshot_(std::make_shared<const Config>(config)) {}
 
 // --- 参数缓存 ---
 
 bool KernelLaunchOptimizer::lookup_params(const std::string& kernel_name,
                                            KernelParamCacheEntry& out) {
-    if (!config_.enable_param_cache) {
+    // CR-063: 一次原子加载取得一致配置快照（下同）。
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
+    if (!config.enable_param_cache) {
         return false;
     }
 
@@ -38,7 +43,9 @@ bool KernelLaunchOptimizer::lookup_params(const std::string& kernel_name,
 
 void KernelLaunchOptimizer::store_params(const std::string& kernel_name,
                                           const KernelParamCacheEntry& entry) {
-    if (!config_.enable_param_cache) {
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
+    if (!config.enable_param_cache) {
         return;
     }
 
@@ -67,7 +74,9 @@ size_t KernelLaunchOptimizer::cache_size() const {
 }
 
 void KernelLaunchOptimizer::evict_lru_if_needed() {
-    if (param_cache_.size() < config_.max_cache_entries) {
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
+    if (param_cache_.size() < config.max_cache_entries) {
         return;
     }
 
@@ -83,7 +92,9 @@ void KernelLaunchOptimizer::evict_lru_if_needed() {
 // --- 批量化 ---
 
 size_t KernelLaunchOptimizer::enqueue(BatchedKernelRequest request) {
-    if (!config_.enable_batching) {
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
+    if (!config.enable_batching) {
         return 0;
     }
 
@@ -97,7 +108,9 @@ size_t KernelLaunchOptimizer::enqueue(BatchedKernelRequest request) {
 }
 
 std::vector<BatchedKernelRequest> KernelLaunchOptimizer::flush_if_ready() {
-    if (!config_.enable_batching) {
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
+    if (!config.enable_batching) {
         return {};
     }
 
@@ -107,12 +120,12 @@ std::vector<BatchedKernelRequest> KernelLaunchOptimizer::flush_if_ready() {
     }
 
     bool should_flush = false;
-    if (batch_queue_.size() >= config_.batch_threshold) {
+    if (batch_queue_.size() >= config.batch_threshold) {
         should_flush = true;
     } else {
         auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
         auto elapsed_us = (now_ns - batch_window_start_ns_) / 1000;
-        if (elapsed_us >= config_.batch_window_us) {
+        if (elapsed_us >= config.batch_window_us) {
             should_flush = true;
         }
     }
@@ -133,6 +146,8 @@ std::vector<BatchedKernelRequest> KernelLaunchOptimizer::flush_if_ready() {
 }
 
 std::vector<BatchedKernelRequest> KernelLaunchOptimizer::flush_all() {
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
     std::lock_guard lock(batch_mutex_);
     if (batch_queue_.empty()) {
         return {};
@@ -141,7 +156,7 @@ std::vector<BatchedKernelRequest> KernelLaunchOptimizer::flush_all() {
     std::vector<BatchedKernelRequest> result(batch_queue_.begin(), batch_queue_.end());
     batch_queue_.clear();
 
-    if (config_.enable_batching) {
+    if (config.enable_batching) {
         std::lock_guard slock(stats_mutex_);
         ++batched_launches_;
     }
@@ -157,7 +172,8 @@ size_t KernelLaunchOptimizer::pending_count() const {
 // --- 延迟跟踪 ---
 
 void KernelLaunchOptimizer::record_launch_latency(double latency_us) {
-    if (!config_.track_latency) {
+    if (!std::atomic_load_explicit(&config_snapshot_, std::memory_order_acquire)
+             ->track_latency) {
         return;
     }
 
@@ -195,13 +211,13 @@ void KernelLaunchOptimizer::reset_stats() {
 }
 
 KernelLaunchOptimizer::Config KernelLaunchOptimizer::get_config() const {
-    std::shared_lock lock(cache_mutex_);
-    return config_;
+    return *std::atomic_load_explicit(&config_snapshot_, std::memory_order_acquire);
 }
 
 void KernelLaunchOptimizer::update_config(const Config& config) {
-    std::unique_lock lock(cache_mutex_);
-    config_ = config;
+    std::atomic_store_explicit(&config_snapshot_,
+                               std::make_shared<const Config>(config),
+                               std::memory_order_release);
 }
 
 } // namespace gpu

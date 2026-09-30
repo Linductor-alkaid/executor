@@ -10,7 +10,7 @@ WorkerLocalQueue::WorkerLocalQueue(size_t capacity)
     , capacity_(capacity)
     , size_(0) {
     // 使用固定大小的环形缓冲区
-    size_t buffer_size = (capacity_ > 0) ? capacity_ : 100;
+    size_t buffer_size = (capacity_ > 0) ? capacity_ : kDefaultCapacitySlots;
     // TaskWrapper 可以默认构造和拷贝，所以 resize 是安全的
     queue_.resize(buffer_size);
 }

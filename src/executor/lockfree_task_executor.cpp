@@ -16,6 +16,22 @@
 #endif
 
 namespace executor {
+namespace {
+// CR-031: 归还对象池前清空 callable。TaskWrapper 复用模型下 acquire 不
+// 构造、release 不析构——旧任务的 func（可能持有文件句柄、shared_ptr、
+// 大缓冲）此前滞留池节点，直到随机生产者线程复用节点赋值时才析构，长期
+// 不复用则滞留到池析构。worker 归还前显式置空，把析构成本与副作用移回
+// 执行线程，资源释放时机确定。
+template <typename Wrapper>
+inline void clear_batch_callables(Wrapper** batch, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        if (batch[i] != nullptr) {
+            batch[i]->func = nullptr;
+        }
+    }
+}
+}  // namespace
+
 
 LockFreeTaskExecutor::LockFreeTaskExecutor(size_t queue_capacity, size_t backoff_multiplier, bool enable_stats)
     : queue_(std::make_unique<util::LockFreeQueue<TaskWrapper*>>(queue_capacity, backoff_multiplier, enable_stats))
@@ -489,6 +505,9 @@ void LockFreeTaskExecutor::worker_thread() {
                 if (!running_.load(std::memory_order_acquire) &&
                     self_stop_requested_.load(std::memory_order_acquire)) {
                     // 批内自停：已执行的批量回收，剩余的也立即归还。
+                    clear_batch_callables(batch.data(), executed);
+                    clear_batch_callables(batch.data() + executed,
+                                          popped - executed);
                     task_pool_->release_bulk(batch.data(), executed);
                     task_pool_->release_bulk(batch.data() + executed,
                                              popped - executed);
@@ -500,6 +519,7 @@ void LockFreeTaskExecutor::worker_thread() {
             if (!self_stop_interrupted_batch) {
                 // PA-5: 整批一次 splice 回池（一次 head CAS），消费者侧对
                 // 生产者热字 head_ 的往返从每任务一次摊薄为每批一次。
+                clear_batch_callables(batch.data(), popped);
                 task_pool_->release_bulk(batch.data(), popped);
                 processed_count_.fetch_add(popped, std::memory_order_relaxed);
             }
@@ -533,34 +553,39 @@ void LockFreeTaskExecutor::worker_thread() {
                 }
             }
         }
+        clear_batch_callables(batch.data(), popped);
         task_pool_->release_bulk(batch.data(), popped);
         processed_count_.fetch_add(popped, std::memory_order_relaxed);
     }
 }
 
 size_t LockFreeTaskExecutor::park_worker(TaskWrapper** batch, size_t batch_size) {
-    // PA-8 丢失唤醒封闭推导（与 ThreadPool P1 的代次驻停同构）：
-    //  - bump 发生在置位(2)读取的计数值之后 -> wait 的原子 check-and-block
-    //    发现值变化，立即返回重扫；
-    //  - bump 发生在置位(2)之前 -> 入队 happened-before bump（生产者
-    //    程序序 + RMW 全序），bump happened-before 置位所读的计数值
-    //    （wake_seq_ 原子全序），置位 sequenced-before 终扫(3) -> 终扫
-    //    透过队列原子必然看到该任务，不会驻停。
-    // 两个方向都不存在丢失唤醒窗口；若生产者的 bump 读到置位后的值，
-    // 其返回值带驻停位，notify_one 兜底。wait 允许虚假唤醒，醒来重扫。
+    // PA-8 丢失唤醒封闭推导（CR-005 修订：置位必须用 RMW）。
+    // 此前第 (2) 步是"load 旧值 + 普通 store"——生产者的 fetch_add(2) 若
+    // 恰好落在 load 与 store 之间，其增量会被 store 覆盖回旧值，且终扫对
+    // 刚发布任务没有 happens-before 保证（ARM 弱序下可带任务驻停）。改为
+    // fetch_or 后推导重新封闭：
+    //  - 生产者 bump（fetch_add）与本线程置位（fetch_or）是同一原子变量
+    //    修改序上的 RMW，互相不可覆盖、必分先后；
+    //  - 置位先完成：生产者 fetch_add 读到带驻停位的值，返回值触发
+    //    notify_one，wait 被定向唤醒；
+    //  - bump 先完成：fetch_or 经 RMW 全序读到含增量的值（并建立
+    //    happens-before），入队 sequenced-before bump，因此终扫透过队列
+    //    原子必然看到该任务，不会驻停。
+    //  wait 允许虚假唤醒，醒来重扫。
     //
-    // (1) 读当前计数，构造驻停值（bit0 置位，计数保留）。
-    const uint32_t current = wake_seq_.load(std::memory_order_acquire);
-    const uint32_t parked_value = current | kParkedBit;
-    // (2) 发布驻停值。
-    wake_seq_.store(parked_value, std::memory_order_release);
-    // (3) 置位后终扫：看到任务则直接带回，不驻停。
+    // (1) 原子置位（bit0 置位，计数保留）。fetch_or 返回前置值，驻停
+    // 比较值必须取"置位后"的值（previous | bit），否则 wait 的比较值
+    // 永不含驻停位、与当前值恒不相等，worker 退化为忙轮询。
+    const uint32_t parked_value =
+        wake_seq_.fetch_or(kParkedBit, std::memory_order_acq_rel) | kParkedBit;
+    // (2) 置位后终扫：看到任务则直接带回，不驻停。
     size_t popped = queue_->pop_batch(batch, batch_size);
     if (popped > 0) {
         wake_seq_.fetch_and(~kParkedBit, std::memory_order_release);
         return popped;
     }
-    // (4) futex 驻停（32 位 wake_seq_ 走 libstdc++ futex 直达路径）。
+    // (3) futex 驻停（32 位 wake_seq_ 走 libstdc++ futex 直达路径）。
     // 停滞生产者的恢复（scan-ahead 取消未决预留）不经过 push 成功路径，
     // 由 set_before_publish_hook 的 trampoline 在进入停滞窗口前定向唤醒。
     wake_seq_.wait(parked_value, std::memory_order_acquire);

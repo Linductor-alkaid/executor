@@ -52,7 +52,14 @@ ExecutorManager::ExecutorManager()
 
 // 析构函数（RAII）
 ExecutorManager::~ExecutorManager() {
-    shutdown(true);  // 等待所有任务完成
+    // CR-014: 析构路径的排空不外泄异常（与下方 retired 终局排空同一约定）：
+    // 后端 stop() 抛出时最多放弃完全排空，绝不让异常穿出析构函数触发
+    // std::terminate。
+    try {
+        shutdown(true);  // 等待所有任务完成
+    } catch (...) {
+        // 析构不外泄异常。
+    }
 }
 
 // 初始化默认异步执行器（线程池）
@@ -175,12 +182,29 @@ std::shared_ptr<IAsyncExecutor> ExecutorManager::get_default_async_executor_snap
         }
     }
 
+    // CR-013: 建池异常在 once 内消化并闩存——此前 initialize_async_executor
+    // 抛出（线程创建 std::system_error）时 call_once 未完成，之后每次
+    // 查询/提交都会重试整套建池并意外抛异常。
     std::call_once(default_init_once_, [this] {
-        ExecutorConfig default_config{};
-        initialize_async_executor(default_config);
+        try {
+            ExecutorConfig default_config{};
+            initialize_async_executor(default_config);
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(default_async_mutex_);
+            default_init_failed_ = true;
+        }
     });
 
     std::lock_guard<std::mutex> lock(default_async_mutex_);
+    return default_async_executor_;
+}
+
+std::shared_ptr<IAsyncExecutor>
+ExecutorManager::get_default_async_executor_snapshot_no_create() {
+    std::lock_guard<std::mutex> lock(default_async_mutex_);
+    if (default_async_shutdown_ || default_init_failed_) {
+        return nullptr;
+    }
     return default_async_executor_;
 }
 

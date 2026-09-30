@@ -304,7 +304,11 @@ TEST(CommChannelTest, DropOldestNeverRejectsAfterDisplacingAValue) {
     start.store(true, std::memory_order_release);
     for (auto& producer : producers) producer.join();
 
-    EXPECT_GT(failed_sends.load(std::memory_order_relaxed), 0U);
+    // CR-040: 置换路径的有界重试落地后，竞争拒绝已近乎消除（是否出现
+    // 取决于极端时序），不再断言 failed_sends > 0——那建立在"竞争必然
+    // 拒绝"的旧语义上。仍然必须成立的硬不变式：拒绝绝不允许发生在
+    // "已置换旧值"之后（新值已构造却被丢弃且未入队）。
+    (void)failed_sends;
     EXPECT_EQ(failed_after_displacement.load(std::memory_order_relaxed), 0U);
 }
 TEST(CommChannelTest, KeepLatestAdmittedBeforeCloseCompletesAndDelaysDrain) {

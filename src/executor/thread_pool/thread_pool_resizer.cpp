@@ -5,6 +5,16 @@
 
 namespace executor {
 
+namespace {
+// CR-117: queue_capacity=0 是"使用默认槽位"的哨兵（WorkerLocalQueue 实际
+// 回退为 kDefaultCapacitySlots）。resizer 若直接拿原始 0 参与阈值运算，
+// 会得到"任意积压即扩、永不缩"的退化行为（queue_high 恒真、queue_low 恒假）。
+// 所有阈值计算一律使用该有效容量，与队列层的实际行为保持一致。
+inline size_t effective_queue_capacity(size_t configured) {
+    return configured == 0 ? WorkerLocalQueue::kDefaultCapacitySlots : configured;
+}
+}  // namespace
+
 ThreadPoolResizer::ThreadPoolResizer(ThreadPool& pool, const ThreadPoolConfig& config)
     : pool_(pool)
     , config_(config)
@@ -64,11 +74,11 @@ bool ThreadPoolResizer::should_expand() const {
     // 2. 平均任务等待时间 > 100ms
     // 3. 当前线程数 < max_threads
     
-    const size_t queue_capacity_fifth = config_.queue_capacity / 5;
+    const size_t capacity = effective_queue_capacity(config_.queue_capacity);
+    const size_t queue_capacity_fifth = capacity / 5;
     const size_t queue_capacity_fifth_ceiling = queue_capacity_fifth
-        + static_cast<size_t>(config_.queue_capacity % 5 != 0);
-    bool queue_high = queue_size
-        > config_.queue_capacity - queue_capacity_fifth_ceiling;
+        + static_cast<size_t>(capacity % 5 != 0);
+    bool queue_high = queue_size > capacity - queue_capacity_fifth_ceiling;
     bool wait_time_high = (avg_wait_time > 100.0);
     bool can_expand = (current_threads < max_threads);
     
@@ -94,7 +104,8 @@ bool ThreadPoolResizer::should_shrink() {
                               ? (total_threads - active_threads)
                               : 0;
     bool idle_high = idle_threads > total_threads / 2;
-    bool queue_low = queue_size < config_.queue_capacity / 5;
+    bool queue_low = queue_size
+        < effective_queue_capacity(config_.queue_capacity) / 5;
     bool can_shrink = (total_threads > min_threads);
     
     // 检查持续空闲时间

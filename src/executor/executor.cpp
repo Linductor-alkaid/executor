@@ -292,7 +292,10 @@ ExecutorResult Executor::initialize_ex(const ExecutorConfig& config) {
 ShutdownResult Executor::shutdown(bool wait_for_tasks) {
     stop_timer_thread();
     lifecycle_state_.store(ExecutorLifecycleState::Draining, std::memory_order_release);
-    const auto async_executor = manager_->get_default_async_executor_snapshot();
+    // CR-013: shutdown 不建池——未初始化时没有可停的对象，也不该在退出
+    // 路径上拉起一个线程池再关掉。
+    const auto async_executor =
+        manager_->get_default_async_executor_snapshot_no_create();
     if (async_executor && async_executor->is_current_worker_thread()) {
         const auto result = manager_->shutdown(wait_for_tasks);
         fail_all_parked_tasks_for_shutdown();
@@ -1571,7 +1574,8 @@ std::vector<ExecutorCapability> Executor::get_executor_capabilities() const {
 
 // 获取异步执行器状态
 AsyncExecutorStatus Executor::get_async_executor_status() const {
-    auto executor = manager_->get_default_async_executor_snapshot();
+    // CR-013: 只读诊断不得懒创建默认池（与 get_snapshot 的文档承诺一致）。
+    auto executor = manager_->get_default_async_executor_snapshot_no_create();
     if (!executor) {
         AsyncExecutorStatus status;
         status.name = "default";

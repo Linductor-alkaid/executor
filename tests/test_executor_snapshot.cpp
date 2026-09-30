@@ -354,14 +354,40 @@ bool test_in_flight_diagnostics_do_not_change_soft_timeout() {
     TEST_ASSERT(executor.initialize(config), "executor initialization must succeed");
     executor.set_in_flight_task_capacity(8);
 
+    // 环境负载（CPU 超订阅/满载测试机）可能把任务拾取拖过 1ms 软超时：
+    // 池侧 pre-execution 检查会跳过任务体（既定语义，外层 future 以
+    // TimedOutException 结算），任务体内置位的 promise 永不满足——直接
+    // wait 内层 promise 会永久挂死（曾以 ~1/20 概率挂死并发回归）。
+    // 内层 promise 等待必须与外层 future 赛跑，环境诱发跳过时有界重试。
+    auto wait_started_or_skipped = [](std::future<void>& started,
+                                      std::future<void>& task_future) -> bool {
+        while (started.wait_for(std::chrono::milliseconds(20)) !=
+               std::future_status::ready) {
+            if (task_future.wait_for(std::chrono::milliseconds(0)) ==
+                std::future_status::ready) {
+                return false;  // 环境诱发 pre-execution 软超时跳过
+            }
+        }
+        return true;
+    };
+
     std::promise<void> running;
     auto release = std::make_shared<std::promise<void>>();
     const auto release_future = release->get_future().share();
-    auto first = executor.submit([&running, release_future] {
-        running.set_value();
-        release_future.wait();
-    });
-    running.get_future().wait();
+    std::future<void> first;
+    bool first_started = false;
+    for (int attempt = 0; attempt < 5 && !first_started; ++attempt) {
+        running = std::promise<void>();
+        first = executor.submit([&running, release_future] {
+            running.set_value();
+            release_future.wait();
+        });
+        std::future<void> started = running.get_future();
+        first_started = wait_started_or_skipped(started, first);
+    }
+    TEST_ASSERT(first_started,
+                "task body must start under normal load; 1ms soft timeout "
+                "kept skipping it (environment too loaded)");
     auto expired = executor.submit([] {});
     std::this_thread::sleep_for(std::chrono::milliseconds(3));
     release->set_value();
@@ -380,11 +406,21 @@ bool test_in_flight_diagnostics_do_not_change_soft_timeout() {
     std::promise<void> sampled_running;
     auto sampled_release = std::make_shared<std::promise<void>>();
     const auto sampled_release_future = sampled_release->get_future().share();
-    auto unsampled = executor.submit([&sampled_running, sampled_release_future] {
-        sampled_running.set_value();
-        sampled_release_future.wait();
-    });
-    sampled_running.get_future().wait();
+    std::future<void> unsampled;
+    bool sampled_started = false;
+    for (int attempt = 0; attempt < 5 && !sampled_started; ++attempt) {
+        sampled_running = std::promise<void>();
+        unsampled = executor.submit([&sampled_running, sampled_release_future] {
+            sampled_running.set_value();
+            sampled_release_future.wait();
+        });
+        std::future<void> sampled_started_future = sampled_running.get_future();
+        sampled_started =
+            wait_started_or_skipped(sampled_started_future, unsampled);
+    }
+    TEST_ASSERT(sampled_started,
+                "task body must start under normal load; 1ms soft timeout "
+                "kept skipping it (environment too loaded)");
     TEST_ASSERT(executor.get_snapshot().in_flight_count == 0,
                 "zero in-flight sampling must not retain a task");
     sampled_release->set_value();

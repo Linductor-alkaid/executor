@@ -96,6 +96,10 @@ struct CommResult {
 enum class DropPolicy {
     RejectNewest,
     DropOldest,
+    // 注意（CR-040）：DropOldest/KeepLatest 的"保最新"是 best-effort——
+    // 队列内部对在途消费者/并发生产者的竞争窗口做有界自旋重试，重试耗尽
+    // 时仍会按满队丢弃新值（事件为 Dropped）。需要强"最新值"语义的场景
+    // 应使用 SnapshotStore/Mailbox。
     KeepLatest
 };
 

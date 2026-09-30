@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <cstdint>
 #include <mutex>
 #include <shared_mutex>
@@ -127,7 +128,11 @@ public:
     void update_config(const Config& config);
 
 private:
-    Config config_;
+    // CR-063: config 以不可变快照发布（原子指针替换）。此前 update_config
+    // 持 batch_mutex_ 写、多个读路径无锁读同一 Config 对象，构成数据竞争
+    // （TSAN 实证 9 条）。读侧一次原子加载取得一致快照，零锁零竞争；
+    // 写侧每次 update 生成新快照对象。
+    std::shared_ptr<const Config> config_snapshot_;
 
     mutable std::mutex batch_mutex_;
     std::deque<TransferRequest> pending_transfers_;

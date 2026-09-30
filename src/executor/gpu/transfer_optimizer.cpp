@@ -4,14 +4,18 @@
 namespace executor {
 namespace gpu {
 
-TransferOptimizer::TransferOptimizer() : config_() {}
+TransferOptimizer::TransferOptimizer() : config_snapshot_(std::make_shared<const Config>()) {}
 
-TransferOptimizer::TransferOptimizer(const Config& config) : config_(config) {}
+TransferOptimizer::TransferOptimizer(const Config& config)
+    : config_snapshot_(std::make_shared<const Config>(config)) {}
 
 // --- 传输批量化 ---
 
 void TransferOptimizer::enqueue_transfer(const TransferRequest& request) {
-    if (!config_.enable_batching) {
+    // CR-063: 一次原子加载取得一致配置快照（下同）。
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
+    if (!config.enable_batching) {
         return;
     }
     std::lock_guard lock(batch_mutex_);
@@ -19,6 +23,8 @@ void TransferOptimizer::enqueue_transfer(const TransferRequest& request) {
 }
 
 std::vector<std::vector<TransferRequest>> TransferOptimizer::flush_batches() {
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
     std::lock_guard lock(batch_mutex_);
     if (pending_transfers_.empty()) {
         return {};
@@ -32,8 +38,8 @@ std::vector<std::vector<TransferRequest>> TransferOptimizer::flush_batches() {
 
     for (const auto& req : pending_transfers_) {
         bool same_group = (req.direction == current_dir && req.stream_id == current_stream);
-        bool batch_full = (current_batch.size() >= config_.max_batch_count ||
-                          current_batch_size >= config_.batch_size_threshold);
+        bool batch_full = (current_batch.size() >= config.max_batch_count ||
+                          current_batch_size >= config.batch_size_threshold);
 
         if (!same_group || batch_full) {
             if (!current_batch.empty()) {
@@ -74,7 +80,9 @@ std::vector<TransferOptimizer::PipelineAction> TransferOptimizer::build_pipeline
         return actions;
     }
 
-    if (!config_.enable_pipeline || stages.size() == 1) {
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
+    if (!config.enable_pipeline || stages.size() == 1) {
         // 无流水线：顺序执行每个阶段的传输+计算
         for (const auto& stage : stages) {
             PipelineAction ta;
@@ -185,12 +193,16 @@ std::vector<TransferOptimizer::PipelineAction> TransferOptimizer::build_pipeline
 // --- 小数据优化 ---
 
 bool TransferOptimizer::should_use_pinned(size_t transfer_size) const {
-    return config_.enable_pinned_optimization &&
-           transfer_size <= config_.small_transfer_threshold;
+    const Config config = *std::atomic_load_explicit(&config_snapshot_,
+                                                     std::memory_order_acquire);
+    return config.enable_pinned_optimization &&
+           transfer_size <= config.small_transfer_threshold;
 }
 
 size_t TransferOptimizer::recommended_pinned_buffer_size() const {
-    return config_.pinned_buffer_size;
+    return std::atomic_load_explicit(&config_snapshot_,
+                                     std::memory_order_acquire)
+        ->pinned_buffer_size;
 }
 
 // --- 统计 ---
@@ -236,13 +248,13 @@ void TransferOptimizer::reset_stats() {
 }
 
 TransferOptimizer::Config TransferOptimizer::get_config() const {
-    std::lock_guard lock(batch_mutex_);
-    return config_;
+    return *std::atomic_load_explicit(&config_snapshot_, std::memory_order_acquire);
 }
 
 void TransferOptimizer::update_config(const Config& config) {
-    std::lock_guard lock(batch_mutex_);
-    config_ = config;
+    std::atomic_store_explicit(&config_snapshot_,
+                               std::make_shared<const Config>(config),
+                               std::memory_order_release);
 }
 
 } // namespace gpu

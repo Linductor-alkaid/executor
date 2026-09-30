@@ -96,8 +96,14 @@ private:
     size_t total_allocated_ = 0;
     size_t allocation_count_ = 0;
 
-    static constexpr size_t kHeaderSize = sizeof(size_t);
     static constexpr size_t kAlignment = 256;  // CUDA 设备内存常用对齐
+    // CR-060: header 尺寸必须与对齐一致。此前 header = sizeof(size_t) = 8，
+    // 用户指针 = 块起始 + 8，且池内逐次切割使余块起点漂移——实际只剩 8 字节
+    // 对齐，float4/uint4 等 16B 对齐访存会触发 CUDA misaligned address。
+    // header 取一个完整对齐单位后：need 恒为对齐单位的倍数，池内切割边界
+    // 不漂移，用户指针 = 块起始 + kHeaderSize 恒满足 kAlignment。
+    // 代价是每次分配最多 256 字节的头部开销（相对设备内存可接受）。
+    static constexpr size_t kHeaderSize = kAlignment;
 };
 
 }  // namespace gpu

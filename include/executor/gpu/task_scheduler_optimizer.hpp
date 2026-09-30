@@ -121,9 +121,17 @@ private:
 
     Config config_;
 
+    // CR-062: 摘除单个节点（图 + 反向边 + completed 回收）。要求已持
+    // graph_mutex_ 写锁。
+    void erase_node_unlocked(const std::string& task_id);
+
     mutable std::shared_mutex graph_mutex_;
     std::unordered_map<std::string, GpuTaskNode> task_graph_;
     std::unordered_set<std::string> completed_tasks_;
+    // CR-062: 反向依赖索引（依赖 -> 依赖它的图内任务）。用于
+    // remove_task 的级联移除与 completed_tasks_ 的及时回收（此前
+    // completed_tasks_ 只增不减，长运行进程内存无界增长）。
+    std::unordered_map<std::string, std::vector<std::string>> dependents_;
 
     mutable std::mutex device_mutex_;
     std::unordered_map<int, DeviceLoad> device_loads_;

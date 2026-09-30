@@ -228,6 +228,11 @@ size_t TaskMonitor::get_in_flight_count() const {
     return in_flight_tasks_.size();
 }
 
+size_t TaskMonitor::get_in_flight_evicted_count() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return in_flight_evicted_count_;
+}
+
 size_t TaskMonitor::get_in_flight_dropped_count() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return in_flight_dropped_count_;
@@ -260,7 +265,9 @@ void TaskMonitor::set_in_flight_capacity(size_t capacity) {
                 return left.second.submitted_at < right.second.submitted_at;
             });
         in_flight_tasks_.erase(oldest);
-        ++in_flight_dropped_count_;
+        // CR-075: 缩容驱逐单独计数——incomplete 只反映运行期准入丢弃，
+        // 否则调小一次容量后所有快照永远 incomplete 且与真实丢混淆。
+        ++in_flight_evicted_count_;
     }
 }
 
@@ -269,7 +276,10 @@ size_t TaskMonitor::get_in_flight_capacity() const {
 }
 
 void TaskMonitor::set_in_flight_sampling_rate(double rate) {
-    uint32_t percent = static_cast<uint32_t>(rate * 100.0);
+    // CR-074: 同 set_sampling_rate——先钳制再转换，负数/NaN 不再是 UB。
+    if (!(rate >= 0.0)) rate = 0.0;
+    if (rate > 1.0) rate = 1.0;
+    const uint32_t percent = static_cast<uint32_t>(rate * 100.0);
     in_flight_sampling_rate_.store(std::min(percent, 100u), std::memory_order_relaxed);
 }
 
@@ -291,8 +301,11 @@ bool TaskMonitor::is_enabled() const {
 }
 
 void TaskMonitor::set_sampling_rate(double rate) {
-    uint32_t percent = static_cast<uint32_t>(rate * 100.0);
-    if (percent > 100) percent = 100;
+    // CR-074: 越界/NaN 直接做 double→uint32 转换是 UB（[conv.fpint]），
+    // 实测负数会回绕成 100% 采样、NaN 变 0%。先钳制到 [0,1] 再转换。
+    if (!(rate >= 0.0)) rate = 0.0;  // 同时处理负数与 NaN
+    if (rate > 1.0) rate = 1.0;
+    const uint32_t percent = static_cast<uint32_t>(rate * 100.0);
     sampling_rate_.store(percent, std::memory_order_relaxed);
 }
 

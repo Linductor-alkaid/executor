@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
@@ -124,7 +125,9 @@ public:
 private:
     void evict_lru_if_needed();  ///< LRU 淘汰
 
-    Config config_;
+    // CR-063: config 以不可变快照发布（原子指针替换）。此前 update_config
+    // 持 cache_mutex_ 写、多个读路径无锁读，构成数据竞争（TSAN 实证）。
+    std::shared_ptr<const Config> config_snapshot_;
     mutable std::shared_mutex cache_mutex_;
     std::unordered_map<std::string, KernelParamCacheEntry> param_cache_;
 

@@ -514,3 +514,42 @@
 - **执行中发现并已修正的中间回归**：CR-011 首版用具名 tuple（要求元素可默认构造/可赋值）造成 tracked 提交 API 编译回归，复验抓出后改为 `std::optional::emplace`（对元素要求与原语义一致）。
 - **验证有效性备注**：复验 agent 发现 build/ 与 build-tsan/ 曾存在旧库二进制（时间戳早于源码改动），已重建后复验——后续验证一律先确认库新鲜度。
 - 既有环境性问题（非本次回归，已定位）：`benchmark_lockfree_task_executor` ASAN P99 阈值贴边（基线同样超限）；test_thread_pool/test_realtime_thread_executor 在满载 ctest 下偶发超时（单跑与 8× 压力下不复现）。建议 Phase 3 一并处理（放宽 ASAN 阈值或标注性能测试非并发安全）。
+
+---
+
+## Phase 2 修复执行记录（2026-10-01）
+
+全部 24 项已实施并经两个 Independent-Verification-Agent 并行复验：23 项运行时/diff 证据确认 FIXED，CR-044 复验抓出编译排序缺陷后修正并转绿。回归状态：普通构建 161/161；ASAN/TSAN 套件仅剩已记录的既有贴边项（benchmark P99 阈值、TSAN 负载超时）。
+
+| 项 | 修复内容 | 复验判定 | 关键证据 |
+|---|---|---|---|
+| CR-025 | 批内 submit_time_ns 逐个递增 | FIXED | 单 worker 端到端 1600/1600 位置无乱序（修复前 6200/6400） |
+| CR-117 | resizer 用有效容量（cap=0 → kDefaultCapacitySlots） | FIXED | cap=0 下扩缩容行为与 cap=100 一致 |
+| CR-021/023 | resize 监控线程与 worker dispatch 异常屏障 | FIXED | diff 审查（catch + exception_handler_ 记录） |
+| CR-014 | ~ThreadPool/~ExecutorManager 析构排空 try/catch | FIXED | diff 审查 |
+| CR-040 | 置换路径 64 次有界自旋重试 + DropPolicy best-effort 契约注释 | FIXED | DropOldest 忙消费者失败 20999→**0**；KeepLatest 恒满最新序号 0 丢失 |
+| CR-042 | options 层 max_items=0 回退默认 64 | FIXED | 配 0 单次 drain=64（修复前 5000） |
+| CR-060 | kHeaderSize 提升为 kAlignment | FIXED | 40/40 指针 %256==0（修复前 %16==8）；test_gpu_defragment 布局镜像同步更新 |
+| CR-061 | select_best_device 初值公式统一 | FIXED | 正/反向迭代序均选对（新增 _fixed2 反向变体对旧代码验证有效） |
+| CR-062 | remove_task 级联 + completed_tasks_ 按反向依赖索引回收 | FIXED | remove 后下游不再 ready；100 万次 RSS +0.2MB（修复前 +72.3MB） |
+| CR-063 | 两个 optimizer config 原子快照 | FIXED | TSAN 3 轮 0 报告（修复前 10/10/9） |
+| CR-070 | 格式化器补换行 | FIXED | 0 畸形行 |
+| CR-073 | TaskMonitor 虚析构 | FIXED | 警告消除 |
+| CR-074 | 采样率先钳制再转换 | FIXED | -1.0/NaN → 0%（修复前 -1.0→100%） |
+| CR-075 | 缩容驱逐独立计数 | FIXED | 完成后 incomplete=false |
+| CR-005 | park_worker 改 fetch_or（含返回值误用的执行中修正） | FIXED | 0 丢失唤醒签名；IdleWorkerParks 通过；A/B 基准实证消除基线的 P99 秒级尖峰 |
+| CR-030 | nice 经弱符号 pthread_gettid_np 定向目标线程 | FIXED（平台受限） | 主线程污染消除（5/5 轮 main nice 不变）；**glibc 不导出该符号**，跨线程定向诚实失败——自线程路径（RT 执行器）正常生效；ThreadPool 控制线程设 worker nice 场景留待后续（worker 启动自设方案） |
+| CR-031 | worker 归还前清空 callable | FIXED | 无滞留、析构线程=worker |
+| CR-034 | register_state 拒绝重复 id | FIXED | 第二次注册返回 false，原条目取消语义保持 |
+| CR-013 | no-create 只读 getter + 懒创建失败闩存 | FIXED | 只读诊断线程数 1→1（修复前 1→5） |
+| CR-044 | 补齐 aligned/nothrow operator new/delete 变体（含 MSVC 分支） | FIXED | 复验抓出定义后置的编译缺陷（guard 宏本地不开、逃过本地检查），修正后：对齐 new 计数=1、Abort 生效 |
+| CR-050 | 定时器线程三处外呼异常隔离 | FIXED | diff 审查（持锁点 catch 走 continue） |
+| CR-024 | 严格优先级饿死与本地队列倒置窗口文档化 | FIXED | 契约注释落地 |
+| CR-021 附带 | test_executor_snapshot 软超时脆弱性修复（内层 promise 与外层 future 赛跑 + 5 次重试） | FIXED | 负载并发 100+ 轮 0 挂死（修复前 ~1/20；resolve 升级定位：非库缺陷，预存在测试脆弱性，Phase 2 改变负载形状使其显形） |
+
+### 残余风险与新发现（记录）
+
+- **NN-09 KeepLatest 饱和语义**：`recycle_all_for_write()` 每次置换丢弃整个队列内容——饱和下"保留最新 capacity 条"实际退化为"保留最新 1 条"，overwritten 计数少计。**HEAD 既有行为，非本次回归**；验收判据（最新不丢、不误拒）已满足，语义口径建议单列后续项。
+- **NN-10 CR-030 平台限制**：glibc 无 pthread_gettid_np（弱符号为 nil），跨线程 nice 定向诚实失败。方向：worker 启动自设 nice（对齐 RT 执行器 self_handle 模式）。
+- **NN-11 test_executor_facade** 负载下 80 轮出现 2 次非挂断 rc=1（未复现、非本批改动文件），留观察。
+- **教训**：guard 宏路径（EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD）不在本地默认构建中，本次逃过编译检查——后续涉及该宏的改动必须带宏编译验证（CI 已有专门 job 覆盖）。

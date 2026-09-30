@@ -38,7 +38,9 @@ using namespace executor::gpu;
 
 namespace {
 constexpr size_t kAlignment = 256;
-constexpr size_t kHeader = sizeof(size_t);
+// CR-060: header 已提升为一个完整对齐单位（此前 sizeof(size_t)=8 导致用户
+// 指针只有 8 字节对齐），此处的池布局镜像与实现保持同步。
+constexpr size_t kHeader = kAlignment;
 inline size_t aligned_size(size_t s) { return (s + kAlignment - 1) & ~(kAlignment - 1); }
 inline size_t block_size(size_t s) { return aligned_size(s) + kHeader; }
 }  // namespace

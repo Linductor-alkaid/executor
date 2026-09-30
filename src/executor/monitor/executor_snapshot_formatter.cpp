@@ -214,7 +214,9 @@ void write_executor_snapshot(Output& output, const ExecutorSnapshot& snapshot) {
         write_bool(output, status.memory_locked);
         output << "\nrealtime[" << name << "].timer_slack_applied=";
         write_bool(output, status.timer_slack_applied);
-        output << "realtime[" << name << "].dropped_task_count=" << status.dropped_task_count << '\n';
+        // CR-070: 此处缺 '\n' 曾把布尔值与下一个 key 拼成
+        // `...applied=truerealtime[rt].dropped_...`，破坏 line-oriented 契约。
+        output << "\nrealtime[" << name << "].dropped_task_count=" << status.dropped_task_count << '\n';
         output << "realtime[" << name << "].failed_pushes=" << status.failed_pushes << '\n';
         output << "realtime[" << name << "].peak_queue_size=" << status.peak_queue_size << '\n';
         output << "realtime[" << name << "].queue_capacity=" << status.queue_capacity << '\n';

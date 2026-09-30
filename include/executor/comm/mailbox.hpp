@@ -260,11 +260,18 @@ public:
 
     template <class Fn>
     size_t drain_for_cycle(Fn&& handler, size_t max_items = 0) {
-        const size_t budget = max_items == 0 ? options_.max_items_per_cycle : max_items;
-        const bool unlimited = budget == 0;
+        // CR-042: 参数层 0 = "取 options 配置"；options 层 0 一律回退到内置
+        // 默认值。此前 options 配 0 会静默变成"无限制 drain"——与参数层的
+        // 0 语义相反，也与 RT 周期预算模型相悖。
+        constexpr size_t kDefaultMaxItemsPerCycle = 64;
+        const size_t configured_budget =
+            options_.max_items_per_cycle == 0
+                ? kDefaultMaxItemsPerCycle
+                : options_.max_items_per_cycle;
+        const size_t budget = max_items == 0 ? configured_budget : max_items;
 
         size_t drained = 0;
-        while (unlimited || drained < budget) {
+        while (drained < budget) {
             auto item = queue_.try_pop();
             if (!item) break;
             try {

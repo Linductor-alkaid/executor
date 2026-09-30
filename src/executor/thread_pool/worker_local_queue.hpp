@@ -22,6 +22,10 @@ namespace executor {
  */
 class WorkerLocalQueue {
 public:
+    /// capacity == 0 时使用的回退槽位数（CR-117：阈值计算必须与实际容量一致，
+    /// ThreadPoolResizer 等消费方一律经 effective_queue_capacity() 取值）。
+    static constexpr size_t kDefaultCapacitySlots = 100;
+
     /**
      * @brief 构造函数
      *

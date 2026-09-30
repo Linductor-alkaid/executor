@@ -11,6 +11,7 @@
 #include <new>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -80,24 +81,38 @@ public:
 
         Node* node = acquire_node();
         bool displaced = false;
+        // CR-040: KeepLatest/DropOldest 的置换路径与在途消费者（ConsumerLease
+        // 占用）及并发生产者（promotion 要求 active==1）存在固有竞争窗口。
+        // 此前任一步失败即丢弃"新值"——与策略承诺（保最新/弃最旧）正好相反。
+        // 改为有界自旋重试：消费/认领窗口只有几条指令，竞争在几十次让步内
+        // 必然化解；重试耗尽才按满队丢弃（此时为 best-effort 降级，头文件
+        // 契约注释与 channels.md 已说明）。EnqueueLease 的 promotion/consumer
+        // 认领是粘性的，重试不会重复登记也不会泄漏。
         if (node == nullptr && drop_policy_ != DropPolicy::RejectNewest) {
-            if (drop_policy_ == DropPolicy::KeepLatest &&
-                !lease.try_promote_to_replacement()) {
-                if (record_full_rejection) record_drop(event);
-                return false;
-            }
-            if (!lease.try_acquire_consumer()) {
-                if (record_full_rejection) record_drop(event);
-                return false;
-            }
+            constexpr int kDisplaceRetryAttempts = 64;
+            for (int attempt = 0; attempt < kDisplaceRetryAttempts; ++attempt) {
+                if (drop_policy_ == DropPolicy::KeepLatest &&
+                    !lease.try_promote_to_replacement()) {
+                    std::this_thread::yield();
+                    continue;
+                }
+                if (!lease.try_acquire_consumer()) {
+                    std::this_thread::yield();
+                    continue;
+                }
 
-            // A consumer may have released capacity after the first scan.
-            node = acquire_node();
-            if (node == nullptr) {
-                node = drop_policy_ == DropPolicy::KeepLatest
-                           ? recycle_all_for_write()
-                           : recycle_oldest_for_write();
-                displaced = node != nullptr;
+                // A consumer may have released capacity after the first scan.
+                node = acquire_node();
+                if (node == nullptr) {
+                    node = drop_policy_ == DropPolicy::KeepLatest
+                               ? recycle_all_for_write()
+                               : recycle_oldest_for_write();
+                    displaced = node != nullptr;
+                }
+                if (node != nullptr) {
+                    break;
+                }
+                std::this_thread::yield();
             }
         }
 
