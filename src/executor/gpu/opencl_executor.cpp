@@ -257,6 +257,35 @@ bool OpenCLExecutor::initialize_opencl() {
     auto funcs = loader_->get_functions();
     cl_int err;
 
+    // CR-003: stop() 不释放 OpenCL 资源（避免释放仍有在飞命令的队列）。
+    // 此前重启时 context_ 被直接覆盖（每轮 start/stop 泄漏一个
+    // cl_context）、queues_ 逐轮 push_back 无界增长且 stream_id 语义漂移。
+    // 重启入口一次性收编上一代资源：先对每个存活队列 clFinish 等待在飞
+    // 命令完成（对齐 CUDA stop 的 synchronize 语义），再整体释放。
+    {
+        bool has_previous_generation = false;
+        {
+            std::lock_guard<std::mutex> lock(queues_mutex_);
+            has_previous_generation = !queues_.empty();
+        }
+        if (!has_previous_generation && context_ != nullptr) {
+            has_previous_generation = true;
+        }
+        if (has_previous_generation) {
+            {
+                std::lock_guard<std::mutex> lock(queues_mutex_);
+                for (auto& queue_wrapper : queues_) {
+                    if (!queue_wrapper || !queue_wrapper->queue) {
+                        continue;
+                    }
+                    std::lock_guard<std::mutex> queue_lock(queue_wrapper->mutex);
+                    funcs.clFinish(queue_wrapper->queue);
+                }
+            }
+            cleanup_locked();
+        }
+    }
+
     // 获取平台
     cl_uint num_platforms;
     err = funcs.clGetPlatformIDs(0, nullptr, &num_platforms);

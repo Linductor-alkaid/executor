@@ -337,6 +337,9 @@ bool CudaExecutor::start() {
 #ifdef EXECUTOR_ENABLE_CUDA
     if (!loader_->is_available()) {
         set_last_error("CUDA loader is unavailable");
+        // CR-002: is_running_=true 窗口内的提交必须落终态，否则队列无消费者、
+        // stop()/wait_for_completion() 永久挂死（下同）。
+        fail_all_queued_tasks("CudaExecutor: start failed (CUDA loader is unavailable)");
         is_running_.store(false);
         return false;
     }
@@ -344,6 +347,8 @@ bool CudaExecutor::start() {
     auto funcs = loader_->get_functions();
     if (funcs.cudaStreamCreate == nullptr || funcs.cudaStreamDestroy == nullptr) {
         set_last_error("CUDA stream create/destroy symbols are unavailable");
+        fail_all_queued_tasks(
+            "CudaExecutor: start failed (stream symbols unavailable)");
         is_running_.store(false);
         return false;
     }
@@ -365,6 +370,8 @@ bool CudaExecutor::start() {
                 if (get_last_error().empty()) {
                     set_last_error("CUDA default stream creation failed");
                 }
+                fail_all_queued_tasks(
+                    "CudaExecutor: start failed (default stream creation failed)");
                 is_running_.store(false);
                 return false;
             }
@@ -393,7 +400,10 @@ bool CudaExecutor::start() {
     try {
         worker_thread_ = std::thread(&CudaExecutor::worker_thread_func, this);
         worker_joined_ = false;
+        worker_started_.store(true, std::memory_order_release);
     } catch (...) {
+        fail_all_queued_tasks(
+            "CudaExecutor: start failed (worker thread creation failed)");
         is_running_.store(false, std::memory_order_release);
         set_last_error("CUDA worker thread creation failed");
         worker_joined_ = true;
@@ -401,6 +411,7 @@ bool CudaExecutor::start() {
     }
 #else
     set_last_error("CUDA support is not enabled");
+    fail_all_queued_tasks("CudaExecutor: start failed (CUDA not enabled)");
     is_running_.store(false);
     return false;
 #endif
@@ -409,6 +420,25 @@ bool CudaExecutor::start() {
     // Reopen dependency-waiter admission only after startup succeeds.
     start_waiter_generation();
     return true;
+}
+
+void CudaExecutor::fail_all_queued_tasks(const std::string& message) {
+    // CR-002: 供 start() 半途失败路径调用。此刻 worker 未启动，队列中的
+    // 任务永远无人消费——逐个 set_exception 落终态并唤醒排空等待者，
+    // 否则 stop() → wait_for_completion() 在 queue_drained_cv_ 上永久挂死。
+    std::exception_ptr eptr = std::make_exception_ptr(std::runtime_error(message));
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        while (!task_queue_.empty()) {
+            auto& top = const_cast<GpuQueuedTask&>(task_queue_.top());
+            GpuQueuedTask task = std::move(top);
+            task_queue_.pop();
+            if (task.promise) {
+                task.promise->set_exception(eptr);
+            }
+        }
+    }
+    queue_drained_cv_.notify_all();
 }
 
 void CudaExecutor::stop() {
@@ -458,6 +488,7 @@ bool CudaExecutor::stop_and_join() {
         std::lock_guard<std::mutex> stop_lock(stop_mutex_);
         worker_joined_ = true;
         worker_id_ = std::thread::id{};
+        worker_started_.store(false, std::memory_order_release);
     }
     return true;
 }
@@ -529,9 +560,18 @@ void CudaExecutor::wait_for_completion() {
 #ifdef EXECUTOR_ENABLE_CUDA
     {
         std::unique_lock<std::mutex> lock(queue_mutex_);
+        // CR-002: start() 半途失败时 worker 从未启动，队列中的任务无人排空，
+        // 谓词若只看 empty/active 会永久等待。worker_started_ 为 false（从未
+        // 启动，或上一轮已完整 join）时队列不可能再有消费者，直接退出；
+        // 正常 stop 路径 is_running_=false 但 worker 仍在排空，此时
+        // worker_started_ 仍为 true，不会提前返回。
         queue_drained_cv_.wait(lock, [this] {
-            return task_queue_.empty() && active_kernels_.load() == 0;
+            return (task_queue_.empty() && active_kernels_.load() == 0) ||
+                   !worker_started_.load(std::memory_order_acquire);
         });
+        if (!worker_started_.load(std::memory_order_acquire)) {
+            return;  // 无 worker 可同步，设备侧无在飞工作
+        }
     }
     synchronize();
 #endif

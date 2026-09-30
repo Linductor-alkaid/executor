@@ -150,6 +150,10 @@ private:
     /** worker 线程主循环 */
     void worker_thread_func();
 
+    /** CR-002: start() 半途失败时排空队列——对每个在途 promise set_exception，
+     *  使 stop()/wait_for_completion() 不因"无 worker 排空"而永久挂死。 */
+    void fail_all_queued_tasks(const std::string& message);
+
     /** 执行单任务（设备上下文、kernel、错误检查、promise、统计） */
     void run_one_task(GpuQueuedTask& task);
     void clear_last_error() const;
@@ -305,6 +309,10 @@ private:
     std::mutex stop_mutex_;                    // 串行化 start()/stop() 和 worker 句柄移交
     std::atomic<bool> self_stop_requested_{false};
     bool worker_joined_ = true;
+    // CR-002: worker 是否曾成功启动。start() 在建流/建线程之前就置
+    // is_running_=true，半途失败时队列中的任务无人消费——wait_for_completion
+    // 的排空谓词据此退出等待，而不是永久挂死。
+    std::atomic<bool> worker_started_{false};
 
     util::ExceptionHandler exception_handler_;  // 任务异常处理，与 CPU 执行器一致
 };

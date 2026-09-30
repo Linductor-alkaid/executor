@@ -170,25 +170,33 @@ bool TaskDependencyManager::dfs_path_exists(
     const std::string& start,
     const std::string& target,
     std::unordered_set<std::string>& visited) const {
-    
-    // 如果找到目标，说明存在路径
+
+    // CR-052: 递归实现的深度随依赖链长度无界增长（256KB 栈上 n≈4000 即
+    // SIGSEGV，8MB 栈约 9.6 万），且整段 DFS 在写锁内执行——改为显式栈
+    // 迭代，语义不变：沿依赖边从 start 是否可达 target。栈内存的是
+    // dependencies_ 内部字符串的指针，调用方持锁期间无变异，稳定。
     if (start == target) {
         return true;
     }
 
-    // 如果已访问过，跳过（避免重复访问）
-    if (visited.find(start) != visited.end()) {
-        return false;
-    }
-
+    std::vector<const std::string*> stack;
     visited.insert(start);
+    stack.push_back(&start);
 
-    // 递归检查所有依赖
-    auto it = dependencies_.find(start);
-    if (it != dependencies_.end()) {
+    while (!stack.empty()) {
+        const std::string* current = stack.back();
+        stack.pop_back();
+
+        auto it = dependencies_.find(*current);
+        if (it == dependencies_.end()) {
+            continue;
+        }
         for (const auto& dep : it->second) {
-            if (dfs_path_exists(dep, target, visited)) {
+            if (dep == target) {
                 return true;
+            }
+            if (visited.insert(dep).second) {
+                stack.push_back(&dep);
             }
         }
     }

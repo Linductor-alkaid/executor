@@ -1211,12 +1211,19 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
     auto promise_ready = std::make_shared<std::atomic_bool>(false);
     submission.future = promise->get_future();
 
+    // CR-012：派发/守卫闭包不再捕获 SerialExecutionContext& 裸引用，改持
+    // shared_state() 共享句柄。context 先于任务发布析构时（fire-and-forget
+    // 常见），Shared 已 detach：post_reserved 返回 false → publish_task 走
+    // 既有 ExecutorStopping 结算路径；abandon 为幂等空操作。不再存在对已
+    // 析构对象的触达（此前复现为 worker 永久 futex 挂死 + shutdown 挂死）。
+    auto context_state = context.shared_state();
+
     auto published_holder = std::make_shared<std::atomic_bool>(false);
 
     // 发布成功后 ticket 已被上下文消费；只有未发布路径需要 abandon 释放 FIFO。
-    auto complete_terminal = [&context, ticket = *ticket, published_holder]() {
+    auto complete_terminal = [context_state, ticket = *ticket, published_holder]() {
         if (!published_holder->load(std::memory_order_acquire)) {
-            context.abandon(ticket);
+            context_state->abandon(ticket);
         }
     };
 
@@ -1330,7 +1337,22 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
         bound = std::make_shared<decltype(std::bind(std::forward<F>(f), std::forward<Args>(args)...))>(
             std::bind(std::forward<F>(f), std::forward<Args>(args)...));
     } catch (...) {
-        context.abandon(*ticket);
+        // CR-010：bind 的 decay-copy 抛异常时，registry 槽位（:register_state）、
+        // admission 计数与图节点均已登记。此前只 abandon ticket 直接 rethrow，
+        // registry active 条目与 Pending 节点永久泄漏（65536 次失败后可取消
+        // 提交整体失效）。对齐 executor-not-initialized 路径的终态化顺序：
+        // try_reject（sink 内 release_admission + settle + complete_terminal）
+        // → mark graph failed → record → finalize → complete_terminal → throw。
+        auto exception = std::current_exception();
+        release_admission();
+        state->try_reject();
+        settle_exception(exception);
+        mark_task_graph_failed(handle, exception,
+                               "Serial dispatch argument binding failed");
+        record_submit_rejected(executor_name, handle.id(),
+                               "Serial dispatch argument binding failed", exception);
+        cancellation_registry_->finalize(handle.id());
+        complete_terminal();
         throw;
     }
 
@@ -1428,7 +1450,7 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
     // 派发任务被池丢弃（shutdown(false) 清队列）时释放 ticket 并兜底结算。
     // 经 shared_ptr 共享，闭包拷贝不会提前触发析构。
     struct TicketGuard {
-        SerialExecutionContext* context;
+        std::shared_ptr<typename SerialExecutionContext::Shared> context;
         SerialExecutionContext::Ticket ticket;
         std::shared_ptr<std::atomic_bool> published;
         std::shared_ptr<TaskCancellationState> state;
@@ -1464,7 +1486,7 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
         }
     };
     auto guard = std::make_shared<TicketGuard>();
-    guard->context = &context;
+    guard->context = context_state;
     guard->ticket = *ticket;
     guard->published = published_holder;
     guard->state = state;
@@ -1473,7 +1495,8 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
     guard->owner = this;
     guard->handle = handle;
 
-    auto publish_task = [this, handle, state, executor_name, &context, ticket = *ticket,
+    auto publish_task = [this, handle, state, executor_name, context_state,
+                         ticket = *ticket,
                          promise, promise_ready, published_holder, complete_terminal,
                          release_admission,
                          guard, serial_callback = std::move(serial_callback)]() mutable {
@@ -1484,7 +1507,7 @@ auto Executor::submit_on_with_handle(SerialExecutionContext& context, F&& f, Arg
 
         mark_task_graph_running(handle);
         const bool accepted =
-            context.post_reserved(ticket, std::move(serial_callback));
+            context_state->post_reserved(ticket, std::move(serial_callback));
         published_holder->store(true, std::memory_order_release);
         if (accepted) {
             // 业务 future 由串行线程按 ticket 顺序结算；发布不等待 callback，
@@ -1971,9 +1994,39 @@ auto Executor::submit_tracked_with_hook(
         complete_terminal();
     };
 
+    // CR-011：make_tuple 的 decay-copy（含 reference_wrapper 解包语义，类型
+    // 须经 decltype 精确保留）是 tracked 提交在注册之后唯一现实可抛的构造
+    // 步骤——此前异常直接穿出，registry 槽位、admission 计数与图节点全部
+    // 泄漏，上游 dependents 反向边永不摘除导致任务图无界增长。
+    // 经 optional::emplace 原地构造：不要求元素类型可默认构造/可赋值（直用
+    // 具名 tuple 会造成 API 回归，复验时已实测），对元素的要求与原 lambda
+    // 捕获的移动语义完全一致。
+    using BoundArgs = decltype(std::make_tuple(std::declval<Args>()...));
+    std::optional<BoundArgs> bound_args;
+    try {
+        bound_args.emplace(std::make_tuple(std::forward<Args>(args)...));
+    } catch (...) {
+        auto exception = std::current_exception();
+        release_admission();
+        state->try_reject();
+        bool expected = false;
+        if (promise_ready->compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            promise->set_exception(exception);
+        }
+        mark_task_graph_failed(handle, exception,
+                               "Tracked task argument binding failed");
+        record_submit_rejected(executor_name, handle.id(),
+                               "Tracked task argument binding failed", exception);
+        cancellation_registry_->finalize(handle.id());
+        complete_terminal();
+        throw;
+    }
+
     auto invoke_user_callable =
         [f = std::forward<F>(f),
-         args_tuple = std::make_tuple(std::forward<Args>(args)...),
+         args_tuple = std::move(*bound_args),
          state](StopToken token) mutable -> return_type {
         if constexpr (kInjectToken) {
             return std::apply(

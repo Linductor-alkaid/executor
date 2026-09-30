@@ -323,18 +323,45 @@ void LockFreeTaskExecutor::set_before_publish_hook(BeforePublishHook hook, void*
     // 恢复需要消费者活动触发——这里装一层 trampoline，进入 hook 前
     // 定向唤醒驻停的 worker，保证停滞窗口内消费者至少完成一轮 pop
     // 维护。无 hook 时零开销（trampoline 不安装）。
-    user_before_publish_hook_ = hook;
-    user_before_publish_context_ = context;
+    // CR-004：用户 hook/context 此前是两个普通字段，trampoline 在生产者
+    // 线程二次读取，与并发的 set 构成数据竞争（TSAN 下已复现
+    // call-through-null 崩溃）。改为单一原子指针发布不可变快照：写者只
+    // 替换指针，读者（生产者线程）一次加载后经本地副本调用，看到的一定
+    // 是完整且不再变化的 (hook, context) 对。快照节点按配置去重且不释放
+    // （无法确认旧指针不再被生产者持有），所有权挂在 user_before_publish_states_。
     if (hook == nullptr) {
+        user_before_publish_state_.store(nullptr, std::memory_order_release);
         queue_->set_before_publish_hook(nullptr, nullptr);
         return;
     }
+    BeforePublishHookState* node = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(user_before_publish_states_mutex_);
+        for (auto& state : user_before_publish_states_) {
+            if (state->hook == hook && state->context == context) {
+                node = state.get();
+                break;
+            }
+        }
+        if (node == nullptr) {
+            auto created = std::make_unique<BeforePublishHookState>();
+            created->hook = hook;
+            created->context = context;
+            node = created.get();
+            user_before_publish_states_.push_back(std::move(created));
+        }
+    }
+    user_before_publish_state_.store(node, std::memory_order_release);
     queue_->set_before_publish_hook(
         [](void* self) {
             auto* exec = static_cast<LockFreeTaskExecutor*>(self);
             exec->wake_worker_if_parking();
-            if (exec->user_before_publish_hook_) {
-                exec->user_before_publish_hook_(exec->user_before_publish_context_);
+            // 一次原子加载快照；即使并发 set 换掉了当前指针，本线程取得的
+            // 节点仍完整有效（节点不可释放），不存在检查与调用之间的撕裂。
+            const auto* state =
+                exec->user_before_publish_state_.load(std::memory_order_acquire);
+            if (state != nullptr) {
+                state->hook(state->context);
             }
         },
         this);
