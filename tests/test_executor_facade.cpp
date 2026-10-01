@@ -451,9 +451,11 @@ bool test_submit_periodic() {
     
     TEST_ASSERT(!task_id.empty(), "Task ID should not be empty");
     
-    // 等待几个周期
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    
+    // 等待几个周期。217ms 刻意落在 50ms 网格之间：网格锚定后第 4 个 tick
+    // 的 deadline 恰为 200ms 整，若在 200ms 整点 cancel，会与已注册的在途
+    // tick 竞速（cancel 不追回已登记 tick 是既定契约），断言将被随机击穿。
+    std::this_thread::sleep_for(std::chrono::milliseconds(217));
+
     // 验证任务执行了多次
     int count = execution_count.load();
     TEST_ASSERT(count >= 3, "Task should execute at least 3 times");
