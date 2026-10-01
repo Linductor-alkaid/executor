@@ -42,9 +42,13 @@ set(EXECUTOR_LIB_SOURCES "${EXECUTOR_SOURCES}" CACHE INTERNAL "executor library 
 if(EXECUTOR_BUILD_SHARED)
     # 库尚未声明任何 dllexport/可见性注解：MSVC 下 DLL 不会导出符号，
     # 消费者链接必然失败。在配置期显式拒绝，而不是构建出一个不可用的 DLL。
-    if(MSVC)
+    # CR-086: 守卫覆盖 MSVC 与非 MinGW 的 WIN32 工具链（clang-cl 会同时命中
+    # 两者；clang-gnu-on-Windows 只命中后者）——MinGW 默认全符号导出，不在
+    # 拒绝之列。
+    if(MSVC OR (WIN32 AND NOT MINGW))
         message(FATAL_ERROR
-            "EXECUTOR_BUILD_SHARED=ON is not supported with MSVC: the library does "
+            "EXECUTOR_BUILD_SHARED=ON is not supported with this Windows toolchain "
+            "(MSVC/clang on Windows): the library does "
             "not declare dllexport annotations, so the DLL would export no symbols "
             "and any consumer would fail to link. Use the default static build "
             "(EXECUTOR_BUILD_SHARED=OFF).")
@@ -77,6 +81,8 @@ executor_enable_warnings(executor)
 target_include_directories(executor
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include>
+        # CR-085: 生成的 executor/version.hpp 位于根二进制目录
+        $<BUILD_INTERFACE:${EXECUTOR_GENERATED_INCLUDE_DIR}>
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
@@ -147,10 +153,9 @@ endif()
 target_compile_features(executor PUBLIC cxx_std_20)
 
 if(EXECUTOR_BUILD_TESTS)
-    # 该宏会改变 ThreadPool 的类布局（在类内追加测试钩子成员），库与所有
-    # 直接包含 thread_pool.hpp 的编译单元必须看到同一布局，否则违反 ODR。
-    # 因此对构建树内全部目标保持 PUBLIC；用 BUILD_INTERFACE genexp 保证
-    # 宏不进入安装导出的 executorTargets.cmake，下游不会被注入该定义。
+    # NN-01 修复后该宏不再影响 ThreadPool 类布局（测试钩子无条件存在），
+    # 仅为兼容既有测试 TU 保留定义；BUILD_INTERFACE genexp 保证宏不进入
+    # 安装导出的 executorTargets.cmake，下游不会被注入该定义。
     target_compile_definitions(executor PUBLIC
         $<BUILD_INTERFACE:EXECUTOR_THREAD_POOL_TEST_HOOKS>)
 endif()
@@ -222,3 +227,25 @@ install(DIRECTORY executor/gpu/
     FILES_MATCHING PATTERN "*.hpp"
     PATTERN "*.cpp" EXCLUDE
 )
+
+# CR-084: gpu 头文件的依赖闭包必须一并安装——cuda_executor.hpp / opencl_executor.hpp
+# 相对包含 ../util/exception_handler.hpp，缺失时下游包含 gpu 头直接编译失败。
+# （util 头仅依赖标准库，闭包到此为止；CI/本地由 install_headers_smoke 测试兜底。）
+install(DIRECTORY executor/util/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/executor/util
+    FILES_MATCHING PATTERN "*.hpp"
+    PATTERN "*.cpp" EXCLUDE
+)
+
+# CR-080: 库的覆盖率插桩。Coverage.cmake 在 add_subdirectory(src) 之前 include，
+# 旧版 include 期 if(TARGET executor) 恒假导致库从未被插桩；改为目标创建后显式调用。
+if(COMMAND executor_apply_coverage_to_target)
+    executor_apply_coverage_to_target(executor)
+    # 库插桩后，消费方可执行文件（tests/examples/find_package 下游）链接时也必须
+    # 引入 gcov 运行时，否则 undefined reference to __gcov_init/__gcov_exit/
+    # __gcov_merge_add（静态库的插桩符号在最终链接落地）。INTERFACE 让所有
+    # 链接 executor 的目标自动继承，无需逐个补 flags。
+    if(EXECUTOR_ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_link_options(executor INTERFACE --coverage)
+    endif()
+endif()

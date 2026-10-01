@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../../../include/executor/interfaces.hpp"
-#include "../../../include/executor/config.hpp"
-#include "../../../include/executor/types.hpp"
+#include <executor/interfaces.hpp>
+#include <executor/config.hpp>
+#include <executor/types.hpp>
 #include "opencl_loader.hpp"
 #include <memory>
 #include <string>

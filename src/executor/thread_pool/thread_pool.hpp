@@ -282,7 +282,10 @@ public:
         return static_cast<size_t>(timeout_count_.load(std::memory_order_relaxed));
     }
 
-#ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
+    // NN-01: 测试钩子无条件参与类布局（不再受 EXECUTOR_THREAD_POOL_TEST_HOOKS
+    // 控制）。此前宏只加在库构建上、测试 TU 可见性不受保证，宏不一致的 TU 与库
+    // 对同一类型布局理解不同，构成 ODR 违例（复现为 ASAN stack-buffer-overflow）。
+    // 三个空 std::function 的常驻成本可忽略，换来布局与宏彻底解耦。
     void set_worker_queue_create_hook_for_test(std::function<void(size_t)> hook) {
         worker_queue_create_hook_for_test_ = std::move(hook);
     }
@@ -294,7 +297,6 @@ public:
     void set_worker_entry_hook_for_test(std::function<void(size_t)> hook) {
         worker_entry_hook_for_test_ = std::move(hook);
     }
-#endif
 
 private:
     /**
@@ -536,11 +538,10 @@ private:
     std::condition_variable resize_monitor_cv_;
     mutable std::mutex resize_monitor_mutex_;
 
-#ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
+    // NN-01: 测试钩子无条件参与类布局（见类上方 setter 处说明），宏不再影响布局
     std::function<void(size_t)> worker_queue_create_hook_for_test_;
     std::function<void(size_t)> worker_thread_start_hook_for_test_;
     std::function<void(size_t)> worker_entry_hook_for_test_;
-#endif
 };
 
 // 模板方法实现

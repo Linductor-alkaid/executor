@@ -32,6 +32,8 @@ Makefile
 !cmake/Sanitizers.cmake
 !cmake/executorConfig.cmake
 !cmake/Coverage.cmake
+# CR-084 安装树冒烟测试脚本（ctest install_headers_smoke 的 -P 入口）
+!tests/install_headers_smoke.cmake
 
 # IDE配置文件
 .vscode/

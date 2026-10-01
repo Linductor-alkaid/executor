@@ -194,16 +194,7 @@ target_include_directories(test_comm_harness_foundation PRIVATE
 if(MSVC)
     target_compile_options(test_comm_harness_foundation PRIVATE /utf-8)
 endif()
-if(EXECUTOR_ENABLE_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(test_comm_harness_foundation PRIVATE
-            --coverage
-            -fprofile-arcs
-            -ftest-coverage
-        )
-        target_link_options(test_comm_harness_foundation PRIVATE --coverage)
-    endif()
-endif()
+executor_apply_coverage_to_test(test_comm_harness_foundation)
 add_test(NAME test_comm_harness_foundation COMMAND test_comm_harness_foundation)
 set_tests_properties(test_comm_harness_foundation PROPERTIES
     LABELS "unit;harness"
@@ -217,16 +208,7 @@ target_link_libraries(test_comm_facade_usage PRIVATE executor GTest::GTest GTest
 if(MSVC)
     target_compile_options(test_comm_facade_usage PRIVATE /utf-8)
 endif()
-if(EXECUTOR_ENABLE_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(test_comm_facade_usage PRIVATE
-            --coverage
-            -fprofile-arcs
-            -ftest-coverage
-        )
-        target_link_options(test_comm_facade_usage PRIVATE --coverage)
-    endif()
-endif()
+executor_apply_coverage_to_test(test_comm_facade_usage)
 add_test(NAME test_comm_facade_usage COMMAND test_comm_facade_usage)
 set_tests_properties(test_comm_facade_usage PROPERTIES
     LABELS "unit;harness"
@@ -308,17 +290,8 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         target_compile_options(${TEST_NAME} PRIVATE /utf-8)
     endif()
     
-    # 应用覆盖率选项（如果启用）
-    if(EXECUTOR_ENABLE_COVERAGE)
-        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-            target_compile_options(${TEST_NAME} PRIVATE
-                --coverage
-                -fprofile-arcs
-                -ftest-coverage
-            )
-            target_link_options(${TEST_NAME} PRIVATE --coverage)
-        endif()
-    endif()
+    # 应用覆盖率选项（如果启用）——复用 Coverage.cmake 的统一入口（NN-08）
+    executor_apply_coverage_to_test(${TEST_NAME})
     
     # 添加测试
     if(TEST_NAME STREQUAL "test_gpu_memory_validation")
@@ -525,16 +498,7 @@ target_include_directories(test_dispatch_task_fallback PRIVATE
 if(MSVC)
     target_compile_options(test_dispatch_task_fallback PRIVATE /utf-8)
 endif()
-if(EXECUTOR_ENABLE_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(test_dispatch_task_fallback PRIVATE
-            --coverage
-            -fprofile-arcs
-            -ftest-coverage
-        )
-        target_link_options(test_dispatch_task_fallback PRIVATE --coverage)
-    endif()
-endif()
+executor_apply_coverage_to_test(test_dispatch_task_fallback)
 add_test(NAME test_dispatch_task_fallback COMMAND test_dispatch_task_fallback)
 set_tests_properties(test_dispatch_task_fallback PROPERTIES
     LABELS "unit"
@@ -549,16 +513,7 @@ target_include_directories(test_object_pool_double_release_detect PRIVATE
 if(MSVC)
     target_compile_options(test_object_pool_double_release_detect PRIVATE /utf-8)
 endif()
-if(EXECUTOR_ENABLE_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(test_object_pool_double_release_detect PRIVATE
-            --coverage
-            -fprofile-arcs
-            -ftest-coverage
-        )
-        target_link_options(test_object_pool_double_release_detect PRIVATE --coverage)
-    endif()
-endif()
+executor_apply_coverage_to_test(test_object_pool_double_release_detect)
 add_test(NAME test_object_pool_double_release_detect COMMAND test_object_pool_double_release_detect)
 set_tests_properties(test_object_pool_double_release_detect PROPERTIES
     LABELS "unit"
@@ -574,16 +529,7 @@ target_compile_definitions(test_object_pool_double_release_detect_ndebug PRIVATE
 if(MSVC)
     target_compile_options(test_object_pool_double_release_detect_ndebug PRIVATE /utf-8)
 endif()
-if(EXECUTOR_ENABLE_COVERAGE)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        target_compile_options(test_object_pool_double_release_detect_ndebug PRIVATE
-            --coverage
-            -fprofile-arcs
-            -ftest-coverage
-        )
-        target_link_options(test_object_pool_double_release_detect_ndebug PRIVATE --coverage)
-    endif()
-endif()
+executor_apply_coverage_to_test(test_object_pool_double_release_detect_ndebug)
 add_test(NAME test_object_pool_double_release_detect_ndebug COMMAND test_object_pool_double_release_detect_ndebug)
 set_tests_properties(test_object_pool_double_release_detect_ndebug PROPERTIES
     LABELS "unit"
@@ -594,3 +540,19 @@ set_tests_properties(test_object_pool_double_release_detect_ndebug PROPERTIES
 # 例如：
 # find_package(GTest REQUIRED)
 # target_link_libraries(test_name PRIVATE executor GTest::GTest GTest::Main)
+
+# CR-084 配套：安装树头文件冒烟——安装到临时 prefix 后编译包含全部已安装头的
+# 探针 TU，防止 install 规则再次遗漏依赖闭包。需要 GNU/Clang 直接驱动探针编译
+# （MSVC 环境需 cl 变量集，不注册；CI 的 ubuntu 矩阵与 Coverage job 覆盖）。
+if(NOT WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    add_test(NAME install_headers_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            -DBUILD_DIR=${CMAKE_BINARY_DIR}
+            -DCXX_COMPILER=${CMAKE_CXX_COMPILER}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/install_headers_smoke.cmake
+    )
+    set_tests_properties(install_headers_smoke PROPERTIES
+        LABELS "unit;packaging"
+        TIMEOUT 120
+    )
+endif()

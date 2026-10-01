@@ -5,7 +5,12 @@
 set -e  # 遇到错误立即退出
 
 # 默认参数
-VERSION="${VERSION:-0.5.2}"
+# CR-085: 版本默认值从根 CMakeLists.txt 的 project(VERSION) 提取（单一来源）；
+# 环境变量 VERSION / --version 参数仍可覆盖。
+_DEFAULT_VERSION="$(sed -n 's/^project(executor[[:space:]][^)]*VERSION \([0-9][0-9.]*\).*/\1/p' \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/CMakeLists.txt" | head -n1)"
+VERSION="${VERSION:-${_DEFAULT_VERSION:-0.0.0}}"
+unset _DEFAULT_VERSION
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 BUILD_STATIC="${BUILD_STATIC:-true}"
 BUILD_SHARED="${BUILD_SHARED:-true}"

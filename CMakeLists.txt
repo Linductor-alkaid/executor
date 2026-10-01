@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.16)
 project(executor LANGUAGES CXX VERSION 0.5.2)
 
+# CR-085: 版本单一来源。project(VERSION) 是唯一事实来源；这里生成代码侧可
+# include 的 executor/version.hpp（构建树经 executor 目标的 BUILD_INTERFACE
+# include 路径暴露，安装树经下方 install(FILES) 落到 include/executor/），
+# 打包脚本也从 CMakeLists.txt 提取默认版本，不再各自硬编码。
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.hpp.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/executor/version.hpp"
+    @ONLY
+)
+# 供 src/CMakeLists.txt 挂到 executor 目标的 BUILD_INTERFACE include 路径
+set(EXECUTOR_GENERATED_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+
 # C++ 标准设置
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -53,25 +65,13 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CompilerWarnings)
 
-# ThreadSanitizer 顶层开关（不依赖 Debug 构建类型）
-option(EXECUTOR_ENABLE_TSAN "Enable ThreadSanitizer (-fsanitize=thread)" OFF)
-if(EXECUTOR_ENABLE_TSAN)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-        add_compile_options(-fsanitize=thread -fno-omit-frame-pointer)
-        add_link_options(-fsanitize=thread)
-        message(STATUS "ThreadSanitizer enabled")
-    else()
-        message(WARNING "EXECUTOR_ENABLE_TSAN is only supported with GCC/Clang")
-    endif()
-endif()
-
-# 可选：包含 Sanitizers（用于调试构建）
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    include(Sanitizers OPTIONAL)
-endif()
+# Sanitizers 无条件包含（CR-083）：TSAN 顶层开关不依赖 Debug 构建类型（CI 的
+# Release+TSAN job 依赖此路径）；Debug 建议由模块内部告警表达，而非在根文件
+# 用构建类型门槛静默吞掉 Release 下的 sanitizer 请求。
+include(Sanitizers)
 
 # 可选：包含 Coverage（代码覆盖率）
-include(Coverage OPTIONAL)
+include(Coverage)
 
 # GPU/CUDA 支持检测
 if(EXECUTOR_ENABLE_GPU)
@@ -181,6 +181,11 @@ endif()
 
 # 安装配置（executor 目标已由 src/CMakeLists 安装并导出）
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+# CR-085: 安装 configure_file 生成的版本头（源码树没有对应文件，不能并入
+# install(DIRECTORY include/)）
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/executor/version.hpp"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/executor)
 
 # find_package(executor) 支持：生成并安装 executorConfig.cmake、executorConfigVersion.cmake
 include(CMakePackageConfigHelpers)
