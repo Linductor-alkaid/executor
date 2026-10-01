@@ -629,3 +629,8 @@ Phase 4 曾将 CR-135 按"文档化"处理（cv 化被 gcc-11 TSAN 缺口阻断�
 - **开发中抓出并修正的自伤**：初版把 `wait_for` 放在与 due 处理相同的锁作用域内——已弹出的到期闭包被拖到下一个期限才派发（`RescheduleChangesNextExpiryOnly` 5/5 确定性失败于 81ms，插桩实证 timer 侧 30.0ms 正确弹出、闭包 80ms 才执行）。重构为"有到期项立即派发，无到期项才等待"。
 - **量化收益（对照改造前，同 O2 构建）**：等待 CPU **0.7-1.0% 单核（无条件 1kHz，含零定时器）→ 0.024%（≈30 倍）**；到期抖动 p50 0.16ms → 0.16ms（睡眠过冲主导，持平）；新注册更早 deadline 感知延迟 p50 0.08 → 0.16ms（同过冲地板，持平）；注册路径 +notify 成本 ~20-60ns/op。
 - 定位：kIdleWaitMs=100ms 的语义从"死常量"恢复为真实的空闲兜底上界；kWakeSlice 删除。
+
+### 复验修正（同日，独立复验两项发现）
+
+1. **gcc-11 TSAN 论断错误（复验源码级证伪）**：初版声称 `wait_for(duration)` 走 `pthread_cond_timedwait` 可绕开 clockwait 缺口——实际 GCC ≥ 10 的 libstdc++ 把 `wait_for(duration)` 与 `wait_until(steady_clock)` **都**映射到 `pthread_cond_clockwait`（"wait_for→system_clock" 是 GCC 9 及更早的行为），该绕法在 CI 的 gcc-11 上无效。已改为**显式 `wait_until(lock, system_clock::now() + slice, pred)`**——system_clock 重载在所有 libstdc++ 版本均走 `pthread_cond_timedwait`；实时钟步进暴露已在注释中分析（循环顶部 steady 重算自愈）。CI TSAN job 已补入 test_timer_handle 作为 gcc-11 权威门禁。
+2. **periodic 漂移根因与修复**：初版实测周期抖动 826-1059µs avg（master 569-596µs），劣化 ~+45-78%。根因：周期分支 `next_execute_time = now + P` 以实际唤醒时刻锚定，每次唤醒过冲（~0.15ms）逐周期累积为漂移——旧 1ms 轮询的网格量化恰好掩盖了这一缺陷。修复为**理想网格锚定**：`next = entry.deadline + P`，已过期的周期按"错过不追补"跳到未来第一个格点（与 CR-051 结论的期限锚定语义一致）。实测周期抖动降到 **-47 ~ +24µs avg（p95 ≤ 55µs）**，比 master 好 20-50 倍。

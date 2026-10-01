@@ -688,9 +688,16 @@ private:
                     }
                     TimerRecord& record = *it->second;
                     if (record.periodic) {
-                        record.next_execute_time =
-                            now +
-                            std::chrono::milliseconds(record.interval_ms);
+                        // CR-135: 理想网格锚定——下次期限 = 本次"应到期时刻" +
+                        // 周期，而非实际唤醒时刻 + 周期。唤醒过冲（futex/调度
+                        // ~0.1-0.3ms）不再逐周期累积为漂移；错过多个周期的场景
+                        // 按"错过不追补"契约跳到未来第一个格点，不爆发补发。
+                        auto next = entry.deadline +
+                                    std::chrono::milliseconds(record.interval_ms);
+                        while (next <= now) {
+                            next += std::chrono::milliseconds(record.interval_ms);
+                        }
+                        record.next_execute_time = next;
                         ++record.generation;
                         heap_.push(TimerHeapEntry{record.next_execute_time,
                                                   entry.timer_id,
@@ -720,16 +727,16 @@ private:
                 // 请求取消不 notify：取消只会让睡眠目标变 stale，线程醒来
                 // 发现后重算即可（既有 lazy-deletion 契约）。
                 //
-                // 刻意用 wait_for(duration) 而非 wait_until(steady_clock)：
-                // libstdc++ 把后者映射到 pthread_cond_clockwait，而 gcc-11
-                // 时代的 libtsan 未拦截该原语，会把等待期间的解锁从影子状态
-                // 里漏掉，醒来重锁时误报 "double lock of a mutex"（gcc
-                // PR101978 / google/sanitizers#1259，CI 的 TSAN job 正是
-                // gcc-11）。wait_for 走 wait_until(system_clock) →
+                // 刻意用显式 wait_until(system_clock) 而非 wait_for(duration)
+                // 或 wait_until(steady_clock)：GCC ≥ 10 的 libstdc++ 把这两者
+                // 都映射到 pthread_cond_clockwait（CLOCK_MONOTONIC），而 gcc-11
+                // 时代的 libtsan 未拦截该原语，会把等待期间的解锁从影子状态里
+                // 漏掉，醒来重锁时误报 "double lock of a mutex"（gcc PR101978
+                // / google/sanitizers#1259，CI 的 TSAN job 正是 gcc-11）。
+                // system_clock 重载在所有 libstdc++ 版本都走
                 // pthread_cond_timedwait，TSAN 正常拦截。代价：实时钟步进
                 //（NTP）可能使某一次睡眠偏早/偏晚一个步进量——循环顶部用
                 // steady 重算，一步内自愈，对 ms 粒度 API 无感。
-                const auto slice = wake_at - clock::now();
                 if (popped == 0) {
                     if (!heap_.empty() && heap_.top().deadline < wake_at) {
                         wake_at = heap_.top().deadline;
@@ -737,7 +744,9 @@ private:
                     const auto slice = wake_at - clock::now();
                     if (slice > clock::duration::zero()) {
                         const uint64_t seen_epoch = schedule_epoch_;
-                        wake_cv_.wait_for(lock, slice, [&] {
+                        const auto wake_deadline =
+                            std::chrono::system_clock::now() + slice;
+                        wake_cv_.wait_until(lock, wake_deadline, [&] {
                             return schedule_epoch_ != seen_epoch ||
                                    generation->stop_requested.load(
                                        std::memory_order_acquire);
