@@ -1030,6 +1030,20 @@ bool ThreadPool::try_submit(std::function<void()> task,
         }
         executor_task.timeout_ms = config_.task_timeout_ms;
 
+        // NN-12: queued 诊断必须在 enqueue 之前补记。worker 不持有 mutex_，
+        // enqueue 后可在提交线程补记前取走任务并执行——record_task_start
+        // 查不到条目成为 no-op，条目以 Queued 状态在任务已运行时才创建，
+        // 快照 state_counts 缺 Running（CI 实测 test_executor_snapshot 因
+        // map::at abort）。入队前补记建立 queued→start→complete 严格顺序。
+        // 锁序 pool.mutex_ → monitor.mutex_（monitor 回调不反向取 pool 锁）。
+        if (monitor_on) {
+            try {
+                monitor->record_task_queued(monitor_id, "default", "default");
+            } catch (...) {
+                // Diagnostics must never turn an accepted task into a rejection.
+            }
+        }
+
         scheduler_.enqueue(std::move(executor_task));
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -1039,14 +1053,6 @@ bool ThreadPool::try_submit(std::function<void()> task,
     // 内联 dispatch(1) —— 满载下该内联派发与 worker 的自由扫描互相
     // 抢 dispatcher/scheduler/queue 锁，锁交接的调度延迟逐任务叠加。
     signal_work_added(false);
-
-    if (monitor_on) {
-        try {
-            monitor->record_task_queued(monitor_id, "default", "default");
-        } catch (...) {
-            // Diagnostics must never turn an accepted task into a rejection.
-        }
-    }
 
     return true;
 }
@@ -1103,20 +1109,21 @@ bool ThreadPool::try_submit_priority(
         }
         executor_task.timeout_ms = config_.task_timeout_ms;
 
+        // NN-12: 同 try_submit —— queued 诊断必须在 enqueue 之前补记。
+        if (monitor_on) {
+            try {
+                monitor->record_task_queued(monitor_id, "default", "default");
+            } catch (...) {
+                // Diagnostics must never turn an accepted task into a rejection.
+            }
+        }
+
         scheduler_.enqueue(std::move(executor_task));
         total_tasks_.fetch_add(1, std::memory_order_relaxed);
     }
 
     // PA-1: 同 try_submit —— 入队后唤醒一个 worker，不内联派发。
     signal_work_added(false);
-
-    if (monitor_on) {
-        try {
-            monitor->record_task_queued(monitor_id, "default", "default");
-        } catch (...) {
-            // Diagnostics must never turn an accepted task into a rejection.
-        }
-    }
 
     return true;
 }
@@ -1198,23 +1205,26 @@ bool ThreadPool::try_submit_batch(
             executor_task->timeout_ms = config_.task_timeout_ms;
         }
 
+        // NN-12: 撤销 PA-14 的"全局锁外补记"——worker 不持有 mutex_，锁外
+        // 补记可与取任务执行乱序（queued 晚于 start/complete），快照状态错、
+        // 甚至 complete 先擦除后补记导致诊断表滞留僵尸条目。入队前整批补记
+        // 恢复 queued→start→complete 顺序（锁序 pool.mutex_ → monitor.mutex_）。
+        if (monitor_on) {
+            for (const auto& id : monitor_ids) {
+                try {
+                    monitor->record_task_queued(id, "default", "default");
+                } catch (...) {
+                    // Diagnostics must never turn an accepted batch into a rejection.
+                }
+            }
+        }
+
         scheduler_.enqueue_batch(batched.data(), batch_size);
         total_tasks_.fetch_add(batch_size, std::memory_order_relaxed);
     }
 
     // PA-1: 批次语义唤醒全部。
     signal_work_added(true);
-
-    // PA-14(顺带): monitor 事件在全局锁外补记。
-    if (monitor_on) {
-        for (const auto& id : monitor_ids) {
-            try {
-                monitor->record_task_queued(id, "default", "default");
-            } catch (...) {
-                // Diagnostics must never turn an accepted batch into a rejection.
-            }
-        }
-    }
 
     // 批量分发（dispatch_batch 内部按搬运结果唤醒）
     dispatch_pending_tasks(batch_size);

@@ -362,6 +362,7 @@
 - **NN-06 CR-106 归因修正**：`get_executor_capabilities()` 本身仅 ~1µs；submit_auto 慢 65-70% 的主要开销在 `route_task` + `record_routing_decision`（互斥锁 + RoutingDecision 队列 + 字符串拷贝，executor.cpp:1532-1552）。
 - **NN-07 CR-004 升级**：TSAN 插桩下竞争已造成实际崩溃（`:339` 间接调用读到撕裂的 nullptr，SEGV pc=0x0），非纯技术性报告。
 - **NN-08** Coverage.cmake 的 `executor_apply_coverage_to_test()` 是死代码（tests/CMakeLists.txt 各处内联硬编码覆盖率标志，未复用该函数）。
+- **NN-12 ThreadPool queued 诊断乱序（master CI 实锤，2026-10-01）**：三条 submit 路径（try_submit / try_submit_priority / try_submit_batch）均在 `scheduler_.enqueue` + 唤醒之后才锁外补记 `record_task_queued`。worker 不持有 mutex_，可在补记前取走任务执行——`record_task_start` 查不到条目成为 no-op，诊断条目以 Queued 状态在任务已运行时才创建。快照 `in_flight_state_counts` 可能缺 Running/Queued 键，gtest 断言 `.at()` 抛 out_of_range 直接 terminate（test_executor_snapshot 在 ubuntu gcc Release 与 lockfree scheduled 两次 CI abort）；complete 先于补记时还会留下永不清理的僵尸 Queued 条目。审查漏网：Phase 2 触及 monitor 析构/驱逐计数，未覆盖 submit 侧记录顺序。
 
 ### 复现测试索引
 
@@ -553,3 +554,20 @@
 - **NN-10 CR-030 平台限制**：glibc 无 pthread_gettid_np（弱符号为 nil），跨线程 nice 定向诚实失败。方向：worker 启动自设 nice（对齐 RT 执行器 self_handle 模式）。
 - **NN-11 test_executor_facade** 负载下 80 轮出现 2 次非挂断 rc=1（未复现、非本批改动文件），留观察。
 - **教训**：guard 宏路径（EXECUTOR_ENABLE_REALTIME_ALLOCATION_GUARD）不在本地默认构建中，本次逃过编译检查——后续涉及该宏的改动必须带宏编译验证（CI 已有专门 job 覆盖）。
+
+## master CI 修复执行记录（2026-10-01，NN-12）
+
+Phase 2 合并（0963df5）后 master push 与 scheduled 两次 CI 失败，PR 上同代码全绿，均为条件触发：
+
+1. **test_executor_snapshot abort（ubuntu gcc Release + lockfree scheduled）**：进程启动 0.17s 内 `terminate called after throwing an instance of 'std::out_of_range (map::at)'`。根因 NN-12：`test_snapshot_reports_bounded_in_flight_tasks` 断言 `.at(Running)` 时，首任务已被 worker 执行但 `record_task_queued` 尚未在提交线程补记——诊断条目以 Queued 创建且无 Running 键。Phase 2 期间本地与 CI 均未命中（提交→补记窗口极窄，CI 2 核负载下放大）。
+2. **test_worker_local_queue_steal 超时（Windows MSVC Debug）**：10000 轮 × 固定 200µs 自旋窗口，2 核 runner + ctest 并行抢占下 sleep/自旋被放大数十倍，纯时长问题非正确性问题。
+
+修复：
+
+- **thread_pool.cpp 三处 submit 路径**：`record_task_queued` 移入 mutex_ 临界区、`enqueue` 之前（批量路径同步撤销 PA-14 的"全局锁外补记"），建立 queued→start→complete 严格顺序；同时消除 complete-先于-补记时诊断表滞留僵尸 Queued 条目的泄漏。锁序 pool.mutex_ → monitor.mutex_ 单向（monitor 回调从不反向取 pool 锁），无反转风险。
+- **test_executor_snapshot.cpp 断言加固**：worker 在结算 future 之后才清理诊断表（future 就绪 ≠ 快照已排水），复验在 14 核全超订阅下实测 :315/:402 两处 `in_flight_count == 0` 断言 ~40% 失败（旧有负载敏感，非本次引入）。新增 `wait_in_flight_drained()` 有界等待（50×2ms）替换三处立即断言（含 third/fourth 排水，保护 monitoring-off 断言语义纯净）。
+- **test_worker_local_queue_steal.cpp**：竞争窗口改为"批次耗尽即收尾，200µs 封顶"（等价覆盖 pop/steal 交错，去除空转）；轮数加 2s 墙钟预算（最少 128 轮下限），负载机器上测试时长有界。
+
+复验证据（Independent-Verification-Agent）：旧代码在 /tmp 副本注入 300µs 窗口后 10/10 重现 CI 同款 abort（gdb 定位 `:302 .at(Running)`）；新代码空载 200 连跑 + CI 级负载 100 连跑 0 abort；探针 3000 次迭代（含满载）0 错标、0 僵尸条目，旧注入版 100% 错标 + 3/300 僵尸条目。steal 测试满载 ~2s 有界。lockfree 变体（`EXECUTOR_LOCKFREE_QUEUE=ON` → `USE_LOCKFREE_WORKER_QUEUE`，即 CI scheduled job 的实际配置）33/33。ASAN/TSAN 抽查无新增报告。全量 161/161 对齐基线。
+
+预期：in-flight 状态计数在任意负载下可信（Queued 仅表示"尚未被 worker 取走"）；steal 测试在 2 核 Debug 下秒级完成。

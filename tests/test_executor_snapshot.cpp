@@ -20,9 +20,22 @@ using namespace executor;
         if (!(condition)) {                                                  \
             std::cerr << "FAILED: " << message << " at " << __FILE__       \
                       << ":" << __LINE__ << std::endl;                     \
-            return false;                                                    \
-        }                                                                    \
+            return false;                                                  \
+        }                                                                   \
     } while (0)
+
+// Worker 在结算 future 之后才清理诊断表（record_task_complete/timeout 的
+// 擦除发生在包装层 promise 结算之后）：future 就绪不代表快照已排水。极端
+// 负载下该间隙可达毫秒级，用有界等待替代立即断言（Phase 2 同款模式）。
+bool wait_in_flight_drained(Executor& executor, int max_attempts = 50) {
+    for (int attempt = 0; attempt < max_attempts; ++attempt) {
+        if (executor.get_snapshot().in_flight_count == 0) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    return executor.get_snapshot().in_flight_count == 0;
+}
 
 class IdleBlockingWorker final : public IBlockingIoWorker {
 public:
@@ -312,7 +325,7 @@ bool test_snapshot_reports_bounded_in_flight_tasks() {
     release->set_value();
     first.get();
     second.get();
-    TEST_ASSERT(executor.get_snapshot().in_flight_count == 0,
+    TEST_ASSERT(wait_in_flight_drained(executor),
                 "completed tasks must be removed from the diagnostic table");
 
     executor.set_in_flight_task_capacity(1);
@@ -333,6 +346,10 @@ bool test_snapshot_reports_bounded_in_flight_tasks() {
     release_again->set_value();
     third.get();
     fourth.get();
+    // 排水 third/fourth 的诊断条目，使下方 monitoring-off 断言只反映
+    // "禁用后不新增滞留"，不掺入前一批任务的 future-vs-cleanup 竞态。
+    TEST_ASSERT(wait_in_flight_drained(executor),
+                "capacity-overflow tasks must eventually leave the diagnostic table");
 
     executor.enable_monitoring(false);
     auto unmonitored = executor.submit([] {});
@@ -399,7 +416,7 @@ bool test_in_flight_diagnostics_do_not_change_soft_timeout() {
         timed_out = true;
     }
     TEST_ASSERT(timed_out, "soft timeout future semantics must remain unchanged");
-    TEST_ASSERT(executor.get_snapshot().in_flight_count == 0,
+    TEST_ASSERT(wait_in_flight_drained(executor),
                 "soft-timed-out task must leave the in-flight table");
 
     executor.set_in_flight_task_sampling_rate(0.0);

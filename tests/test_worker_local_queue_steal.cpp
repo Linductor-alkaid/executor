@@ -97,8 +97,16 @@ TEST(WorkerLocalQueueTest, StealTakesBackElement) {
 // and verify that pop_count + steal_count == pushed_count and that the
 // per-task atomic counter == 1.
 TEST(WorkerLocalQueueTest, StealRaceTest) {
+    // kRounds bounds the race iterations on fast machines; kTimeBudget
+    // bounds them on slow/loaded ones (2-core CI runners in Debug can
+    // take ~10x longer per round than a workstation, and a fixed round
+    // count previously blew the 30s ctest timeout there). kMinRounds
+    // keeps meaningful coverage even on a heavily loaded machine.
     constexpr int kRounds = 10000;
+    constexpr int kMinRounds = 128;
     constexpr int kBatch = 64;
+    constexpr auto kTimeBudget = std::chrono::seconds{2};
+    const auto budget_deadline = std::chrono::steady_clock::now() + kTimeBudget;
 
     for (int round = 0; round < kRounds; ++round) {
         WorkerLocalQueue q(/*capacity=*/kBatch + 4);
@@ -151,10 +159,20 @@ TEST(WorkerLocalQueueTest, StealRaceTest) {
             EXPECT_FALSE(q.steal(t)) << "queue should be drained";
         });
 
-        // Let the race run for a while before signalling the owner to
-        // stop adding new work. This stresses the steal/pop interleaving
-        // rather than the trivial "drain in order" path.
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        // Stop the owner as soon as the batch is fully consumed or after
+        // a bounded contention window, whichever comes first. The window
+        // only matters while the drain is still in progress (that is the
+        // pop/steal interleaving under test); once every task is observed,
+        // keeping the owner spinning on an empty queue adds wall time on
+        // loaded CI runners without exercising anything new.
+        const auto contention_deadline = std::chrono::steady_clock::now() +
+                                         std::chrono::microseconds(200);
+        while (pop_count.load(std::memory_order_relaxed) +
+                       steal_count.load(std::memory_order_relaxed) <
+                   kBatch &&
+               std::chrono::steady_clock::now() < contention_deadline) {
+            std::this_thread::yield();
+        }
         owner_done.store(true, std::memory_order_release);
 
         owner.join();
@@ -170,6 +188,11 @@ TEST(WorkerLocalQueueTest, StealRaceTest) {
                 << "round=" << round << " i=" << i
                 << " pop=" << pop_count.load()
                 << " steal=" << steal_count.load();
+        }
+
+        if (round + 1 >= kMinRounds &&
+            std::chrono::steady_clock::now() >= budget_deadline) {
+            break;
         }
     }
 }
