@@ -593,3 +593,8 @@ Phase 2 合并（0963df5）后 master push 与 scheduled 两次 CI 失败，PR �
 **新增交付物**：`tests/install_headers_smoke.cmake`（ctest `install_headers_smoke`，GNU/Clang 注册）、`cmake/version.hpp.in`（生成 `executor/version.hpp`）。
 
 **平台受限项**：两个 ps1 脚本的运行时行为（打包产物、开关透传效果）本地无 pwsh 无法执行验证，依据逐行 diff 审查 + 与 bash 参照实现对齐；后续如启用 Windows 打包 CI job 可补运行时冒烟。
+
+### Phase 3 CI 后续修正（2026-10-01，PR #205 内追加提交）
+
+1. **tests/install_headers_smoke.cmake 未入库**：根 .gitignore 的 `*.cmake` 全忽略 + 仅白名单 cmake/ 模块，冒烟脚本被静默吞掉（git status 不可见），首次 CI 全部 Linux job 以 "CMake Error: Not a file" 失败。修正：.gitignore 显式白名单该文件（296cbaa）。教训：新增 .cmake 文件时必须核对 ignore 白名单。
+2. **插桩库的消费方链接失败**：CR-080 生效后库首次携带 gcov 插桩，独立定义的测试目标（test_multithread_mpsc、android_smoke）链接报 undefined `__gcov_init/__gcov_exit/__gcov_merge_add`——静态库的插桩符号须在最终链接落地。修正：executor 目标加 INTERFACE `--coverage` 链接选项，tests/examples/find_package 下游自动继承（942b5dd）。本地验证：Coverage 构建下两目标链接运行通过、库 .gcda 22 个落地；CI Code Coverage job 转绿。
