@@ -192,7 +192,13 @@ bool LockFreeTaskExecutor::push_tasks_batch(const std::function<void()>* tasks, 
     // wrappers, populating them, then dispatching the whole array in one exact
     // batch call so the queue records a single batch_pushes++ and a single CAS
     // reservation, instead of N independent push() calls.
-    std::vector<TaskWrapper*> ptrs;
+    //
+    // CR-122: thread_local 便签替代每次调用的临时 vector。push gate
+    //（enter_push）是多生产者 CAS 门而非互斥，成员缓冲会被并发生产者踩踏；
+    // thread_local 保证线程内零堆分配、线程间无共享。容量上界即单批上限
+    //（count ≤ task_pool_capacity_，见上方守卫）。
+    thread_local std::vector<TaskWrapper*> batch_scratch;
+    std::vector<TaskWrapper*>& ptrs = batch_scratch;
     size_t acquired = 0;
 
     try {

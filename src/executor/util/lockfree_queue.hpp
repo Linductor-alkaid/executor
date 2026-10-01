@@ -443,11 +443,11 @@ private:
         // The hook-enabled path intentionally remains cancellable for the
         // diagnostic/recovery contract exercised by the stalled-producer
         // tests.
-        const auto hook_state = std::atomic_load_explicit(
-            &before_publish_hook_, std::memory_order_acquire);
-        const SlotState initial_state = hook_state && hook_state->hook != nullptr
-            ? SlotState::Reserved
-            : SlotState::Writing;
+        // CR-121: 无 hook 时（常态）仅一次标志位 load，不触碰 shared_ptr 原子读
+        const bool hook_enabled =
+            before_publish_hook_active_.load(std::memory_order_acquire);
+        const SlotState initial_state =
+            hook_enabled ? SlotState::Reserved : SlotState::Writing;
         size_t expected = state_tag(position, SlotState::Free);
         if (!states_[index].compare_exchange_strong(expected, state_tag(position, initial_state),
                                                     std::memory_order_acq_rel,
@@ -463,7 +463,12 @@ private:
             return true;
         }
 
-        hook_state->hook(hook_state->context);
+        const auto hook_state = std::atomic_load_explicit(
+            &before_publish_hook_, std::memory_order_acquire);
+        // hook_enabled 已确认非空；防御性判空保持与原子读的内存序一致性
+        if (hook_state && hook_state->hook) {
+            hook_state->hook(hook_state->context);
+        }
         expected = state_tag(position, SlotState::Reserved);
         return states_[index].compare_exchange_strong(expected, state_tag(position, SlotState::Writing),
                                                        std::memory_order_acq_rel,
@@ -471,9 +476,12 @@ private:
     }
 
     bool begin_batch_write(size_t index, size_t position) {
-        const auto hook_state = std::atomic_load_explicit(&before_publish_hook_, std::memory_order_acquire);
-        if (hook_state && hook_state->hook != nullptr) {
-            hook_state->hook(hook_state->context);
+        // CR-121: 同 begin_write——常态零 shared_ptr 原子读
+        if (before_publish_hook_active_.load(std::memory_order_acquire)) {
+            const auto hook_state = std::atomic_load_explicit(&before_publish_hook_, std::memory_order_acquire);
+            if (hook_state && hook_state->hook != nullptr) {
+                hook_state->hook(hook_state->context);
+            }
         }
         size_t expected = state_tag(position, SlotState::Reserved);
         return states_[index].compare_exchange_strong(expected, state_tag(position, SlotState::BatchWriting),
@@ -716,6 +724,9 @@ public:
             &before_publish_hook_,
             std::make_shared<const BeforePublishHookState>(BeforePublishHookState{hook, context}),
             std::memory_order_release);
+        // CR-121: shared_ptr 发布后再置位（release），热路径读 false 时可安全
+        // 跳过 shared_ptr 原子读。
+        before_publish_hook_active_.store(hook != nullptr, std::memory_order_release);
     }
 private:
     void update_peak_size() {
@@ -783,6 +794,11 @@ private:
         void* context;
     };
     std::shared_ptr<const BeforePublishHookState> before_publish_hook_;
+    // CR-121: 热路径快速开关——begin_write/begin_batch_write 每次推送原本都要
+    // 原子读 shared_ptr（旧 libstdc++ 走内部锁池）。标志位由 set_before_publish_hook
+    // 在 shared_ptr 发布后以 release 写入；读到 false 的推送按无 hook 推进
+    // （hook 激活对并发在途推送是最终可见语义，与既有 set 时机契约一致）。
+    std::atomic<bool> before_publish_hook_active_{false};
 
     struct Stats {
         alignas(64) std::atomic<uint64_t> total_pushes{0};

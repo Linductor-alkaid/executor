@@ -12,6 +12,7 @@
 #include <string>
 #include <chrono>
 #include <atomic>
+#include <list>
 
 namespace executor {
 namespace gpu {
@@ -129,7 +130,14 @@ private:
     // 持 cache_mutex_ 写、多个读路径无锁读，构成数据竞争（TSAN 实证）。
     std::shared_ptr<const Config> config_snapshot_;
     mutable std::shared_mutex cache_mutex_;
-    std::unordered_map<std::string, KernelParamCacheEntry> param_cache_;
+    // CR-151: O(1) LRU——list 头部=最近使用，map 存 list 迭代器。旧实现
+    // unordered_map + 每次 O(n) 全表扫描找最旧项，且"先淘汰后插入"对已存在
+    // key 的更新也会误逐热点。新实现：命中/更新 splice 到队头 O(1)，淘汰
+    // 直接取队尾 O(1)，更新已有 key 不再触发淘汰。
+    std::list<std::pair<std::string, KernelParamCacheEntry>> param_lru_;
+    std::unordered_map<std::string,
+                       std::list<std::pair<std::string, KernelParamCacheEntry>>::iterator>
+        param_cache_;
 
     mutable std::mutex batch_mutex_;
     std::deque<BatchedKernelRequest> batch_queue_;

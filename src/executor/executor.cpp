@@ -730,6 +730,13 @@ void Executor::finalize_task_graph_node_locked(const std::string& task_id) {
 }
 
 void Executor::trim_task_graph_retention_locked() {
+    // CR-102 结论（2026-10-01 复测）：审查主张的 O(capacity) 每终态 7-10µs
+    // 在当前 HEAD 不复现——独立任务负载下 find_if 扫描深度恒为 1（最老终态
+    // 立即可驱逐），单次 trim 为 O(1)（deque pop_front + 两个哈希擦除 +
+    // prune），cap=1024 与 cap=0 的差距在测量噪声内（交错三轮 ±20% 摆动，
+    // 大小关系翻转）。线性扫描仅在这些旧终态仍有未决 dependent 时出现，
+    // 那是精确保留契约的组成部分（ActiveDependentPreventsEarlyHandleExpiration）。
+    // 曾试高水位摊还方案，被 retention 精确上界契约测试否决——保留即时过期语义。
     while (task_graph_terminal_order_.size() > task_graph_retention_capacity_) {
         auto candidate = std::find_if(
             task_graph_terminal_order_.begin(), task_graph_terminal_order_.end(),
@@ -1527,7 +1534,17 @@ std::vector<std::string> Executor::get_lockfree_executor_names() const {
 }
 
 RoutingDecision Executor::route_dispatch(const TaskOptions& options) const {
-    return task_router_.route_dispatch(options, manager_->get_executor_capabilities());
+    // CR-106: 与 route_task 同理——intent 不支持或未指定 preferred_executor
+    // 时是纯策略拒绝（TaskRouter::route_dispatch 的早退分支），能力采集
+    // 仅在通过前置校验后才执行。
+    const bool policy_rejected =
+        (options.intent != ExecutionIntent::LowLatency &&
+         options.intent != ExecutionIntent::RealtimeQueue) ||
+        !options.preferred_executor || options.preferred_executor->empty();
+    return task_router_.route_dispatch(
+        options,
+        policy_rejected ? std::vector<ExecutorCapability>{}
+                        : manager_->get_executor_capabilities());
 }
 
 DispatchResult Executor::dispatch_auto(TaskOptions options, std::function<void()> task) {
@@ -1676,32 +1693,60 @@ void Executor::set_recent_routing_capacity(size_t capacity) {
     while (recent_routing_decisions_.size() > recent_routing_capacity_) {
         recent_routing_decisions_.pop_front();
     }
+    // CR-106: 维护热路径观测快速开关（容量 0 且无回调 = 未观测）
+    routing_observed_.store(recent_routing_capacity_ > 0 ||
+                            static_cast<bool>(routing_callback_),
+                            std::memory_order_release);
 }
 
 void Executor::set_routing_callback(std::function<void(const RoutingDecision&)> callback) {
     std::lock_guard<std::mutex> lock(routing_mutex_);
     routing_callback_ = std::move(callback);
+    // CR-106: 同 set_recent_routing_capacity
+    routing_observed_.store(recent_routing_capacity_ > 0 ||
+                            static_cast<bool>(routing_callback_),
+                            std::memory_order_release);
 }
 
 RoutingDecision Executor::route_task(const TaskOptions& options,
                                      bool cpu_gpu_task,
                                      std::optional<bool> gpu_selected) const {
+    // CR-106 / NN-06: cpu_gpu_task == false 时路由结果是纯策略判定
+    //（DefaultPolicy/ExplicitIntent/Rejected，见 TaskRouter::route 的早退分支），
+    // 不会读取能力表——此前每次 submit_auto 仍全量锁 5 把注册表采能力，是
+    // submit_auto 相对 submit 慢 65-70% 的主要构成。惰性采集：仅在
+    // CpuOrGpu 意图（真正消费能力表）时才执行。
     return task_router_.route(
         TaskRouter::Request{options, cpu_gpu_task, gpu_selected},
-        manager_->get_executor_capabilities());
+        cpu_gpu_task ? manager_->get_executor_capabilities()
+                     : std::vector<ExecutorCapability>{});
 }
 
 void Executor::record_routing_decision(RoutingDecision decision) {
+    // CR-106: 观测未配置（容量 0 且无回调）时零开销返回——路由诊断是纯
+    // 可观测性设施，不该向提交热路径收税。routing_observed_ 由容量/回调
+    // 的设置点维护，热路径只付一次 acquire load。
+    if (!routing_observed_.load(std::memory_order_acquire)) {
+        return;
+    }
     std::function<void(const RoutingDecision&)> callback;
     {
         std::lock_guard<std::mutex> lock(routing_mutex_);
+        // 回调读取必须在容量判断之外：容量 0 + 有回调 = 仅回调观测
+        //（test_routing_callback_and_buffer_are_isolated 契约）。
+        callback = routing_callback_;
         if (recent_routing_capacity_ > 0) {
             while (recent_routing_decisions_.size() >= recent_routing_capacity_) {
                 recent_routing_decisions_.pop_front();
             }
-            recent_routing_decisions_.push_back(decision);
+            // 无回调消费方时直接移动入库（避免 2-3 次 std::string 堆拷贝）；
+            // 有回调时保留副本供回调读取。
+            if (callback) {
+                recent_routing_decisions_.push_back(decision);
+            } else {
+                recent_routing_decisions_.push_back(std::move(decision));
+            }
         }
-        callback = routing_callback_;
     }
     if (callback) {
         try {

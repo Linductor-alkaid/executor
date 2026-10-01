@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -111,9 +112,11 @@ public:
     bool dispatch() {
         // P-260617-002: 持 shared_lock 保护 local_queues_ 访问，与 resize 路径的
         // unique_lock 配对。注意：RAII wrapper 保证所有 return 路径都释放锁。
-        std::unique_ptr<std::shared_lock<std::shared_mutex>> lq_lock;
+        // CR-112: optional<shared_lock> 替代 unique_ptr 包装——原实现每次
+        // dispatch 一次堆分配，optional 为纯栈上对象。
+        std::optional<std::shared_lock<std::shared_mutex>> lq_lock;
         if (local_queues_mutex_) {
-            lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
+            lq_lock.emplace(*local_queues_mutex_);
         }
         std::vector<QueueT>* local_queues = queues_snapshot_locked();
 
@@ -167,9 +170,11 @@ public:
      */
     bool dispatch_task(const Task& task) {
         // P-260617-002: 持 shared_lock 保护 local_queues_ 访问
-        std::unique_ptr<std::shared_lock<std::shared_mutex>> lq_lock;
+        // CR-112: optional<shared_lock> 替代 unique_ptr 包装——原实现每次
+        // dispatch 一次堆分配，optional 为纯栈上对象。
+        std::optional<std::shared_lock<std::shared_mutex>> lq_lock;
         if (local_queues_mutex_) {
-            lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
+            lq_lock.emplace(*local_queues_mutex_);
         }
         std::vector<QueueT>* local_queues = queues_snapshot_locked();
 
@@ -229,11 +234,13 @@ public:
     size_t dispatch_batch(size_t max_tasks = 10) {
         if (max_tasks == 0) return 0;
 
-        // P-260617-002: 持 shared_lock 保护 local_queues_ 访问整个函数体。
-        // 早返回的 0 路径不需要锁（仅读 size，无 race 风险）。
-        std::unique_ptr<std::shared_lock<std::shared_mutex>> lq_lock;
+        // P-260617-002: 持 shared_lock 保护 local_queues_ 访问整个函数体
+        // （含空队列早退路径——snapshot 读取必须在锁内，与 dispatch() 一致）。
+        // CR-112: optional<shared_lock> 替代 unique_ptr 包装——原实现每次
+        // dispatch 一次堆分配，optional 为纯栈上对象。
+        std::optional<std::shared_lock<std::shared_mutex>> lq_lock;
         if (local_queues_mutex_) {
-            lq_lock = std::make_unique<std::shared_lock<std::shared_mutex>>(*local_queues_mutex_);
+            lq_lock.emplace(*local_queues_mutex_);
         }
         std::vector<QueueT>* local_queues = queues_snapshot_locked();
         if (!local_queues || local_queues->empty()) {
