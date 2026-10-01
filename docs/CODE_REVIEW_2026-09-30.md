@@ -598,3 +598,23 @@ Phase 2 合并（0963df5）后 master push 与 scheduled 两次 CI 失败，PR �
 
 1. **tests/install_headers_smoke.cmake 未入库**：根 .gitignore 的 `*.cmake` 全忽略 + 仅白名单 cmake/ 模块，冒烟脚本被静默吞掉（git status 不可见），首次 CI 全部 Linux job 以 "CMake Error: Not a file" 失败。修正：.gitignore 显式白名单该文件（296cbaa）。教训：新增 .cmake 文件时必须核对 ignore 白名单。
 2. **插桩库的消费方链接失败**：CR-080 生效后库首次携带 gcov 插桩，独立定义的测试目标（test_multithread_mpsc、android_smoke）链接报 undefined `__gcov_init/__gcov_exit/__gcov_merge_add`——静态库的插桩符号须在最终链接落地。修正：executor 目标加 INTERFACE `--coverage` 链接选项，tests/examples/find_package 下游自动继承（942b5dd）。本地验证：Coverage 构建下两目标链接运行通过、库 .gcda 22 个落地；CI Code Coverage job 转绿。
+
+## Phase 4 修复执行记录（2026-10-01）
+
+| 项 | 修复 | 状态/证据 |
+|---|---|---|
+| CR-106 | `route_task`/`route_dispatch` 惰性能力采集（非 CpuOrGpu 意图与策略拒绝路径不再锁 5 把注册表）；`record_routing_decision` 增加观测快速开关（容量 0 且无回调时零开销）+ 无回调时移动入库免字符串拷贝 | **同参 Release 交错 9 轮中位：+19.9% → +11.6%（<20% 验收达成）**；record-off 变体仅再快 ~0.08µs（record 残余极小）。注：原审查"基线 65-70%"是 O2-TU+O0-lib 混合优化口径的夸大值，同参 Release 真实基线 ~+20% |
+| CR-108 | 完成通知等待者门控：`completion_waiters_` 原子计数由 try_wait 的 RAII 守卫维护，`notify_completion_waiters` 仅在有等待者时 notify_all——无等待者场景每任务 2 次 notify_all 全部消失 | 无等待者吞吐 +0.6%（不回退）；**有等待者场景不收窄（83.6% vs 84.5%）——机制边界使然**：门控只消除无等待者通知，有等待者时新旧同样每任务 notify，复验证实并已修正本表预期 |
+| CR-109 | `try_wait_for_completion` 改通知驱动谓词等待 + 50ms 兜底分片（旧 10ms 盲轮询：300s = 3 万次全量扫队列；现在正常推进由任务终态通知驱动，兜底分片只服务 stop 后残留任务搬运与活性兜底） | 实现 + 回归全绿 |
+| CR-102 | **前提不复现，不改语义**：交错三轮测量 cap=1024 vs cap=0 差距 ±20% 摆动且大小关系翻转；插桩证明独立任务负载下 find_if 扫描深度恒 1，单次 trim O(1)。线性扫描仅在旧终态有未决 dependent 时出现，属精确保留契约的组成部分。曾试高水位摊还，被 retention 精确上界契约测试（test_executor_task_graph 两用例）否决后回退，结论写入 trim 注释 | 复验同参 Release 5 轮中位：当前 +6.4% vs master +8.5%（均 <10% 噪声阈，无每万块增长趋势）——**master 上 O(capacity) 成本也不存在，前提推翻（同 CR-051/CR-104 先例）** |
+| CR-110 | submit/submit_priority 的 promise 与就绪标志合并为单次堆分配 CompletionState（旧 make_shared×2 + 双控制块捕获），两模板内引用别名保持语义不变 | 实现 + 回归全绿 |
+| CR-112 | task_dispatcher 三处 `unique_ptr<shared_lock>` → `optional<shared_lock>`（每次 dispatch 免一次堆分配）；dispatch_batch 早退注释与代码不符处修正 | 实现 + 回归全绿 |
+| CR-121 | `begin_write`/`begin_batch_write` 的 before_publish_hook 访问加 `before_publish_hook_active_` 原子标志快速路径——常态（无 hook）零 shared_ptr 原子读（旧 libstdc++ 该操作走内部锁池）；hook 激活对在途推送保持最终可见语义 | 实现 + 回归全绿 |
+| CR-122 | `push_tasks_batch` 临时 vector → thread_local 便签（enter_push 是多生产者 CAS 门非互斥，成员缓冲会被并发生产者踩踏，故 thread_local） | 实现 + 回归全绿 |
+| CR-151 | 参数缓存改 O(1) 侵入式 LRU（list + map<key, iterator>）：命中/更新 splice 队头，淘汰取队尾；**更新已有 key 不再触发淘汰**（旧"先淘汰后插入"会误逐热点） | 实现 + 回归全绿 |
+| CR-135 | **文档化不改行为**：1kHz 分片轮询是刻意的时延/可见性权衡（无 cv 设计下调度变更可见性上界=分片）；cv 化被 gcc-11 TSAN 不拦截 pthread_cond_clockwait（PR101978，CI TSAN 正是 gcc-11）阻断；wake_at（heap 顶）非死代码（子分片精度依赖）。结论写入 timer.hpp 注释 | 复核结论与审查主张相反 |
+| CR-111 | **缓议（记录）**：LockFreeWorkerQueue::push 每任务 new Task——指针稳定性设计（队列存 uintptr_t、Task 持 atomic 不可移动）使免分配需要带 ABA 防护的有界空闲链表真重设计，风险/收益不匹配本轮范围；LFTE 主路径已有 wrapper 池，此项仅影响 ThreadPool 的 lockfree worker-queue 变体 | 记录缓议理由 |
+
+回归：162/162 全绿；ASAN 27 目标子集 + TSAN 22 项抽查 + lockfree 变体 145 测试全绿，零新增报告。
+
+复验修正记录（2026-10-01）：(1) 本机 build/ 无 CMAKE_BUILD_TYPE（O0 库），旧基准以 -O2 TU 链 O0 库构成混合口径——"基线 65-70%"为该口径产物，同参 Release 真实基线约 +20%；后续性能结论一律以同参构建为准。(2) CR-108 的"有等待者收窄"预期有误：门控机制只消除无等待者通知，有等待者场景不受益也已达成不成（复验实证 83.6% vs 84.5%），机制价值在无等待者吞吐与调度噪声消除。

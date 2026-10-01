@@ -1148,6 +1148,10 @@ private:
     std::deque<RoutingDecision> recent_routing_decisions_;
     size_t recent_routing_capacity_ = kDefaultRecentRoutingCapacity;
     std::function<void(const RoutingDecision&)> routing_callback_;
+    // CR-106: 热路径观测快速开关——容量 0 且无回调时 record_routing_decision
+    // 直接返回。由 set_recent_routing_capacity / set_routing_callback 维护；
+    // 初始容量 kDefaultRecentRoutingCapacity > 0，故初始为观测态。
+    std::atomic<bool> routing_observed_{true};
     TaskRouter task_router_;
 
     mutable std::mutex task_graph_mutex_;

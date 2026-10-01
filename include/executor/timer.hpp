@@ -758,6 +758,13 @@ private:
             // 状态里漏掉，醒来重锁时误报 "double lock of a mutex"
             // （gcc PR101978 / google/sanitizers#1259）。分片休眠期间不持锁，
             // 对 TSAN/MSVC 全环境行为可预测。
+            //
+            // CR-135 结论（2026-10-01 复核）：本循环的 ~1kHz 分片轮询是刻意
+            // 的时延/可见性权衡——无 cv 的设计下，"新登记更早到期/取消/重排"
+            // 只能靠重新加锁检查 heap 才可见，kWakeSlice(1ms) 是该可见性的
+            // 上界；cv 化在上述 gcc-11 TSAN 约束下不可行（CI 的 TSAN job
+            // 正是 gcc-11）。wake_at（heap 顶 deadline）并非死代码：子分片
+            // （≤1ms）精度的到期依赖 min() 精确睡到期限。
             std::this_thread::sleep_until(
                 std::min(wake_at, clock::now() + kWakeSlice));
         }

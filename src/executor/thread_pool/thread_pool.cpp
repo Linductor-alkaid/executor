@@ -735,40 +735,57 @@ bool ThreadPool::resize(size_t new_size) {
     return true;
 }
 
+namespace {
+// CR-109: completion 等待的兜底轮询分片。正常推进由任务终态通知驱动；
+// 分片只约束非通知驱动边角（stop 后残留任务搬运 / 活性兜底）的响应上界。
+constexpr std::chrono::milliseconds kCompletionPollSlice{50};
+}
+
 void ThreadPool::wait_for_completion() {
     (void)try_wait_for_completion(kDefaultWaitForCompletionTimeout);
 }
 
 bool ThreadPool::try_wait_for_completion(std::chrono::milliseconds timeout) {
+    // CR-109: 等待者注册（驱动 CR-108 的门控通知）+ 通知驱动的谓词等待。
+    // 旧实现固定 10ms 盲轮询：300s 等待 = 3 万次 is_completion_ready()
+    // 全量扫队列（scheduler + 全部本地队列的三把锁）。现在正常推进由每个
+    // 任务终态的 notify 唤醒，兜底分片只服务两个非通知驱动的边角：
+    //  1. shutdown 后 worker 已观察到 stop_，残留 scheduler 任务只能由
+    //     等待方 dispatch 推进（入场 + 每个兜底分片到期各搬运一次）；
+    //  2. 活性兜底（时钟异常/唤醒丢失）。
+    struct WaiterGuard {
+        std::atomic<size_t>& count;
+        ~WaiterGuard() { count.fetch_sub(1, std::memory_order_release); }
+    };
+    completion_waiters_.fetch_add(1, std::memory_order_acq_rel);
+    WaiterGuard waiter_guard{completion_waiters_};
+
     std::unique_lock<std::mutex> lock(completion_mutex_);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
 
+    // 入场先搬运一次（原语义：残留任务的推进责任在等待方）。
+    // shutdown(true) 停止接单后，被接受的任务可能仍滞留全局 scheduler。
+    lock.unlock();
+    (void)dispatch_pending_tasks(64);
+    lock.lock();
+
     while (!is_completion_ready()) {
-        lock.unlock();
-
-        // shutdown(true) stops accepting new tasks before waiting, but accepted
-        // tasks can still be in the global scheduler if a previous dispatch
-        // raced with a full/contended worker queue. Keep dispatching while
-        // waiting so completion cannot depend on a worker-side dispatch path
-        // that has already observed stop_.
-        // PA-1: dispatch 成功后的唤醒由 dispatch_batch 内部完成。
-        (void)dispatch_pending_tasks(64);
-
-        lock.lock();
-
-        if (is_completion_ready()) {
-            return true;
-        }
-
         const auto now = std::chrono::steady_clock::now();
         if (now >= deadline) {
             return false;
         }
-
         const auto remaining =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-        const auto wait_slice = std::min(remaining, std::chrono::milliseconds(10));
-        completion_cv_.wait_for(lock, wait_slice);
+        const auto wait_slice =
+            std::min(remaining, kCompletionPollSlice);
+
+        if (completion_cv_.wait_until(lock, now + wait_slice) ==
+            std::cv_status::timeout) {
+            // 兜底分片到期（非通知驱动）：搬运一次 + 外层重查。
+            lock.unlock();
+            (void)dispatch_pending_tasks(64);
+            lock.lock();
+        }
     }
 
     return true;
@@ -803,7 +820,11 @@ bool ThreadPool::is_completion_ready() const {
 }
 
 void ThreadPool::notify_completion_waiters() {
-    completion_cv_.notify_all();
+    // CR-108: 等待者门控——无等待者时 notify_all 是纯调度噪声，有等待者时
+    // 才惊群。等待者计数由 try_wait_for_completion 的 RAII 守卫维护。
+    if (completion_waiters_.load(std::memory_order_relaxed) != 0) {
+        completion_cv_.notify_all();
+    }
 }
 
 void ThreadPool::signal_work_added(bool wake_all) {

@@ -1,4 +1,5 @@
 #include "executor/gpu/kernel_launch_optimizer.hpp"
+#include <list>
 #include <algorithm>
 
 namespace executor {
@@ -29,10 +30,13 @@ bool KernelLaunchOptimizer::lookup_params(const std::string& kernel_name,
         return false;
     }
 
-    it->second.last_access_ns =
+    it->second->second.last_access_ns =
         std::chrono::steady_clock::now().time_since_epoch().count();
-    ++it->second.hit_count;
-    out = it->second;
+    ++it->second->second.hit_count;
+    out = it->second->second;
+
+    // CR-151: 命中提升到队头（O(1) splice，迭代器保持有效）
+    param_lru_.splice(param_lru_.begin(), param_lru_, it->second);
 
     {
         std::lock_guard slock(stats_mutex_);
@@ -50,22 +54,37 @@ void KernelLaunchOptimizer::store_params(const std::string& kernel_name,
     }
 
     std::unique_lock lock(cache_mutex_);
-    evict_lru_if_needed();
+    const auto now_ns = std::chrono::steady_clock::now().time_since_epoch().count();
 
-    auto& cached = param_cache_[kernel_name];
-    cached = entry;
-    cached.last_access_ns =
-        std::chrono::steady_clock::now().time_since_epoch().count();
+    // CR-151: 已存在的 key 原地更新 + 提队头，不再触发淘汰（旧实现"先淘汰
+    // 后插入"会把热点 kernel 的更新误判为新插入而逐掉别的热点）。
+    auto existing = param_cache_.find(kernel_name);
+    if (existing != param_cache_.end()) {
+        existing->second->second = entry;
+        existing->second->second.last_access_ns = now_ns;
+        param_lru_.splice(param_lru_.begin(), param_lru_, existing->second);
+        return;
+    }
+
+    evict_lru_if_needed();
+    param_lru_.emplace_front(kernel_name, entry);
+    param_lru_.front().second.last_access_ns = now_ns;
+    param_cache_[kernel_name] = param_lru_.begin();
 }
 
 void KernelLaunchOptimizer::invalidate_params(const std::string& kernel_name) {
     std::unique_lock lock(cache_mutex_);
-    param_cache_.erase(kernel_name);
+    auto it = param_cache_.find(kernel_name);
+    if (it != param_cache_.end()) {
+        param_lru_.erase(it->second);
+        param_cache_.erase(it);
+    }
 }
 
 void KernelLaunchOptimizer::clear_cache() {
     std::unique_lock lock(cache_mutex_);
     param_cache_.clear();
+    param_lru_.clear();
 }
 
 size_t KernelLaunchOptimizer::cache_size() const {
@@ -80,13 +99,10 @@ void KernelLaunchOptimizer::evict_lru_if_needed() {
         return;
     }
 
-    auto oldest = param_cache_.begin();
-    for (auto it = param_cache_.begin(); it != param_cache_.end(); ++it) {
-        if (it->second.last_access_ns < oldest->second.last_access_ns) {
-            oldest = it;
-        }
-    }
-    param_cache_.erase(oldest);
+    // CR-151: 队尾即最久未使用（splice 维持的访问序），O(1) 淘汰
+    auto oldest = std::prev(param_lru_.end());
+    param_cache_.erase(oldest->first);
+    param_lru_.erase(oldest);
 }
 
 // --- 批量化 ---
