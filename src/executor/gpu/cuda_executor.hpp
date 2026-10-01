@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../../../include/executor/interfaces.hpp"
-#include "../../../include/executor/config.hpp"
-#include "../../../include/executor/types.hpp"
+#include <executor/interfaces.hpp>
+#include <executor/config.hpp>
+#include <executor/types.hpp>
 #include "cuda_loader.hpp"
 #include "gpu_memory_manager.hpp"
 #include "../util/exception_handler.hpp"

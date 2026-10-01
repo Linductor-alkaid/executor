@@ -2,7 +2,8 @@
 # 一键构建静态库、动态库并打包成发行版本
 
 param(
-    [string]$Version = "0.5.2",
+    # CR-085: 留空时由 package_windows.ps1 从根 CMakeLists.txt 解析
+    [string]$Version = "",
     [string]$BuildType = "Release",
     [string]$Generator = "",
     [string]$Architecture = "x64",

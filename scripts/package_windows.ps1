@@ -2,7 +2,8 @@
 # 将构建好的库打包成发行版本
 
 param(
-    [string]$Version = "0.5.2",
+    # CR-085: 留空时从根 CMakeLists.txt 的 project(VERSION) 解析（单一来源）
+    [string]$Version = "",
     [string]$BuildDir = "build_windows",
     [string]$OutputDir = "dist",
     # 打包名中的架构标识（x64/arm64）；留空时回退到 $env:PROCESSOR_ARCHITECTURE。
@@ -12,6 +13,20 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# CR-085: 版本单一来源——在首个横幅输出前解析，横幅需要显示它
+if (-not $Version) {
+    $CMakeListsPath = Join-Path (Split-Path -Parent $PSScriptRoot) "CMakeLists.txt"
+    $VersionMatch = Select-String -Path $CMakeListsPath -Pattern '^project\(executor\s+[^\)]*VERSION\s+([0-9][0-9.]*)\)' |
+        Select-Object -First 1
+    if ($VersionMatch) {
+        $Version = $VersionMatch.Matches[0].Groups[1].Value
+    }
+}
+if (-not $Version) {
+    Write-Host "Error: unable to resolve version from CMakeLists.txt and no -Version given" -ForegroundColor Red
+    exit 1
+}
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "Executor Windows Package Script" -ForegroundColor Cyan
@@ -25,8 +40,9 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Get project root directory
+# CR-081: scripts/ 直接位于仓库根下，只需上跳一级；旧版连跳两级导致
+# 包内 README/LICENSE/CHANGELOG 静默缺失（Test-Path 恒假）。
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$ProjectRoot = Split-Path -Parent $ProjectRoot
 
 # Create output directories
 if (-not $Arch) { $Arch = $env:PROCESSOR_ARCHITECTURE }

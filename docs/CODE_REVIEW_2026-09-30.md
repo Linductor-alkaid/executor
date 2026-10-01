@@ -571,3 +571,25 @@ Phase 2 合并（0963df5）后 master push 与 scheduled 两次 CI 失败，PR �
 复验证据（Independent-Verification-Agent）：旧代码在 /tmp 副本注入 300µs 窗口后 10/10 重现 CI 同款 abort（gdb 定位 `:302 .at(Running)`）；新代码空载 200 连跑 + CI 级负载 100 连跑 0 abort；探针 3000 次迭代（含满载）0 错标、0 僵尸条目，旧注入版 100% 错标 + 3/300 僵尸条目。steal 测试满载 ~2s 有界。lockfree 变体（`EXECUTOR_LOCKFREE_QUEUE=ON` → `USE_LOCKFREE_WORKER_QUEUE`，即 CI scheduled job 的实际配置）33/33。ASAN/TSAN 抽查无新增报告。全量 161/161 对齐基线。
 
 预期：in-flight 状态计数在任意负载下可信（Queued 仅表示"尚未被 worker 取走"）；steal 测试在 2 核 Debug 下秒级完成。
+
+## Phase 3 修复执行记录（2026-10-01）
+
+8 项全部实施。构建矩阵冒烟（本地）：
+
+| 项 | 修复 | 本地证据 |
+|---|---|---|
+| CR-080 | Coverage 插桩改函数式 `executor_apply_coverage_to_target()`，src/CMakeLists 在 add_library 后显式调用（撤销 include 期恒假的 `if(TARGET executor)`） | Coverage ON 配置下 `src/CMakeFiles/executor.dir/flags.make` 首次出现 `--coverage -fprofile-arcs -ftest-coverage` |
+| NN-08 | tests/CMakeLists 六处内联覆盖率块全部改调 `executor_apply_coverage_to_test()`（原"死函数"成为唯一入口） | 6 处替换后 `fprofile-arcs` 在 tests/CMakeLists 清零；4 个抽样测试 TU flags 均含插桩 |
+| CR-083 | Sanitizers.cmake 无条件 include；TSAN 独立于总开关（CI Release+TSAN 路径保留）；ASAN/TSAN 互斥 FATAL_ERROR（显式同开）；根 CMakeLists 旧 TSAN 块删除 | 矩阵：TSAN+Release 配置通过且 flags 含 thread（CI 对齐）；TSAN+显式 ASAN → 配置期 FATAL_ERROR；总开关+TSAN → ASAN 让位（仅 thread+ubsan） |
+| CR-084 | `executor/util/` 纳入安装（gpu 头的 `../util/exception_handler.hpp` 依赖闭包）；顺带修复 gpu 头 `../../../include/...` 源码树相对包含在安装树必断链的问题（cuda/opencl_executor.hpp 共 6 处改 `<executor/...>`，构建树经目标 PUBLIC include 解析） | 新增 `install_headers_smoke` ctest：安装到临时 prefix 后编译包含全部 43 个已安装头的探针 TU，通过 |
+| CR-085 | 版本单一来源：打包脚本（4 bash + 2 ps1）默认值改从 CMakeLists `project(VERSION)` 提取（可被 env/参数覆盖）；新增 configure_file 生成的 `executor/version.hpp`（EXECUTOR_VERSION_MAJOR/MINOR/PATCH/STRING），BUILD_INTERFACE + install 双路可用 | `sed` 提取 0.5.2 ✓；build/executor/version.hpp 生成 ✓；探针含版本头编译通过 |
+| CR-086 | 共享库配置期守卫从 `if(MSVC)` 扩到 `if(MSVC OR (WIN32 AND NOT MINGW))`（覆盖 clang-cl / clang-gnu-on-Windows；MinGW 默认全导出不拒） | diff 审查（本地无 Windows 工具链） |
+| CR-081 | package_windows.ps1 撤销多余的第二次 `Split-Path`（包内 README/LICENSE/CHANGELOG 恢复可见）；build_windows.ps1 死代码 `$ProjectRoot` 双写删除 | diff 审查（pwsh 本地不可用，运行时验证平台受限——与审查结论一致） |
+| CR-082 | build_windows.ps1 `-BuildTests/-BuildExamples` 开关透传到静态/共享两个 CMake 配置块（旧版硬编码 OFF 无视入参） | diff 审查（同上） |
+| NN-01 | ThreadPool 测试钩子（3 个 std::function 成员 + 3 个 setter）无条件参与类布局，`EXECUTOR_THREAD_POOL_TEST_HOOKS` 不再影响布局——ODR 违例（宏不一致 TU ↔ 库，ASAN stack-buffer-overflow）结构性消除；宏仅为兼容保留定义 | 普通构建 162/162 全绿（含钩子测试）；"无宏 TU + 带宏库"布局一致性由独立复验以 ODR 探针确认 |
+
+回归状态：普通构建 162/162（新增 install_headers_smoke）。全量 ctest 无失败。
+
+**新增交付物**：`tests/install_headers_smoke.cmake`（ctest `install_headers_smoke`，GNU/Clang 注册）、`cmake/version.hpp.in`（生成 `executor/version.hpp`）。
+
+**平台受限项**：两个 ps1 脚本的运行时行为（打包产物、开关透传效果）本地无 pwsh 无法执行验证，依据逐行 diff 审查 + 与 bash 参照实现对齐；后续如启用 Windows 打包 CI job 可补运行时冒烟。

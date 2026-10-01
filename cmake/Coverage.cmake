@@ -1,6 +1,12 @@
 # Coverage.cmake
 # 提供代码覆盖率支持（gcov/lcov）
 # 用于 GCC/Clang 编译器，生成 HTML 覆盖率报告
+#
+# CR-080 修复后的加载契约：本文件在 add_subdirectory(src) 之前被根
+# CMakeLists.txt include，此时 executor 目标尚不存在——库的插桩必须由
+# src/CMakeLists.txt 在 add_library(executor) 之后调用
+# executor_apply_coverage_to_target() 完成，而不是像旧版那样在 include
+# 期用 if(TARGET executor)（恒假，库永远拿不到 --coverage）。
 
 # 选项：启用覆盖率
 option(EXECUTOR_ENABLE_COVERAGE "Enable code coverage (gcov/lcov)" OFF)
@@ -12,34 +18,21 @@ if(EXECUTOR_ENABLE_COVERAGE)
         if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT CMAKE_BUILD_TYPE STREQUAL "")
             message(WARNING "Coverage is typically enabled in Debug mode. Current build type: ${CMAKE_BUILD_TYPE}")
         endif()
-        
+
         # 检查 lcov 是否可用
         find_program(LCOV_PATH lcov)
         find_program(GENHTML_PATH genhtml)
-        
+
         if(NOT LCOV_PATH OR NOT GENHTML_PATH)
             message(WARNING "lcov or genhtml not found. Coverage report generation may fail.")
             message(WARNING "  Install with: sudo apt-get install lcov (Ubuntu/Debian)")
             message(WARNING "  or: sudo yum install lcov (RHEL/CentOS)")
         endif()
-        
+
         # 添加覆盖率编译选项
         message(STATUS "Code coverage enabled (gcov/lcov)")
-        
-        # 为 executor 库添加覆盖率选项
-        if(TARGET executor)
-            target_compile_options(executor PRIVATE
-                --coverage
-                -fprofile-arcs
-                -ftest-coverage
-            )
-            target_link_options(executor PRIVATE
-                --coverage
-            )
-        endif()
-        
-        # 为所有测试目标添加覆盖率选项
-        # 注意：这会在 tests/CMakeLists.txt 中通过函数应用
+
+        # 覆盖率标志（供需要手动拼装的调用方使用；一般用下面的函数）
         set(EXECUTOR_COVERAGE_COMPILE_OPTIONS
             --coverage
             -fprofile-arcs
@@ -48,7 +41,7 @@ if(EXECUTOR_ENABLE_COVERAGE)
         set(EXECUTOR_COVERAGE_LINK_OPTIONS
             --coverage
         )
-        
+
         # 提供覆盖率使用说明
         if(LCOV_PATH AND GENHTML_PATH)
             message(STATUS "Coverage tools found: lcov and genhtml")
@@ -70,12 +63,23 @@ else()
     message(STATUS "Code coverage disabled. Enable with: -DEXECUTOR_ENABLE_COVERAGE=ON")
 endif()
 
-# 函数：为测试目标应用覆盖率选项
-function(executor_apply_coverage_to_test target_name)
+# 函数：为任意目标（库/测试/示例）应用覆盖率选项。
+# 必须在目标创建之后调用（src/CMakeLists.txt 中 executor 目标、
+# tests/CMakeLists.txt 中各测试目标）。未启用覆盖率或编译器不支持时为 no-op。
+function(executor_apply_coverage_to_target target_name)
     if(EXECUTOR_ENABLE_COVERAGE)
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-            target_compile_options(${target_name} PRIVATE ${EXECUTOR_COVERAGE_COMPILE_OPTIONS})
-            target_link_options(${target_name} PRIVATE ${EXECUTOR_COVERAGE_LINK_OPTIONS})
+            target_compile_options(${target_name} PRIVATE
+                ${EXECUTOR_COVERAGE_COMPILE_OPTIONS}
+            )
+            target_link_options(${target_name} PRIVATE
+                ${EXECUTOR_COVERAGE_LINK_OPTIONS}
+            )
         endif()
     endif()
+endfunction()
+
+# 函数：为测试目标应用覆盖率选项（历史入口，语义同上）
+function(executor_apply_coverage_to_test target_name)
+    executor_apply_coverage_to_target(${target_name})
 endfunction()

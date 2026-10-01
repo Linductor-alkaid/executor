@@ -40,9 +40,6 @@ Write-Host "Found CMake: $($cmakePath.Source)" -ForegroundColor Green
 Write-Host "CMake version:" -NoNewline
 & cmake --version | Select-Object -First 1
 
-# Get project root directory
-$ProjectRoot = Split-Path -Parent $PSScriptRoot
-$ProjectRoot = Split-Path -Parent $ProjectRoot
 
 # Build static library
 if ($BuildStatic) {
@@ -57,11 +54,12 @@ if ($BuildStatic) {
     Write-Host "Configuring static library build..." -ForegroundColor Yellow
     $CmakeArgs = @("-B", $StaticBuildDir)
     if ($Generator) { $CmakeArgs += @("-G", $Generator, "-A", $Architecture) }
+    # CR-082: 尊重 -BuildTests/-BuildExamples 开关（旧版硬编码 OFF 无视入参）
     $CmakeArgs += @(
         "-DCMAKE_BUILD_TYPE=$BuildType",
         "-DEXECUTOR_BUILD_SHARED=OFF",
-        "-DEXECUTOR_BUILD_TESTS=OFF",
-        "-DEXECUTOR_BUILD_EXAMPLES=OFF",
+        "-DEXECUTOR_BUILD_TESTS=$(if ($BuildTests) { 'ON' } else { 'OFF' })",
+        "-DEXECUTOR_BUILD_EXAMPLES=$(if ($BuildExamples) { 'ON' } else { 'OFF' })",
         "-DCMAKE_INSTALL_PREFIX=$StaticBuildDir\install"
     )
     & cmake @CmakeArgs
@@ -105,11 +103,12 @@ if ($BuildShared) {
     Write-Host "Configuring shared library build..." -ForegroundColor Yellow
     $CmakeArgs = @("-B", $SharedBuildDir)
     if ($Generator) { $CmakeArgs += @("-G", $Generator, "-A", $Architecture) }
+    # CR-082: 同静态库块——开关透传
     $CmakeArgs += @(
         "-DCMAKE_BUILD_TYPE=$BuildType",
         "-DEXECUTOR_BUILD_SHARED=ON",
-        "-DEXECUTOR_BUILD_TESTS=OFF",
-        "-DEXECUTOR_BUILD_EXAMPLES=OFF",
+        "-DEXECUTOR_BUILD_TESTS=$(if ($BuildTests) { 'ON' } else { 'OFF' })",
+        "-DEXECUTOR_BUILD_EXAMPLES=$(if ($BuildExamples) { 'ON' } else { 'OFF' })",
         "-DCMAKE_INSTALL_PREFIX=$SharedBuildDir\install"
     )
     & cmake @CmakeArgs

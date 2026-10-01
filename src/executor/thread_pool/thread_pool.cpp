@@ -70,11 +70,9 @@ bool ThreadPool::initialize(const ThreadPoolConfig& config) {
             auto new_queues = std::make_unique<std::vector<WorkerQueueImpl>>();
             new_queues->reserve(config_.min_threads);
             for (size_t i = 0; i < config_.min_threads; ++i) {
-#ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
                 if (worker_queue_create_hook_for_test_) {
                     worker_queue_create_hook_for_test_(i);
                 }
-#endif
                 new_queues->emplace_back(config_.queue_capacity);
             }
             local_queues_ = std::move(new_queues);
@@ -165,11 +163,9 @@ void ThreadPool::rollback_initialization_failure() {
 }
 
 void ThreadPool::worker_thread(size_t worker_id) {
-#ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
     if (worker_entry_hook_for_test_) {
         worker_entry_hook_for_test_(worker_id);
     }
-#endif
 
     struct WorkerContextGuard {
         explicit WorkerContextGuard(ThreadPool* pool)
@@ -962,11 +958,9 @@ void ThreadPool::resize_monitor_thread() {
 }
 
 void ThreadPool::create_worker_thread(size_t worker_id) {
-#ifdef EXECUTOR_THREAD_POOL_TEST_HOOKS
     if (worker_thread_start_hook_for_test_) {
         worker_thread_start_hook_for_test_(worker_id);
     }
-#endif
 
     workers_.emplace_back(&ThreadPool::worker_thread, this, worker_id);
 
