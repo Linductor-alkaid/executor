@@ -241,4 +241,11 @@ install(DIRECTORY executor/util/
 # 旧版 include 期 if(TARGET executor) 恒假导致库从未被插桩；改为目标创建后显式调用。
 if(COMMAND executor_apply_coverage_to_target)
     executor_apply_coverage_to_target(executor)
+    # 库插桩后，消费方可执行文件（tests/examples/find_package 下游）链接时也必须
+    # 引入 gcov 运行时，否则 undefined reference to __gcov_init/__gcov_exit/
+    # __gcov_merge_add（静态库的插桩符号在最终链接落地）。INTERFACE 让所有
+    # 链接 executor 的目标自动继承，无需逐个补 flags。
+    if(EXECUTOR_ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_link_options(executor INTERFACE --coverage)
+    endif()
 endif()
