@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -242,6 +243,9 @@ public:
             if (generation_) {
                 generation_->stop_requested.store(true, std::memory_order_release);
             }
+            // CR-135: 打断调度线程的定时等待，join 不再受最长睡眠期约束
+            ++schedule_epoch_;
+            wake_cv_.notify_all();
             thread_to_join = std::move(thread_);
             generation_.reset();
         }
@@ -310,6 +314,9 @@ public:
         heap_.push(TimerHeapEntry{
             records_[timer_id]->next_execute_time, timer_id, 0});
         ++summary_.pending_count;
+        // CR-135: 新 deadline 可能早于线程正在睡的目标，唤醒重算
+        ++schedule_epoch_;
+        wake_cv_.notify_one();
         return timer_id;
     }
 
@@ -340,6 +347,9 @@ public:
         heap_.push(TimerHeapEntry{
             records_[timer_id]->next_execute_time, timer_id, 0});
         ++summary_.pending_count;
+        // CR-135: 同 schedule_once
+        ++schedule_epoch_;
+        wake_cv_.notify_one();
         return timer_id;
     }
 
@@ -457,6 +467,10 @@ public:
                 record.periodic_status.next_execute_time =
                     record.next_execute_time;
             }
+            // CR-135: 重排到更早的 deadline 时必须打断睡眠（晚重排无害但
+            // 统一 notify，免去方向判断）
+            ++schedule_epoch_;
+            wake_cv_.notify_one();
             return TimerOperationResult::Rescheduled;
         } catch (...) {
             return TimerOperationResult::NotFound;
@@ -651,9 +665,16 @@ private:
             std::vector<std::string> due_tick_timer_ids;
 
             {
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::unique_lock<std::mutex> lock(mutex_);
 
+                // CR-135: popped > 0 时本迭代必须直接进入派发阶段——等待
+                // 与派发同处一个锁作用域，若先等待，已弹出的到期闭包会被
+                // 拖到下一个期限才执行（复测 RescheduleChangesNextExpiryOnly
+                // 实证：timer 30ms 弹出、闭包 80ms 才跑）。仅当本轮无到期
+                // 项才事件驱动地睡向 heap 顶 / 兜底期限。
+                size_t popped = 0;
                 while (!heap_.empty() && heap_.top().deadline <= now) {
+                    ++popped;
                     TimerHeapEntry entry = heap_.top();
                     heap_.pop();
                     auto it = records_.find(entry.timer_id);
@@ -692,8 +713,36 @@ private:
                     }
                 }
 
-                if (!heap_.empty() && heap_.top().deadline < wake_at) {
-                    wake_at = heap_.top().deadline;
+                // CR-135（事件驱动唤醒）：精确睡到 heap 顶 deadline（堆空为
+                // kIdleWaitMs 兜底），任何会引入更早 deadline 或要求停止的
+                // 变更（schedule_once/periodic、reschedule、stop）bump
+                // schedule_epoch_ 并 notify，立即打断睡眠回到循环顶重算。
+                // 请求取消不 notify：取消只会让睡眠目标变 stale，线程醒来
+                // 发现后重算即可（既有 lazy-deletion 契约）。
+                //
+                // 刻意用 wait_for(duration) 而非 wait_until(steady_clock)：
+                // libstdc++ 把后者映射到 pthread_cond_clockwait，而 gcc-11
+                // 时代的 libtsan 未拦截该原语，会把等待期间的解锁从影子状态
+                // 里漏掉，醒来重锁时误报 "double lock of a mutex"（gcc
+                // PR101978 / google/sanitizers#1259，CI 的 TSAN job 正是
+                // gcc-11）。wait_for 走 wait_until(system_clock) →
+                // pthread_cond_timedwait，TSAN 正常拦截。代价：实时钟步进
+                //（NTP）可能使某一次睡眠偏早/偏晚一个步进量——循环顶部用
+                // steady 重算，一步内自愈，对 ms 粒度 API 无感。
+                const auto slice = wake_at - clock::now();
+                if (popped == 0) {
+                    if (!heap_.empty() && heap_.top().deadline < wake_at) {
+                        wake_at = heap_.top().deadline;
+                    }
+                    const auto slice = wake_at - clock::now();
+                    if (slice > clock::duration::zero()) {
+                        const uint64_t seen_epoch = schedule_epoch_;
+                        wake_cv_.wait_for(lock, slice, [&] {
+                            return schedule_epoch_ != seen_epoch ||
+                                   generation->stop_requested.load(
+                                       std::memory_order_acquire);
+                        });
+                    }
                 }
             }
 
@@ -746,32 +795,10 @@ private:
                     // 派发失败（提交到执行器被拒等）：丢当前 tick。
                 }
             }
-
-            // 到期等待：单次最多睡 kWakeSlice（且不超过 heap 顶 deadline），
-            // 之后回到外层循环重新加锁检查 heap——新登记的更早到期、取消、
-            // 重排、停止都在 ≤1ms 内可见；最后一个分片精确睡到 heap 顶
-            // deadline，到期精度不受影响。
-            //
-            // 刻意不使用 std::condition_variable：libstdc++ 把
-            // wait_until(steady_clock) 映射到 pthread_cond_clockwait，而
-            // gcc-11 时代的 libtsan 未拦截该原语，会把等待期间的解锁从影子
-            // 状态里漏掉，醒来重锁时误报 "double lock of a mutex"
-            // （gcc PR101978 / google/sanitizers#1259）。分片休眠期间不持锁，
-            // 对 TSAN/MSVC 全环境行为可预测。
-            //
-            // CR-135 结论（2026-10-01 复核）：本循环的 ~1kHz 分片轮询是刻意
-            // 的时延/可见性权衡——无 cv 的设计下，"新登记更早到期/取消/重排"
-            // 只能靠重新加锁检查 heap 才可见，kWakeSlice(1ms) 是该可见性的
-            // 上界；cv 化在上述 gcc-11 TSAN 约束下不可行（CI 的 TSAN job
-            // 正是 gcc-11）。wake_at（heap 顶 deadline）并非死代码：子分片
-            // （≤1ms）精度的到期依赖 min() 精确睡到期限。
-            std::this_thread::sleep_until(
-                std::min(wake_at, clock::now() + kWakeSlice));
         }
     }
 
     static constexpr int kIdleWaitMs = 100;
-    static constexpr std::chrono::milliseconds kWakeSlice{1};
     static constexpr size_t kHeapCompactThreshold = 128;
 
     mutable std::mutex mutex_;
@@ -780,6 +807,12 @@ private:
     std::thread thread_;                           // guarded by mutex_
     std::function<std::thread(std::function<void()>)> thread_factory_for_test_;
     TaskCancelHook task_cancel_hook_;
+    // CR-135 事件驱动唤醒：调度线程在 mutex_ 上 wait_for 到 heap 顶 deadline；
+    // 会引入更早 deadline 或要求停止的变更点（schedule_once / schedule_periodic /
+    // reschedule / stop）bump schedule_epoch_ 并 notify。跨 start/stop 世代单调，
+    // pred 以"seen != current"判定。由 mutex_ 保护。
+    std::condition_variable wake_cv_;
+    uint64_t schedule_epoch_{0};
 
     std::unordered_map<std::string, std::unique_ptr<TimerRecord>> records_;
     std::priority_queue<TimerHeapEntry, std::vector<TimerHeapEntry>,
