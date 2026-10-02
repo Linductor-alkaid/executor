@@ -4,6 +4,147 @@
 
 ---
 
+## [0.5.3] - 2026-10-02
+
+0.5.3 是稳定性与性能维护版本，公开 API 签名与既有语义保持兼容。主线是
+2026-09-30 全量代码评审（`docs/CODE_REVIEW_2026-09-30.md`）四个阶段的落地：
+P0 内存安全/挂死/数据竞争 9 项、P1 功能正确性 24 项、构建/打包 8 项、
+热路径性能 10 项；随后定时器线程从 1kHz 轮询改造为事件驱动条件等待
+（等待 CPU 降约 34 倍，periodic 抖动改善 10-27 倍）。每项修复均先以独立
+复现测试确证再修复，并经独立验证通道复验。
+
+### 修复与改进
+
+**代码评审 Phase 1（9 项 P0：内存安全/挂死/数据竞争，PR #202）**：
+
+- **单例退出 UAF（CR-001）**：`~Executor` 在单例模式下经 `shutdown(true)`
+  排空默认执行器——在途 tracked 任务此前可触碰静态析构期已销毁的 facade
+  成员（实测 SEGV）。
+- **before_publish hook 数据竞争（CR-004）**：`LockFreeTaskExecutor` 钩子
+  字段的普通写被生产者线程无同步读取（TSAN 2 处 data race + 空指针调用
+  SEGV），改为原子不可变快照指针、trampoline 单次加载。
+- **参数绑定异常泄漏注册槽（CR-010/011）**：注册后绑定参数抛异常会永久
+  泄漏取消注册表槽位、admission 计数与任务图节点（65536 次失败即耗尽
+  注册表、任务图无界增长），两条 catch 路径均改为完整终态结算；非默认
+  构造/不可赋值参数类型与 `reference_wrapper` 解包语义经 API 兼容探针
+  保持不变。
+- **SerialExecutionContext 生命周期 UAF（CR-012）**：`submit_on` 闭包改持
+  `shared_ptr<Shared>`（pimpl + detach），上下文先于派发销毁不再使 worker
+  永久阻塞于已释放互斥量；detached 发布以 `ExecutorStopping` 结算。
+- **monitor 回调抛异常挂死 future（CR-020）**：任务体启动前 monitor 回调
+  抛异常导致 `future::get()` 永久挂起，`execute_task` 的 catch 对未启动
+  任务触发 `on_timeout` 结算。
+- **初始化失败后提交挂死（CR-022）**：初始化失败/回滚后接受的提交永不
+  执行（future 挂死），`task_timeout_ms` 锁外读取与 `initialize()` 竞争。
+  三条 submit 路径改锁内检查 `initialized_`，超时配置锁内读取。
+- **CUDA 启动失败队列滞留（CR-002）**：`start()` 中途失败留下未消费任务，
+  后续 `stop()` 在 `wait_for_completion` 永久挂起；失败路径以
+  `set_exception` 排空队列，未启动 worker 时排空谓词直接退出。
+- **OpenCL 重启泄漏（CR-003）**：restart 覆盖 `context_`（每次重启泄漏）
+  并无界追加 `queues_`；重初始化先回收上一代（存活队列逐一 `clFinish`）
+  再清理。
+- **环检测递归爆栈（CR-052）**：任务图环检测 DFS 持写锁递归，约 4k 深度
+  即 SIGSEGV（256KB 栈）；改为显式栈迭代 DFS。
+
+**代码评审 Phase 2（24 项 P1 功能正确性，PR #203）**，要点：
+
+- **KeepLatest/DropOldest 竞争下丢最新值（CR-040）**：位移路径有界重试，
+  2s 观测 20999 次虚假拒绝 → 0。
+- **worker park 丢唤醒（CR-005）**：park 改 `fetch_or`；旧代码可把已入队
+  任务搁置到下一次 push（秒级 P99 尖刺），修复后稳定。
+- **GPU 内存池对齐破坏（CR-060）**：块头部不再破坏 256B 对齐（float4
+  访问出错）。
+- **GPU 完成集无界增长（CR-062）**：+72MB/百万任务 → +0.2MB；
+  `remove_task` 不再留下可运行的依赖者。
+- **GPU optimizer 配置数据竞争（CR-063）**：TSAN 10/10/9 处报告 → 0。
+- 其余项覆盖线程池、通信原语、GPU 后端、监控与平台工具，全表见评审
+  文档 "Phase 2 修复执行记录"。
+
+**诊断顺序与 CI 稳定性（PR #204）**：
+
+- **queued 诊断先于 enqueue（NN-12）**：三条 submit 路径此前在 enqueue +
+  唤醒后锁外补记 `record_task_queued`，worker 可在补记前取走任务执行，
+  诊断条目以 Queued 状态在任务已运行时创建，快照 `in_flight_state_counts`
+  缺 Running 键导致 `map::at` abort（注入窗口 10/10 重现）。现移入
+  `mutex_` 临界区、enqueue 之前，建立 queued→start→complete 严格顺序，
+  顺带消除 complete 先于补记时诊断表滞留僵尸 Queued 条目；锁序
+  pool.mutex_ → monitor.mutex_ 保持单向。
+- **测试加固**：快照测试改 `wait_in_flight_drained()`（future-vs-cleanup
+  竞态，满载排水 p99 3.0ms、26 倍裕量）；偷取测试竞争窗口改"批次耗尽即
+  收尾 + 墙钟预算"。
+
+### 性能
+
+**热路径优化（评审 Phase 4，10 项，PR #206；结论均以同参 Release 多轮
+中位数口径测量）**：
+
+- **路由惰性能力采集（CR-106）**：策略路径不再锁 5 把注册表，观测写入加
+  快速开关，无回调时移动入库；`submit_auto` vs `submit` 中位差距
+  +19.9% → +11.6%。
+- **完成通知等待者门控（CR-108）**：无等待者时每任务 2 次 `notify_all`
+  全部消失。
+- **等待轮询通知化（CR-109）**：`try_wait_for_completion` 从 10ms 盲轮询
+  （300s = 3 万次全量扫队列）改为通知驱动谓词等待 + 50ms 兜底分片。
+- **提交路径单次分配（CR-110）**：`submit` 的 promise+ready 双包装合并
+  单次堆分配。
+- **派发器锁分配消除（CR-112）**：三处 `unique_ptr<shared_lock>` 改
+  `std::optional`，每次 dispatch 免一次堆分配。
+- **lockfree 队列 hook 快速路径（CR-121）+ 批量便签（CR-122）**：常态推送
+  零 shared_ptr 原子读（旧 libstdc++ 走内部锁池）；批量路径 thread_local
+  便签免反复分配。
+- **GPU 参数缓存 O(1) 侵入式 LRU（CR-151）**：替换 O(n) 扫描；更新已有
+  key 不再误逐热点。
+- **测量口径更正与不改语义决定（CR-102/CR-135）**：旧基准为 O2 TU 链 O0
+  库的混合优化口径，评审"基线 65-70%"系该产物（同参 Release 真实差距约
+  +20% 内）；retention 高水位摊销被精确上界契约测试否决，扫描深度插桩
+  证明恒为 1，语义不变。
+
+**定时器事件驱动改造（PR #207，CR-135 后续）**：
+
+- **1kHz 轮询 → 条件变量等待**：schedule/periodic/reschedule/stop 持锁
+  bump `schedule_epoch_` 并 notify，调度线程精确睡到堆顶 deadline（堆空
+  100ms 兜底上界）。等待 CPU 从恒定 0.7-1.0% 单核降至 0.024%（约 34 倍，
+  收益主体是能耗）。显式 `wait_until(system_clock)` 规避 GCC ≥ 10 的
+  `wait_for(duration)`/`wait_until(steady_clock)` 均映射到
+  `pthread_cond_clockwait`、gcc-11 libtsan 不拦截（PR101978）的误报缺口；
+  CI TSAN job（g++-11，即约束工具链）补入 `test_timer_handle` 作为权威
+  门禁。取消语义不变：`request_cancel` 仍不唤醒（stale-entry lazy-deletion
+  契约）。
+- **periodic 网格锚定**：`next = 上一 deadline + P`（错过不追补）取代
+  `now + P`——旧锚定把唤醒过冲逐周期累积成漂移，旧 1ms 轮询的网格量化
+  恰好掩盖了它。periodic 抖动 avg 569-642µs → -47~+55µs（改善 10-27 倍）。
+
+### 构建与打包（评审 Phase 3，8 项，PR #205）
+
+- **覆盖率插桩真正生效（CR-080）**：库插桩改 `executor_apply_coverage_to_target()`
+  函数式显式调用（旧版 include 期 `if(TARGET executor)` 恒假，库从未产出
+  覆盖数据、报告静默失真）；插桩库的消费方经 INTERFACE 链接选项继承
+  `--coverage`，独立测试目标不再缺 gcov 运行时。
+- **版本单一来源（CR-085）**：6 个打包脚本默认值改从 `project(VERSION)`
+  提取；新增生成的 `executor/version.hpp`（构建树 BUILD_INTERFACE 与
+  install 双路可达）。
+- **Sanitizer 配置治理（CR-083）**：Sanitizers.cmake 无条件 include；TSAN
+  独立于 `EXECUTOR_ENABLE_SANITIZERS` 总开关（CI Release+TSAN job 路径
+  保留）；ASAN/TSAN 显式同开在配置期 FATAL_ERROR。
+- **安装树完整性（CR-084）**：`executor/util/` 纳入安装；GPU 后端头 6 处
+  源码树相对包含（安装树必断链）改 `<executor/...>`；新增
+  `install_headers_smoke` ctest（临时 prefix 安装 + 全部已安装头探针编译）。
+- **Windows/共享库守卫（CR-081/082/086）**：共享库守卫扩到
+  `MSVC OR (WIN32 AND NOT MINGW)`（覆盖 clang 工具链）；package_windows.ps1
+  撤销多余 `Split-Path`（包内文档静默缺失）；build_windows.ps1 开关透传
+  （旧版硬编码 OFF 无视入参）。
+- **ODR 违例结构性消除（NN-01）**：ThreadPool 测试钩子无条件参与类布局，
+  `EXECUTOR_THREAD_POOL_TEST_HOOKS` 不再影响布局——混合宏 TU ↔ 库的
+  ASAN stack-buffer-overflow 根因消除。
+
+### 文档
+
+- 新增 `docs/CODE_REVIEW_2026-09-30.md`：全量代码评审与四阶段修复执行
+  记录——每项缺陷的复现证据、修复方案与复验结论；含三项评审前提被测试
+  推翻（CR-051/CR-104/CR-102）与一项被测量口径更正（CR-106）的记录。
+
+---
+
 ## [0.5.2] - 2026-09-28
 
 0.5.2 以 dependency-driven scheduling 为主线：`submit_after` 的依赖等待从
