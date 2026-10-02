@@ -135,6 +135,6 @@ target_link_libraries(myapp PRIVATE executor::executor)
 
 ## 版本与许可
 
-当前版本：**v0.5.2**
+当前版本：**v0.5.3**
 
 Executor 使用 [MIT License](LICENSE)。
